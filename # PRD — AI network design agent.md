@@ -1,18 +1,24 @@
 # PRD — AI network design agent
 
-*Status: draft scaffold. Sections below contain placeholder descriptions of what to fill in. Edit each section with the actual content.*
+*Status: draft
 
 ## Problem statement
 
-Large-scale e-commerce supply chain network designers need a way to quickly assess whether the current network of fulfillment centers, transfer fulfillment centers, and replenishment centers can inbound store the inventory implied by current buying patterns, given fixed storage capacities across two storage types (i.e., bins and pallets). Today this assessment is manual, slow, and ad-hoc. Each IB 
+Network designers need a way to quickly assess whether the current network of fulfillment centers (FCs), transfer fulfillment centers/vendor flex (TXFCs), and replenishment centers can inbound and store the inventory implied by current buying patterns, given
+- fixed storage capacities across: 
+	- two storage types (i.e., bins (SLOW) and pallets (FAST)), where all SLOW capacity are combined and all BIN capacity are combined.
+	- six storage types (i.e., Totable SLOW/FAST, Grander SLOW/FAST, Non-totable SLOW/FAST)fixed storage capacities across:
+- current DMS enforcing layer rules (i.e., network specialization constraining what capacity types, velocity (FAST/SLOW), and specialized SKUs can go into each node) and case mappings (vendor constraints)
+- six storage types (i.e., Totable SLOW/FAST, Grander SLOW/FAST, Non-totable SLOW/FAST)
 
+Today this assessment is manual, slow, and ad-hoc and lack an analytic model to answer these key questions.
 ## Goal
 
-*[One sentence on what the MVP must do. Candidate: enable a user to describe a network capacity assessment problem in natural language, have the agent build and solve a MILP, and return a clear answer about whether inventory fits and where the squeeze is.]*
+Enable a user to describe a network capacity assessment problem in natural language, have the agent build and solve a MILP, and return a clear answer about whether inventory fits and where the squeeze is.
 
 ## Background and context
 
-*[Domain context for someone unfamiliar with the network. Suggested content: the network has FCs, TXFCs, and RCs. Storage is dimensioned in four types — pallet storage (fungible across FAST velocity SKUs), and three bin storage types (Totable, Non-totable, Grande) for SLOW velocity SKUs. The "Days of Cover" (DOC) framing relates inventory to forecasted demand. Buying patterns drive inventory; inventory must fit storage. The MVP focuses on the assessment question: given current capacity and current buying, does it fit?]*
+The network has FCs, TXFCs, and RCs. Storage is dimensioned in four types — pallet storage (fungible across FAST velocity SKUs), and three bin storage types (Totable, Non-totable, Grande) for SLOW velocity SKUs. The "Days of Cover" (DOC) framing relates inventory to forecasted demand. Buying patterns drive inventory; inventory must fit storage. The MVP focuses on the assessment question: given current capacity and current buying, does it fit?
 
 ## Users and use cases
 
