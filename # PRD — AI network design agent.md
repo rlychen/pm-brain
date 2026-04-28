@@ -14,38 +14,45 @@ Network designers need a way to quickly assess whether the current network of fu
 Today this assessment is manual, slow, and ad-hoc and lack an analytic model to answer these key questions.
 ## Goal
 
-Enable a user to describe a network capacity assessment problem in natural language, have the agent build and solve a MILP, and return a clear answer about whether inventory fits and where the squeeze is.
+Enable a user to describe a network capacity assessment problem in natural language, have the agent build and solve a MILP, and return a clear answer about whether inventory fits and where the squeeze is. 
 
 ## Background and context
 
-The network has FCs, TXFCs, and RCs. Storage is dimensioned in four types — pallet storage (fungible across FAST velocity SKUs), and three bin storage types (Totable, Non-totable, Grande) for SLOW velocity SKUs. The "Days of Cover" (DOC) framing relates inventory to forecasted demand. Buying patterns drive inventory; inventory must fit storage. The MVP focuses on the assessment question: given current capacity and current buying, does it fit?
+The network has FCs, TXFCs, and RCs. Storage is dimensioned in dimensioned on six capacity types — Totable SLOW/FAST, Grander SLOW/FAST, Non-totable SLOW/FAST. The "Days of Cover" (DOC) framing relates inventory to forecasted demand. Buying patterns drive inventory; inventory must fit storage. The MVP focuses on the assessment question: given current capacity and current buying, does it fit?
 
 ## Users and use cases
 
 *[2–5 concrete scenarios. Each: who, what they do, what they get. Inferred candidates:*
 
-*1. **Network planner running a what-if.** Planner describes a hypothetical buying pattern in natural language. Agent builds MILP, solves, returns whether the inventory fits and identifies binding capacities.*
+1. Network planner running simulations based on historical inbound patterns. For example, we want to test whether current network can hold 42 DOC based on historical buying patterns. One way to do this is to take last 6 weeks of buying (6 weeks x 7 days per week = 42 days, which is representative of 42 DOCs). Planner passes historical buying pattern in a spreadsheet (could be csv, excel, or text). Agent builds MILP parameterized by the historical demand input file and graph describing the current network, solves, returns whether the inventory fits and identifies binding capacities.
 
-*2. **Supply chain analyst auditing current state.** Analyst asks "given last quarter's actual inventory, where am I tightest?" Agent loads baseline data, runs assessment, returns utilization breakdown by node and storage type.*
+2. Supply chain analyst auditing current state. Analyst asks "given last quarter's actual inventory, where am I tightest? Do analysis for consecutive 6 weeks (which represents 42 DOC)". Test whether current network can hold 42 DOC based on historical buying patterns. One way to do this is to take last 6 weeks of buying (6 weeks x 7 days per week = 42 days, which is representative of 42 DOCs). Planner passes historical buying pattern in a spreadsheet (could be csv, excel, or text). Agent builds MILP parameterized by the historical demand input file and graph describing the current network, solves, returns whether the inventory fits and identifies binding capacities and breakdown by node and storage type breaches for each six week planning horizon. The duration of the data (e.g., take whole quarter demand of 13 consecutive weeks) and the planning period (e.g., consecutive 6 weeks) are configurable. 
 
-*3. **Demand planner stress-testing assumptions.** Planner asks "what happens to my storage utilization if peak season demand is 20% higher than forecast?" Agent perturbs the input, re-solves, compares to baseline.]*
+3. Demand planner stress-testing assumptions. Planner asks "what happens to my storage utilization if peak season demand is 20% higher than forecast?" Agent perturbs the input, re-solves, compares to baseline.]
 
 ## MVP scope — what's in
 
-*[The minimum that must work for v1. Inferred candidates to confirm or override:*
-
-*- Single problem class: storage capacity assessment (not flow optimization, not facility location, not design mode)*
-*- Static snapshot solve (one rolling window of inventory; no time index in the model)*
-*- Four storage types: pallet, NT bin, Grande bin, Totable bin*
-*- All three node types treated as functionally identical for storage feasibility*
-*- Soft capacity constraints with penalized over-utilization*
-*- Natural-language input → solver → natural-language output via MCP*
-*- Reads baseline graph G_0 from a static JSON file*
-*- Returns: feasibility status, utilization by node × storage type, binding constraints]*
+- Single problem class: storage capacity assessment (no inbound constraints)
+* Static snapshot solve (one rolling window of inventory; no time index in the model)
+* Six storage types (i.e., Totable SLOW/FAST, Grander SLOW/FAST, Non-totable SLOW/FAST)
+* Specialized SKUs can only be stored in specialized locations. These are the following specializations:
+	* Dangerous goods (DG)
+	* Temperature controlled
+	* Heavy and Bulky
+	* High-value and high-risk (HVHR)
+	* Ship-in-own-container (SIOC)
+	* Pets
+* Each of the above specialized SKU is a binary attribute of the SKU and an SKU can have no specialization up to all specializations (i.e., a SKU can be both DG and HVHR)
+* Specialization storage is also limited and defined by the Graph
+* Structure of the input graph must be predefined
+* Soft capacity constraints with penalized over-utilization. This will help us understand infeasibility.
+* Natural-language input → solver → natural-language output via MCP*
+* Reads baseline graph G_0 from a static JSON file
+* Reads static demand from past 52 weeks (52 is example only can be any block of demand) and we can do analysis on any of the 52 weeks
+* Natural-language input to do analysis on any block of the input and output network performance statics, and report breaches/infeasibility
+* Returns: feasibility status, utilization by node × storage type, binding constraints, capacity breaches, specialization breaches
 
 ## MVP scope — what's out
-
-*[Explicit out-of-scope list. Inferred candidates:*
 
 *- Flow optimization (no arc decisions in v1)*
 *- Inbound capacity constraints (only storage in v1)*
