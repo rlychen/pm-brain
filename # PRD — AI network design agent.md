@@ -54,69 +54,55 @@ The network has FCs, TXFCs, and RCs. Storage is dimensioned in dimensioned on si
 
 ## MVP scope — what's out
 
-*- Flow optimization (no arc decisions in v1)*
-*- Inbound capacity constraints (only storage in v1)*
-*- Outbound capacity constraints (only storage in v1)*
-*- Design mode (capacities are parameters, not decision variables)*
-*- Multi-period or time-phased optimization*
-*- DOC-based safety stock and lead-time math (treat inventory as given input)*
-*- SKU-level granularity (work at storage-type aggregates for MVP)*
-*- Alternative problem classes (facility location, fixed-charge network design)*
-*- Heuristic or LP-relaxation solvers]*
+- No outbound modeling and considerations
+- No Inbound processing capacity constraints (only storage in MVP)
+- Outbound capacity constraints (only storage in v1)
+- No facility layout constraints 
+- Design mode (capacities are parameters, not decision variables)
+- No Multi-period or time-phased optimization
+- DOC-based safety stock and lead-time math (treat inventory/inbound volumne as given input)
+- Modeling of current inventory data
+- Not modeling SKU-level inbound processing capacity (for MVP)
 
 ## Functional requirements
 
-*[What the system must do, behaviorally. Suggested categories:*
-
-*- **Input handling:** accept natural-language problem descriptions; identify problem class; extract relevant parameters; load baseline G_0*
-*- **Model construction:** build MILP from G(N,A) graph and parameters*
-*- **Solving:** call MILP solver; handle infeasibility gracefully*
-*- **Output:** return solution and explanation in natural language; surface binding constraints; surface utilization*
-*- **Tool surface:** MCP tools must include solve, validate input, return baseline, explain result]*
+- Input handling: accept natural-language problem descriptions; identify problem class; extract relevant parameters; baseline graph G_0 should be stored data and baseline set of demand over time is data too. We need to define data formats/structures for baseline graph G_0 and baseline demand (call this D_0) over time. Both of these are input parameters. 
+- Model construction:** build MILP from G(N,A) graph and parameters*
+- Solving: call MILP solver; handle infeasibility gracefully (i.e., we will be use soft constraints and penalize for violations so maintain 100% feasibility)
+- Output: return solution and explanation in natural language; surface binding constraints; surface utilization
+- Tool surface: MCP tools must include solve, validate input, return baseline, explain result, and share graphs and analysis
 
 ## Non-functional requirements
 
-*[Performance, latency, error behavior expectations. Suggested:*
-
-*- **Solve time:** typical instance solves in under 30 seconds on CBC*
-*- **Failure modes:** MILP infeasibility, malformed input, missing baseline file — all return clear error messages, not stack traces*
-*- **Determinism:** same input produces same output (modulo solver tie-breaking)*
-*- **Reproducibility:** every solve logs the input graph and the solution]*
+- Solve time: typical instance solves in under 30 seconds on CBC
+- Failure modes: MILP infeasibility, malformed input, missing baseline file — all return clear error messages, not stack traces
+- Determinism: same input produces same output (modulo solver tie-breaking)
+- Reproducibility: every solve logs the input graph and the solution]*
 
 ## Success criteria
-
-*[How you'll know the MVP works. Candidates:*
-
-*- A user can describe a hypothetical buying pattern in 1–2 sentences and get a feasible/infeasible answer with utilization breakdown*
-*- The agent correctly identifies which capacity is binding when infeasibility occurs*
-*- A small hand-crafted example produces the expected solution*
-*- The system handles malformed natural-language input without crashing]*
+- A user can describe a hypothetical buying pattern in 1–2 sentences and get a feasible/infeasible answer with utilization breakdown and basic analysis
+- The agent correctly identifies which capacity is binding when infeasibility occurs
+- A small hand-crafted example produces the expected solution
+- The system handles malformed natural-language input without crashing
+- Based on natural language inputs, the system constructs a test instance composed of a new graph (could be brand new or modified of G_0) and/or new buying scenario (could be based on historical data parameters D_0). New buying scenario could be a modification of the current buying data (e.g., assume D_0 for certain time frames increased by 20%, or this capacity type demand in D_0 increase by 10%).
 
 ## Open questions
-
-*See [[open-questions]] for the live tracker. Highlights:*
-
-*- G(N,A) data structure — list-of-dicts in JSON is the working choice; revisit during Phase 8b*
-*- G_0 baseline format — static JSON, schema TBD*
-*- Exact MILP formulation — pending Phase 8a*
-*- How the agent maps natural-language problem descriptions to a known problem class — open*
+- G(N,A) data structure — list-of-dicts in JSON is the working choice; revisit during Phase 8b*
+- G_0 baseline format — static JSON, schema TBD
+- D_0 baseline demand format — static JSON, schema TBD
+- Exact MILP formulation — pending Phase 8a
+- How the agent maps natural-language problem descriptions to a known problem class — open
 
 ## Dependencies and assumptions
-
-*[Inferred candidates:*
-
-*- Assumes baseline G_0 file is hand-maintained and reasonably current*
-*- Assumes user provides inventory data in compatible units*
-*- Assumes CBC solver is sufficient for MVP problem sizes*
-*- Assumes MCP framework (FastMCP) is stable]*
+- Assumes baseline G_0 file is hand-maintained and reasonably current
+-  Assumes baseline D_0 file is hand-maintained and reasonably current
+- Assumes CBC solver is sufficient for MVP problem sizes
+- Assumes MCP framework (FastMCP) is stable
 
 ## Risks
-
-*[Inferred candidates:*
-
-*- LLM may incorrectly classify the problem class from natural language → mitigation: validate inputs before solving*
-*- MILP may be infeasible by default if capacities are tight → mitigation: soft constraints with penalties*
-*- Static G_0 may go stale if not maintained → mitigation: surface staleness in agent output]*
+- LLM may incorrectly classify the problem class from natural language → mitigation: validate inputs before solving
+- MILP may be infeasible by default if capacities are tight → mitigation: soft constraints with penalties
+* Static G_0 may go stale if not maintained → mitigation: surface staleness in agent output
 
 ## Notes
 
