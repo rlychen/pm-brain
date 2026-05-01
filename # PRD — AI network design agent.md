@@ -6,10 +6,9 @@
 
 Network designers need a way to quickly assess whether the current network of fulfillment centers (FCs), transfer fulfillment centers/vendor flex (TXFCs), and replenishment centers can inbound and store the inventory implied by current buying patterns, given
 - fixed storage capacities across: 
-	- two storage types (i.e., bins (SLOW) and pallets (FAST)), where all SLOW capacity are combined and all BIN capacity are combined.
-	- six storage types (i.e., Totable SLOW/FAST, Grander SLOW/FAST, Non-totable SLOW/FAST)fixed storage capacities across:
+	- six storage types (i.e., Totable SLOW/FAST, Grander SLOW/FAST, Non-totable SLOW/FAST)
 - current DMS enforcing layer rules (i.e., network specialization constraining what capacity types, velocity (FAST/SLOW), and specialized SKUs can go into each node) and case mappings (vendor constraints)
-- six storage types (i.e., Totable SLOW/FAST, Grander SLOW/FAST, Non-totable SLOW/FAST)
+	- SKUs thave specializations which we define below. Not all locations can take all SKUs. Specialized SKUs can only go to specialized locations.
 
 Today this assessment is manual, slow, and ad-hoc and lack an analytic model to answer these key questions.
 ## Goal
@@ -24,7 +23,12 @@ The network has FCs, TXFCs, and RCs. Storage is dimensioned in dimensioned on si
 
 *[2–5 concrete scenarios. Each: who, what they do, what they get. Inferred candidates:*
 
-1. Network planner running simulations based on historical inbound patterns. For example, we want to test whether current network can hold 42 DOC based on historical buying patterns. One way to do this is to take last 6 weeks of buying (6 weeks x 7 days per week = 42 days, which is representative of 42 DOCs). Planner passes historical buying pattern in a spreadsheet (could be csv, excel, or text). Agent builds MILP parameterized by the historical demand input file and graph describing the current network, solves, returns whether the inventory fits and identifies binding capacities.
+1. Network planner running simulations based on historical inbound patterns. The network itself is fixed and defined by a graph and operates over six capacity types. So each location 
+2. 
+3. 
+4. 
+5. 
+6. we want to test whether current network can hold 42 DOC based on historical buying patterns. One way to do this is to take last 6 weeks of buying (6 weeks x 7 days per week = 42 days, which is representative of 42 DOCs). Planner passes historical buying pattern in a spreadsheet (could be csv, excel, or text). Agent builds MILP parameterized by the historical demand input file and graph describing the current network, solves, returns whether the inventory fits and identifies binding capacities.
 
 2. Supply chain analyst auditing current state. Analyst asks "given last quarter's actual inventory, where am I tightest? Do analysis for consecutive 6 weeks (which represents 42 DOC)". Test whether current network can hold 42 DOC based on historical buying patterns. One way to do this is to take last 6 weeks of buying (6 weeks x 7 days per week = 42 days, which is representative of 42 DOCs). Planner passes historical buying pattern in a spreadsheet (could be csv, excel, or text). Agent builds MILP parameterized by the historical demand input file and graph describing the current network, solves, returns whether the inventory fits and identifies binding capacities and breakdown by node and storage type breaches for each six week planning horizon. The duration of the data (e.g., take whole quarter demand of 13 consecutive weeks) and the planning period (e.g., consecutive 6 weeks) are configurable. 
 
