@@ -1,0 +1,168 @@
+<mxGraphModel dx="1422" dy="762" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1400" pageHeight="700" math="0" shadow="0">
+  <root>
+    <mxCell id="0" />
+    <mxCell id="1" parent="0" />
+
+    <!-- TITLE -->
+    <mxCell id="title" value="Multi-Shipment FCL Planning Graph — Shared Supply Capacity" style="text;html=1;strokeColor=none;fillColor=none;align=center;fontSize=13;fontStyle=1;" vertex="1" parent="1">
+      <mxGeometry x="50" y="8" width="1300" height="22" as="geometry" />
+    </mxCell>
+    <mxCell id="sub" value="S1: SZN → DAL   |   S2: GZH → CHI   |   S3: SUZ → NYC        Origin and destination nodes share each shipment's color.  Blue nodes = shared supply capacity." style="text;html=1;strokeColor=none;fillColor=none;align=center;fontSize=9;fontStyle=2;fontColor=#555555;" vertex="1" parent="1">
+      <mxGeometry x="50" y="28" width="1300" height="16" as="geometry" />
+    </mxCell>
+
+    <!-- SECTION HEADERS -->
+    <mxCell id="h_pre" value="Pre-carriage" style="text;html=1;strokeColor=none;fillColor=none;align=center;fontSize=9;fontStyle=2;fontColor=#888888;" vertex="1" parent="1">
+      <mxGeometry x="170" y="48" width="120" height="16" as="geometry" />
+    </mxCell>
+    <mxCell id="h_oc" value="Trans-Pacific Ocean" style="text;html=1;strokeColor=none;fillColor=none;align=center;fontSize=9;fontStyle=2;fontColor=#888888;" vertex="1" parent="1">
+      <mxGeometry x="460" y="48" width="260" height="16" as="geometry" />
+    </mxCell>
+    <mxCell id="h_in" value="Inland" style="text;html=1;strokeColor=none;fillColor=none;align=center;fontSize=9;fontStyle=2;fontColor=#888888;" vertex="1" parent="1">
+      <mxGeometry x="1010" y="48" width="160" height="16" as="geometry" />
+    </mxCell>
+
+    <!-- ===== ORIGIN NODES ===== -->
+    <!-- S3: SUZ — top row — RED (#F8CECC / #b85450) -->
+    <mxCell id="s3o" value="&lt;b&gt;S3&lt;/b&gt;&lt;br&gt;SUZ" style="ellipse;whiteSpace=wrap;html=1;fillColor=#F8CECC;strokeColor=#b85450;fontColor=#3d1512;fontSize=10;" vertex="1" parent="1">
+      <mxGeometry x="35" y="140" width="65" height="65" as="geometry" />
+    </mxCell>
+    <!-- S2: GZH — middle row — PURPLE (#E1D5E7 / #9673A6) -->
+    <mxCell id="s2o" value="&lt;b&gt;S2&lt;/b&gt;&lt;br&gt;GZH" style="ellipse;whiteSpace=wrap;html=1;fillColor=#E1D5E7;strokeColor=#9673A6;fontColor=#1a0033;fontSize=10;" vertex="1" parent="1">
+      <mxGeometry x="35" y="305" width="65" height="65" as="geometry" />
+    </mxCell>
+    <!-- S1: SZN — bottom row — ORANGE (#FFE6CC / #d6b656) -->
+    <mxCell id="s1o" value="&lt;b&gt;S1&lt;/b&gt;&lt;br&gt;SZN" style="ellipse;whiteSpace=wrap;html=1;fillColor=#FFE6CC;strokeColor=#d6b656;fontColor=#3d2b00;fontSize=10;" vertex="1" parent="1">
+      <mxGeometry x="35" y="470" width="65" height="65" as="geometry" />
+    </mxCell>
+
+    <!-- ===== CHINESE PORT NODES (BLUE — shared supply) ===== -->
+    <mxCell id="sha" value="SHA" style="ellipse;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=11;fontStyle=1;" vertex="1" parent="1">
+      <mxGeometry x="250" y="140" width="65" height="65" as="geometry" />
+    </mxCell>
+    <mxCell id="ngb" value="NGB" style="ellipse;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=11;fontStyle=1;" vertex="1" parent="1">
+      <mxGeometry x="250" y="305" width="65" height="65" as="geometry" />
+    </mxCell>
+    <mxCell id="szx" value="SZX" style="ellipse;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=11;fontStyle=1;" vertex="1" parent="1">
+      <mxGeometry x="250" y="470" width="65" height="65" as="geometry" />
+    </mxCell>
+
+    <!-- ===== US PORT NODES (BLUE — shared supply) ===== -->
+    <mxCell id="lax" value="LAX" style="ellipse;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=11;fontStyle=1;" vertex="1" parent="1">
+      <mxGeometry x="840" y="140" width="65" height="65" as="geometry" />
+    </mxCell>
+    <mxCell id="lgb" value="LGB" style="ellipse;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=11;fontStyle=1;" vertex="1" parent="1">
+      <mxGeometry x="840" y="305" width="65" height="65" as="geometry" />
+    </mxCell>
+    <mxCell id="sea" value="SEA" style="ellipse;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=11;fontStyle=1;" vertex="1" parent="1">
+      <mxGeometry x="840" y="470" width="65" height="65" as="geometry" />
+    </mxCell>
+
+    <!-- ===== DESTINATION NODES ===== -->
+    <!-- NYC — S3 — RED (top row, matches SUZ) -->
+    <mxCell id="nyc" value="&lt;b&gt;NYC&lt;/b&gt;&lt;br&gt;S3" style="ellipse;whiteSpace=wrap;html=1;fillColor=#F8CECC;strokeColor=#b85450;fontColor=#3d1512;fontSize=10;" vertex="1" parent="1">
+      <mxGeometry x="1090" y="140" width="65" height="65" as="geometry" />
+    </mxCell>
+    <!-- CHI — S2 — PURPLE (middle row, matches GZH) -->
+    <mxCell id="chi" value="&lt;b&gt;CHI&lt;/b&gt;&lt;br&gt;S2" style="ellipse;whiteSpace=wrap;html=1;fillColor=#E1D5E7;strokeColor=#9673A6;fontColor=#1a0033;fontSize=10;" vertex="1" parent="1">
+      <mxGeometry x="1090" y="305" width="65" height="65" as="geometry" />
+    </mxCell>
+    <!-- DAL — S1 — ORANGE (bottom row, matches SZN) -->
+    <mxCell id="dal" value="&lt;b&gt;DAL&lt;/b&gt;&lt;br&gt;S1" style="ellipse;whiteSpace=wrap;html=1;fillColor=#FFE6CC;strokeColor=#d6b656;fontColor=#3d2b00;fontSize=10;" vertex="1" parent="1">
+      <mxGeometry x="1090" y="470" width="65" height="65" as="geometry" />
+    </mxCell>
+
+    <!-- ===== PRE-CARRIAGE ARCS ===== -->
+    <mxCell id="pc_s3_sha" value="~0.5d" style="fontSize=8;html=1;" edge="1" source="s3o" target="sha" parent="1">
+      <mxGeometry relative="1" as="geometry" />
+    </mxCell>
+    <mxCell id="pc_s3_ngb" value="~2d" style="fontSize=8;html=1;" edge="1" source="s3o" target="ngb" parent="1">
+      <mxGeometry relative="1" as="geometry" />
+    </mxCell>
+    <mxCell id="pc_s2_sha" value="~3d" style="fontSize=8;html=1;" edge="1" source="s2o" target="sha" parent="1">
+      <mxGeometry relative="1" as="geometry" />
+    </mxCell>
+    <mxCell id="pc_s2_szx" value="~1d" style="fontSize=8;html=1;" edge="1" source="s2o" target="szx" parent="1">
+      <mxGeometry relative="1" as="geometry" />
+    </mxCell>
+    <mxCell id="pc_s1_szx" value="~0.5d" style="fontSize=8;html=1;" edge="1" source="s1o" target="szx" parent="1">
+      <mxGeometry relative="1" as="geometry" />
+    </mxCell>
+    <mxCell id="pc_s1_ngb" value="~2d" style="fontSize=8;html=1;" edge="1" source="s1o" target="ngb" parent="1">
+      <mxGeometry relative="1" as="geometry" />
+    </mxCell>
+
+    <!-- ===== OCEAN ARCS ===== -->
+    <!-- From SHA -->
+    <mxCell id="oc_sha_lax" value="MSC/14d" style="fontSize=8;html=1;" edge="1" source="sha" target="lax" parent="1">
+      <mxGeometry relative="1" as="geometry" />
+    </mxCell>
+    <mxCell id="oc_sha_lgb" value="CSC/15d" style="fontSize=8;html=1;" edge="1" source="sha" target="lgb" parent="1">
+      <mxGeometry relative="1" as="geometry" />
+    </mxCell>
+    <mxCell id="oc_sha_sea" value="ONE/17d" style="fontSize=8;html=1;" edge="1" source="sha" target="sea" parent="1">
+      <mxGeometry relative="1" as="geometry" />
+    </mxCell>
+    <!-- From NGB -->
+    <mxCell id="oc_ngb_lax" value="EVG/13d" style="fontSize=8;html=1;" edge="1" source="ngb" target="lax" parent="1">
+      <mxGeometry relative="1" as="geometry" />
+    </mxCell>
+    <mxCell id="oc_ngb_lgb" value="YML/14d" style="fontSize=8;html=1;" edge="1" source="ngb" target="lgb" parent="1">
+      <mxGeometry relative="1" as="geometry" />
+    </mxCell>
+    <!-- From SZX -->
+    <mxCell id="oc_szx_lax" value="CMG/12d" style="fontSize=8;html=1;" edge="1" source="szx" target="lax" parent="1">
+      <mxGeometry relative="1" as="geometry" />
+    </mxCell>
+    <mxCell id="oc_szx_lgb" value="OCL/13d" style="fontSize=8;html=1;" edge="1" source="szx" target="lgb" parent="1">
+      <mxGeometry relative="1" as="geometry" />
+    </mxCell>
+
+    <!-- ===== INLAND ARCS ===== -->
+    <!-- → NYC (S3, RED) — intermodal only (too far to truck cross-country) -->
+    <mxCell id="in_lax_nyc" value="UP/5d/$5.5k" style="fontSize=8;html=1;dashed=1;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" edge="1" source="lax" target="nyc" parent="1">
+      <mxGeometry relative="1" as="geometry" />
+    </mxCell>
+    <mxCell id="in_lgb_nyc" value="UP/5d/$5.2k" style="fontSize=8;html=1;dashed=1;exitX=1;exitY=0.2;exitDx=0;exitDy=0;entryX=0;entryY=0.8;entryDx=0;entryDy=0;" edge="1" source="lgb" target="nyc" parent="1">
+      <mxGeometry relative="1" as="geometry" />
+    </mxCell>
+    <mxCell id="in_sea_nyc" value="BNSF/4d/$4.8k" style="fontSize=8;html=1;dashed=1;exitX=1;exitY=0.2;exitDx=0;exitDy=0;entryX=0;entryY=1;entryDx=0;entryDy=0;" edge="1" source="sea" target="nyc" parent="1">
+      <mxGeometry relative="1" as="geometry" />
+    </mxCell>
+    <!-- → CHI (S2, PURPLE) -->
+    <mxCell id="in_lax_chi" value="BNSF/3d/$2.8k" style="fontSize=8;html=1;dashed=1;exitX=1;exitY=0.8;exitDx=0;exitDy=0;entryX=0;entryY=0.2;entryDx=0;entryDy=0;" edge="1" source="lax" target="chi" parent="1">
+      <mxGeometry relative="1" as="geometry" />
+    </mxCell>
+    <mxCell id="in_lgb_chi" value="UP/3d/$2.6k" style="fontSize=8;html=1;dashed=1;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" edge="1" source="lgb" target="chi" parent="1">
+      <mxGeometry relative="1" as="geometry" />
+    </mxCell>
+    <mxCell id="in_sea_chi" value="BNSF/2d/$2.2k" style="fontSize=8;html=1;dashed=1;exitX=1;exitY=0.2;exitDx=0;exitDy=0;entryX=0;entryY=0.8;entryDx=0;entryDy=0;" edge="1" source="sea" target="chi" parent="1">
+      <mxGeometry relative="1" as="geometry" />
+    </mxCell>
+    <!-- → DAL (S1, ORANGE) -->
+    <mxCell id="in_lax_dal" value="TRK/1d/$2.8k" style="fontSize=8;html=1;exitX=1;exitY=0.9;exitDx=0;exitDy=0;entryX=0;entryY=0.2;entryDx=0;entryDy=0;" edge="1" source="lax" target="dal" parent="1">
+      <mxGeometry relative="1" as="geometry" />
+    </mxCell>
+    <mxCell id="in_lgb_dal" value="TRK/1d/$2.6k" style="fontSize=8;html=1;exitX=1;exitY=0.8;exitDx=0;exitDy=0;entryX=0;entryY=0.2;entryDx=0;entryDy=0;" edge="1" source="lgb" target="dal" parent="1">
+      <mxGeometry relative="1" as="geometry" />
+    </mxCell>
+    <mxCell id="in_sea_dal" value="TRK/2d/$3.2k" style="fontSize=8;html=1;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" edge="1" source="sea" target="dal" parent="1">
+      <mxGeometry relative="1" as="geometry" />
+    </mxCell>
+
+    <!-- ===== LEGEND ===== -->
+    <mxCell id="leg_box" value="" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#aaaaaa;" vertex="1" parent="1">
+      <mxGeometry x="35" y="572" width="860" height="72" as="geometry" />
+    </mxCell>
+    <mxCell id="leg_shipments" value="&lt;b&gt;Shipments:&lt;/b&gt;  &lt;font color='#b85450'&gt;● S3: SUZ→NYC&lt;/font&gt;   &lt;font color='#9673A6'&gt;● S2: GZH→CHI&lt;/font&gt;   &lt;font color='#d6b656'&gt;● S1: SZN→DAL&lt;/font&gt;        Each shipment's origin and destination share the same color." style="text;html=1;fontSize=8;align=left;verticalAlign=middle;" vertex="1" parent="1">
+      <mxGeometry x="45" y="578" width="840" height="16" as="geometry" />
+    </mxCell>
+    <mxCell id="leg_nodes" value="&lt;b&gt;Nodes:&lt;/b&gt;  Blue = port (shared supply)        &lt;b&gt;Arcs:&lt;/b&gt;  Solid = truck   Dashed = intermodal rail        &lt;b&gt;Arc labels:&lt;/b&gt;  carrier/transit/rough cost" style="text;html=1;fontSize=8;align=left;verticalAlign=middle;" vertex="1" parent="1">
+      <mxGeometry x="45" y="597" width="840" height="16" as="geometry" />
+    </mxCell>
+    <mxCell id="leg_share" value="&lt;b&gt;Shared supply:&lt;/b&gt;  SHA ← S2,S3   SZX ← S1,S2   NGB ← S1,S3   LAX/LGB/SEA → NYC, CHI, DAL" style="text;html=1;fontSize=8;align=left;fontColor=#b85450;" vertex="1" parent="1">
+      <mxGeometry x="45" y="616" width="840" height="16" as="geometry" />
+    </mxCell>
+
+  </root>
+</mxGraphModel>
