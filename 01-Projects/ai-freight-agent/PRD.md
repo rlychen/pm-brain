@@ -5,7 +5,7 @@ tags:
   - product
 status: In Review — Phase 0
 version: '0.1'
-last_synced: '2026-05-07'
+last_synced: '2026-05-08'
 ---
 # Product Requirements Document
 ## AI Multimodal Freight Routing Agent
@@ -57,7 +57,7 @@ This section is the primary requirements document. Each persona has a role descr
 
 **Role:** Employed by a manufacturer, retailer, or importer. Owns outbound and/or inbound freight from origin factories or suppliers to destination warehouses or stores. Responsible for on-time delivery, freight cost, and carrier relationships. Interacts with one or more freight forwarders to execute shipments.
 
-**Volume:** 10–500 active shipments at any time. Queries are shipment-centric — they think in terms of individual orders and purchase orders.
+**Volume:** 10–500 active shipments at any time. The logistics manager thinks in terms of purchase orders (POs), not containers. Each PO has a delivery due date and a cargo volume (CBM). Depending on CBM, a PO may fill one or more full containers (FCL) or share a container with other cargo (LCL). A "shipment" in this context is typically one PO or a group of POs moving together — the system must handle both FCL and LCL demand, though LCL consolidation optimization is deferred (see note below and Open Question 8).
 
 **KPIs they own:** On-time in full (OTIF), freight cost per unit, transit time vs. committed, carrier reliability.
 
@@ -87,6 +87,8 @@ This section is the primary requirements document. Each persona has a role descr
 | S18 | What is the CO2 footprint of each routing option for this shipment? | **P2** | `emissions_estimate` | Emissions Model (mode + distance + cargo weight) |
 | S19 | How does this route look if I route around the Red Sea? Show me the cost and time delta. | **P1** | `what_if_scenario` | Ocean Optimizer with lane avoidance constraint |
 | S20 | What is my exposure if the Port of Los Angeles has a congestion event? | **P2** | `disruption_exposure` | Portfolio-level lane/port dependency scan |
+
+**Note — LCL (Less-than-Container Load):** When a PO's volume is too small to justify a full container, it moves as LCL — consolidated with other cargo into a shared container by a freight forwarder or NVOCC. Routing LCL shipments requires a consolidation optimizer that decides which LCL shipments to group together and onto which sailings. This is a distinct problem from FCL routing and requires its own MILP formulation (bin-packing × routing). Deferred to a future phase — see Section 11 (Components) and Open Question 8.
 
 ---
 
@@ -196,15 +198,15 @@ All tools derived from the persona requirements above, with priority, descriptio
 
 | Tool | Description | Underlying Components |
 |---|---|---|
-| `route_shipment` | Given a single shipment (origin, dest, cargo, constraints), return viable routes ranked by cost, transit time, and on-time probability. | Ocean Optimizer, Trucking Optimizer, Graph Generator, Transit Time Models, Rules Engine |
-| `route_batch` | Given N shipments with optional priority flags, return an optimized routing plan for the full portfolio. | Batch Planner, Ocean + Trucking Optimizers, Rules Engine |
-| `track_shipment` | Given a shipment ID, return current position, milestone trace, and latest ETA. | AIS Adapter, Road Tracking Adapter, Shipment State Store |
+| `route_shipment` | Given a single shipment (origin, dest, cargo, constraints), return viable routes ranked by cost, transit time, and on-time probability. Supports single-objective and multi-objective output. | Ocean Optimizer, Trucking Optimizer, Graph Generator, Transit Time Models, Rules Engine |
+| `route_batch` | Given N shipments with optional priority flags, return an optimized routing plan for the full portfolio. Supports priority segmentation (urgent vs. economical). | Batch Planner, Ocean + Trucking Optimizers, Rules Engine |
+| `track_shipment` | Given a shipment ID, return current position (AIS for ocean, road ETA for trucking), milestone trace, and latest ETA. | AIS Adapter, Road Tracking Adapter, Shipment State Store |
 | `check_on_time_risk` | Given a shipment ID, return P(arrival ≤ deadline), expected arrival distribution, and risk flags. | Probabilistic Transit Model, Shipment State, Rolling Horizon ETA |
-| `portfolio_risk_scan` | Return all active shipments at risk of missing delivery window, ranked by urgency. | Probabilistic Transit Model, Shipment State, Risk Scoring Engine |
-| `reroute_shipment` | Given a shipment ID and an exception event, re-plan the remaining legs and return options. | Rolling Horizon Controller, Ocean Optimizer, Trucking Optimizer |
+| `portfolio_risk_scan` | Return all active shipments at risk of missing delivery window, ranked by urgency (time-to-failure × impact). | Probabilistic Transit Model, Shipment State, Risk Scoring Engine |
+| `reroute_shipment` | Given a shipment ID and an exception event (rollover, delay, disruption), re-plan the remaining legs and return options. | Rolling Horizon Controller, Ocean Optimizer, Trucking Optimizer |
 | `carrier_select` | Given a shipment and current allocation state, return the optimal carrier per routing guide + allocation cap + availability constraints. | Rules Engine, Carrier Allocation State, Rate Engine, Carrier Availability |
-| `disruption_impact_scan` | Given a disruption event, return all active shipments affected with impact severity. | Shipment State, Graph (lane/port/carrier dependency lookup) |
-| `trade_compliance_check` | Check routing against trade regulations, sanctions, embargoes, and carrier restrictions. | Regulatory Rules Engine, Sanctions/Embargo DB, Commodity Classification |
+| `disruption_impact_scan` | Given a disruption (port, vessel, carrier, weather event), return all active shipments affected with impact severity. | Shipment State, Graph (lane/port/carrier dependency lookup) |
+| `trade_compliance_check` | Given a routing and shipment details, check against trade regulations, sanctions, embargoes, and carrier restrictions. Return pass/fail per rule with evidence. | Regulatory Rules Engine, Sanctions/Embargo DB, Commodity Classification |
 | `document_requirements` | Given a shipment (origin, dest, commodity, incoterm), return the required documentation set. | Trade Lane Rules DB, Commodity Classification, Incoterm Rules |
 | `tariff_lookup` | Given commodity and trade lane, return HS code, applicable duty rate, and FTA eligibility. | HS Code DB, Tariff Schedule |
 | `cutoff_alert` | Return all shipments with a vessel booking cutoff within a configurable window that are not yet confirmed booked. | Shipment State, Sailing Schedule Store, Cutoff Rules |
@@ -217,44 +219,62 @@ All tools derived from the persona requirements above, with priority, descriptio
 | Tool | Description | Underlying Components |
 |---|---|---|
 | `lane_transit_estimate` | Return the current transit time distribution (mean, std dev, P50/P90) for a lane, mode, and carrier. | Transit Time Model, Lane Analytics |
-| `mode_compare` | Side-by-side comparison of ocean vs. air on cost, transit time, and on-time probability. | Ocean + Air Optimizers, Rate Engine, Transit Time Models |
-| `what_if_scenario` | Given a route and parameterized scenario (port closure, carrier unavailable, rate change), return re-optimized route and cost/time delta. | Ocean Optimizer with constraint injection, Rate Engine |
-| `allocation_check` | Return current usage vs. committed min/max for a carrier on a lane. | Carrier Allocation State, Booking Volume Store |
+| `mode_compare` | Given a shipment, return a side-by-side comparison of ocean vs. air (vs. combined) on cost, transit time, and on-time probability. | Ocean + Air Optimizers, Rate Engine, Transit Time Models |
+| `what_if_scenario` | Given a route and a parameterized scenario (port closure, carrier unavailable, rate change, lane avoidance), return the re-optimized route and cost/time delta. | Ocean Optimizer with constraint injection, Rate Engine |
+| `allocation_check` | Return current usage vs. committed minimum/maximum for a carrier on a lane or across all lanes. | Carrier Allocation State, Booking Volume Store |
 | `allocation_utilization` | Return carrier allocation utilization summary across all contracts for a period. | Carrier Allocation State, Booking Volume Store |
-| `consolidation_evaluate` | Evaluate whether FCL consolidation is cost-effective for a set of LCL shipments. | Consolidation Model, Rate Engine, Sailing Schedule |
-| `schedule_query` | Return available ocean sailings for a lane within a date range. | Sailing Schedule Store, Carrier Service Data |
-| `trucking_plan` | Generate an optimal drayage and inland trucking plan for containers arriving at a port. | Trucking Optimizer, Graph (port node data), Road Routing Adapter |
-| `trucking_availability` | Return available trucking capacity between two points for a date window. | Carrier Availability, Road Routing Adapter |
+| `consolidation_evaluate` | Given a set of LCL shipments on the same lane, evaluate whether FCL consolidation is cost-effective and which sailings support it. | Consolidation Model, Rate Engine, Sailing Schedule |
+| `schedule_query` | Return available ocean sailings for a lane within a date range, with carrier, vessel, ETD, ETA, and available capacity indicator. | Sailing Schedule Store, Carrier Service Data |
+| `trucking_plan` | Given a set of containers arriving at a port within a window, generate an optimal drayage and inland trucking plan. | Trucking Optimizer, Graph (port node data — BNSF/UP ramps, road distances), Road Routing Adapter |
+| `trucking_availability` | Return available trucking capacity (carriers, rates, transit time) between two points for a date window. | Carrier Availability, Road Routing Adapter |
 | `graph_visualize` | Return the G(N,A) subgraph between two nodes with current arc weights for visualization. | Graph Generator, Current Arc State |
-| `routing_efficiency_analysis` | Identify shipments where actual routing cost deviated significantly from optimal. | Counterfactual Engine, Rate Benchmark, Shipment Cost Store |
-| `disruption_cost_impact` | Compute total incremental cost to portfolio from a disruption event vs. baseline. | Counterfactual Engine, Lane Cost Delta, Shipment Store |
-| `counterfactual_analysis` | For completed shipments, compute regret vs. best available route in hindsight. | Counterfactual / Regret Analysis Engine |
-| `landed_cost_estimate` | Total landed cost: freight + duties + taxes + handling. | Tariff Lookup, Freight Cost, Duty/VAT Calculator |
-| `denied_party_check` | Screen shipper/consignee against denied party and sanctions lists. | Denied Party Screening DB (OFAC, BIS, EU sanctions) |
+| `routing_efficiency_analysis` | Identify shipments where actual routing cost deviated significantly from optimal, ranked by opportunity size. | Counterfactual Engine, Rate Benchmark, Shipment Cost Store |
+| `disruption_cost_impact` | Given a disruption event and date range, compute the total incremental cost to the portfolio vs. pre-disruption baseline. | Counterfactual Engine, Lane Cost Delta, Shipment Store |
+| `counterfactual_analysis` | For completed shipments, compute regret: what would the cost/transit have been under the best available route in hindsight? | Counterfactual / Regret Analysis Engine |
+| `landed_cost_estimate` | Given a shipment and routing, return total landed cost: freight + duties + taxes + handling. | Tariff Lookup, Freight Cost, Duty/VAT Calculator |
+| `denied_party_check` | Screen a shipper, consignee, or notify party against denied party and sanctions lists. | Denied Party Screening DB (OFAC, BIS, EU sanctions) |
 | `sanctions_check` | Check whether a trade lane, port, or counterparty is subject to active embargo or sanction. | Sanctions/Embargo DB |
-| `customs_hold_alert` | Return active shipments matching patterns associated with likely customs holds. | Shipment State, Compliance Rules, Hold Pattern Model |
-| `freight_audit` | Compare actual carrier invoice against planned routing cost; flag discrepancies. | Planned Cost Store, Invoice Data, Rate Engine |
-| `hazmat_requirements` | Given a commodity, return IMDG class, packing group, and mode-specific DG rules. | DG Rules DB |
-| `shipment_audit_trail` | Return the full event and decision history for a shipment. | Shipment Event Log, Decision Log |
-| `generate_pre_alert` | Generate a pre-alert notification for an inbound shipment. | Shipment State, Route Formatter, Carrier/Port Reference |
-| `generate_booking_instruction` | Generate a formatted booking instruction for a freight forwarder. | Route Formatter, Carrier/Port Reference Data |
+| `customs_hold_alert` | Return active shipments that match patterns associated with likely customs holds (missing docs, restricted commodities, flagged consignee). | Shipment State, Compliance Rules, Hold Pattern Model |
+| `freight_audit` | Compare actual carrier invoice against planned routing cost; flag discrepancies above threshold. | Planned Cost Store, Invoice Data, Rate Engine |
+| `hazmat_requirements` | Given a commodity, return IMDG class, packing group, segregation requirements, and mode-specific DG rules. | DG Rules DB |
+| `shipment_audit_trail` | Return the full event and decision history for a shipment — every milestone, every routing decision, every override. | Shipment Event Log, Decision Log |
+| `generate_pre_alert` | Generate a pre-alert notification for a shipment (to notify consignee, customs broker, or inland carrier of inbound shipment). | Shipment State, Route Formatter, Carrier/Port Reference |
+| `generate_booking_instruction` | Generate a formatted booking instruction a shipper can send to a freight forwarder. | Route Formatter, Carrier/Port Reference Data |
 
 #### P2 Tools — Deferred
 
-`rate_benchmark`, `lane_trend`, `emissions_estimate`, `emissions_analytics`, `routing_compliance_scan`, `exception_root_cause_analytics`, `customs_doc_generator`, `contract_compliance`, `origin_classification_audit`, `what_if_carrier_swap`, `capacity_planning`, `disruption_exposure`
+| Tool | Description |
+|---|---|
+| `rate_benchmark` | Market rate benchmark for a lane, mode, and period vs. internal actuals. |
+| `lane_trend` | Historical rate and transit time trend for a lane over a specified period. |
+| `emissions_estimate` | CO2 estimate per route option (mode + distance + vessel/truck type). |
+| `emissions_analytics` | Aggregate emissions by lane, mode, carrier for a period. |
+| `routing_compliance_scan` | Scan a time period's bookings for deviations from routing guide rules. |
+| `exception_root_cause_analytics` | Classify exceptions by root cause (carrier, port, weather, documentation) and aggregate. |
+| `customs_doc_generator` | Generate a full customs documentation package for a shipment. |
+| `contract_compliance` | Extract and check carrier contract clauses that constrain routing decisions. |
+| `origin_classification_audit` | Audit country-of-origin classification across a period's shipments. |
+| `what_if_carrier_swap` | Model cost and service impact of switching a carrier on a lane across historical volume. |
+| `capacity_planning` | Pre-booking capacity recommendation given demand forecast and current market rates. |
+| `disruption_exposure` | Portfolio-level scan of dependency on a specific port, lane, or carrier. |
 
 ---
 
 ### 3.6 P0 Priority Summary
 
-The 15 P0 tools cover the daily operational core across all four personas.
+The 15 P0 tools cover the daily operational core across all four personas. Building only these tools delivers a working system for freight forwarder operations planners and shippers. Everything else is additive.
 
-- **Routing core (3):** `route_shipment`, `route_batch`, `carrier_select`
-- **Tracking and risk core (3):** `track_shipment`, `check_on_time_risk`, `portfolio_risk_scan`
-- **Exception management core (2):** `reroute_shipment`, `disruption_impact_scan`
-- **Operations workflow core (2):** `cutoff_alert`, routing guide fallback in `carrier_select`
-- **Analytics core (3):** `freight_spend_analytics`, `carrier_scorecard`, `otd_analytics`
-- **Compliance core (3):** `trade_compliance_check`, `document_requirements`, `tariff_lookup`
+**Routing core (3 tools):** `route_shipment`, `route_batch`, `carrier_select`
+
+**Tracking and risk core (3 tools):** `track_shipment`, `check_on_time_risk`, `portfolio_risk_scan`
+
+**Exception management core (2 tools):** `reroute_shipment`, `disruption_impact_scan`
+
+**Operations workflow core (2 tools):** `cutoff_alert`, routing guide + fallback in `carrier_select`
+
+**Analytics core (3 tools):** `freight_spend_analytics`, `carrier_scorecard`, `otd_analytics`
+
+**Compliance core (3 tools):** `trade_compliance_check`, `document_requirements`, `tariff_lookup`
 
 ---
 
@@ -270,7 +290,7 @@ The ocean + trucking pair forces mode-transition handling (the hard part) from d
 
 ## 5. Key Architectural Concept: Rolling Horizon Planning
 
-*First-principles design decision that differentiates this system from all existing TMS platforms.*
+*This is a first-principles design decision that differentiates this system from all existing TMS platforms.*
 
 See also: [[Rolling Horizon Planning]]
 
@@ -282,10 +302,10 @@ All existing TMS systems plan each mode leg sequentially: book the ocean leg, es
 
 This system maintains a **complete end-to-end plan at all times**, but resolves each leg at different levels of graph resolution depending on how close we are to execution:
 
-- **G_coarse**: Sparse graph for future legs. Arc weights are cost/time envelopes derived from historical data and ML models. Sufficient for the optimization objective but not for execution.
-- **G_fine**: Dense graph for the next leg to be executed. Arc weights are actual carrier schedules, confirmed spot rates, and port-specific clearance estimates.
+- **G_coarse**: A sparse graph used for future legs. Arc weights are cost/time envelopes — ranges derived from historical data and ML models. Sufficient for the optimization objective but not for execution.
+- **G_fine**: A dense graph used for the next leg to be executed. Arc weights are actual carrier schedules, confirmed spot rates, and port-specific clearance estimates.
 
-As a shipment advances and uncertainty decreases (e.g., AIS-derived vessel ETA confidence exceeds a threshold), the system fires a **re-plan trigger** and re-solves the next leg on G_fine with real schedules and live rates.
+As a shipment advances and uncertainty about the next leg decreases (e.g., AIS-derived vessel ETA confidence exceeds a threshold), the system fires a **re-plan trigger** and re-solves the next leg on G_fine with real schedules and live rates.
 
 ### 5.3 Concrete Example
 
@@ -297,24 +317,26 @@ As a shipment advances and uncertainty decreases (e.g., AIS-derived vessel ETA c
 
 **At T=2 (vessel near USLAX):**
 - Ocean leg: confirmed — actual ETA Jul 4 06:00 PST, port clearance est. Jul 4 14:00
-- Inland leg: re-solved on G_fine — 3 specific options:
+- Inland leg: re-solved on G_fine — 3 specific options with actual carrier schedules and spot rates:
   - [A] Direct Truck (OHL) — depart Jul 4 16:00, arrive Jul 5 09:00 — $612 ✓ selected
   - [B] Drayage + Rail — depart Jul 4 20:00, arrive Jul 6 08:00 — $389
   - [C] Expedite (FedEx CC) — depart Jul 4 14:30, arrive Jul 4 22:00 — $1,480
 
-Diagram file: `ai-freight-agent/docs/rolling_horizon_planning.drawio`
+Diagram file: `docs/rolling_horizon_planning.drawio`
 
 ### 5.4 Design Principle
 
 The optimizer holds a full door-to-door plan at all times. Future legs are placeholders on G_coarse — enough to make good booking decisions. As each leg's execution window approaches, it is re-solved on G_fine with real data. This is **Model Predictive Control applied to multimodal freight routing**.
 
-**This is a hard requirement.** The system must maintain and continuously update a full multi-horizon plan.
+**This is a hard requirement.** The system must maintain and continuously update a full multi-horizon plan. Single-horizon planning (plan once, execute) is not acceptable.
 
 ---
 
 ## 6. Supply and Demand Model
 
 ### 6.1 Demand — Ocean Shipments
+
+Each ocean shipment request provides:
 
 | Field | Description |
 |---|---|
@@ -334,23 +356,27 @@ The optimizer holds a full door-to-door plan at all times. Future legs are place
 
 ### 6.2 Demand — Trucking Shipments
 
+Each trucking shipment request provides:
+
 | Field | Description |
 |---|---|
 | `shipment_id` | Unique identifier |
 | `origin` | Pickup address |
 | `destination` | Delivery address |
 | `pickup_window` | [earliest, latest] pickup datetime |
-| `delivery_window` | Hard deadline or [earliest, latest] |
+| `delivery_window` | [latest_arrival] (one-sided — hard deadline) or [earliest, latest] |
 | `weight_kg` | Gross weight |
 | `volume_cbm` | Volume |
-| `pallet_count` | Number of pallets |
+| `pallet_count` | Number of pallets (for load planning) |
 | `cargo_type` | General, hazmat, temperature-controlled |
 | `service_level` | Standard, Expedite, Dedicated |
 | `carrier_preferences` | Preferred, acceptable, excluded |
 
 ### 6.3 Supply — The Graph G(N, A)
 
-**Nodes N:**
+The routing network is modeled as a directed graph G(N, A):
+
+**Nodes N** represent physical locations and logical waypoints:
 - Origin locations (factories, warehouses, pickup addresses)
 - Origin ports (container terminals with sailing schedules)
 - Transshipment ports (intermediate hub ports)
@@ -358,87 +384,121 @@ The optimizer holds a full door-to-door plan at all times. Future legs are place
 - Inland distribution points (rail ramps, cross-docks, truck terminals)
 - Final destinations (warehouses, DCs, delivery addresses)
 
-**Arcs A:**
+**Arcs A** represent feasible connections between nodes:
 - **Ocean arcs**: carrier service legs between port pairs, with scheduled departure/arrival, capacity, and rate
 - **Pre-carriage arcs**: pickup truck legs from origin to origin port
 - **Drayage arcs**: port-to-inland-hub truck legs
 - **Inland trucking arcs**: point-to-point truck moves
-- **Transshipment arcs**: inter-terminal transfers at hub ports
+- **Transshipment arcs**: inter-terminal transfers at hub ports (time and cost)
 
 Each arc carries:
 - `transit_time_distribution`: mean + variance (probabilistic, not point estimate)
 - `cost`: base rate + fuel surcharge + accessorials
-- `capacity`: available slots or load units
-- `cutoff_time`: latest departure to meet downstream schedule
+- `capacity`: available slots or load units (for constrained arcs)
+- `cutoff_time`: latest departure to meet a downstream schedule
 - `service_type`: carrier, service name, frequency
+
+**Graph decomposition for batch solving:** When routing a batch of N shipments, the demand-supply graph can be decomposed before the MILP solve. Two shipments are independent if they share no feasible supply arcs — no common carrier service legs, port pairs, or trucking lanes that both could use. Independent subsets form disconnected components in the demand-supply intersection graph and can be partitioned and solved separately. This decomposition reduces MILP problem size and enables parallelism. The batch planner computes connected components first, dispatches each component to the optimizer independently, and merges results. Shipments that share supply (e.g., competing for the same vessel sailing or carrier allocation cap) remain in the same component and are optimized jointly.
 
 ---
 
 ## 7. Agent Capabilities
 
 ### 7.1 Core Routing and Planning
-- Route a single shipment: all viable options given constraints
-- Lowest-cost, fastest, reliability-optimized routing
-- Multi-objective: Pareto frontier of cost vs. time vs. reliability
+
+- Route a single shipment: return all viable options given constraints
+- Lowest-cost routing with feasibility check against delivery window
+- Fastest routing (minimize expected transit time)
+- Reliability-optimized routing (maximize on-time probability using transit time distributions)
+- Multi-objective: return Pareto frontier of cost vs. time vs. reliability
 - Mode selection: ocean vs. trucking vs. combined multimodal
 - Carrier selection within mode against routing guide and preference rules
 - FCL vs. LCL decision (consolidation economics)
 - Direct vs. transshipment routing
+- Cargo-ready-to-vessel-cutoff feasibility check
 - Rolling horizon re-plan trigger evaluation and execution
 
 ### 7.2 Constraint and Rule Handling
-- Hard and soft time windows (pickup and delivery)
+
+- Hard time windows: pickup window, latest-arrival delivery window
+- Soft time windows: prefer within range, penalize violations in objective
 - Service level tiers: Economy, Standard, Express
 - Carrier preference / blacklist / allocation cap enforcement
 - Port or lane avoidance (e.g., Red Sea, Panama congestion)
-- Weight and volume constraints per leg
+- Weight and volume constraints per leg and per vessel service
 - Commodity restrictions: hazmat class, temperature-controlled, OOG
 - Trade lane regulatory constraints
 - Budget cap per shipment or per lane
+- Dangerous goods and temperature segregation (cannot co-load)
 
-### 7.3 Batch and Fleet Operations
+### 7.3 Batch and Fleet Operations (Forwarder Ops)
+
 - Route all unbooked shipments in a portfolio simultaneously
-- Priority segmentation: urgent vs. economical
+- Demand-supply graph decomposition: partition the batch into independent subproblems (shipments sharing no feasible supply arcs) before solving; each partition dispatched to the optimizer separately and results merged
+- Priority segmentation: "route these N urgently, rest economical"
 - Volume consolidation: identify which shipments can merge into one container
-- Carrier allocation compliance monitoring
-- Exception queue: surface shipments requiring human decision, ranked by urgency
-- Bulk re-routing on disruption
-- Portfolio status: at-risk vs. on-track
+- Carrier allocation compliance: flag shipments violating contracted allocation caps
+- Exception queue: surface shipments requiring human decision, ranked by urgency and impact
+- Bulk re-routing: identify all active shipments affected by a specific disruption
+- Portfolio status: how many shipments are at-risk vs. on-track right now?
 
 ### 7.4 Scenario Analysis and What-If
-- Origin port shift, transit time vs. cost tradeoff, LCL→FCL upgrade
-- Carrier unavailability, shipment splitting
-- Red Sea avoidance: route via Cape of Good Hope, full cost/time delta
-- Air vs. ocean full comparison
-- Service level upgrade cost, tariff/duty change impact
-- Capacity constraint scenario: model port downtime
+
+- What if I shift origin port?
+- What if I accept N days more transit time — how much do I save?
+- What if I upgrade from LCL to FCL?
+- What if carrier X is unavailable on this lane?
+- What if I split this shipment across two vessels?
+- Red Sea avoidance: route via Cape of Good Hope, show full cost/time delta
+- Air vs. ocean: full cost and time comparison for same shipment
+- Service level upgrade cost: what does 5 days faster cost?
+- Tariff/duty change impact: how does a new duty rate affect landed cost by route?
+- Capacity constraint scenario: model what happens if a major port goes down
 
 ### 7.5 Disruption and Exception Management
+
 - Detect predicted delay: weather, port congestion, vessel rollover, anchorage wait
-- Alert with ranked recommended actions
+- Alert with ranked recommended actions (rebook, reroute, notify customer)
 - Autonomous rerouting recommendation on carrier failure or missed cutoff
 - Port strike / closure contingency routing
-- Vessel schedule change: recalculate all impacted shipments
+- Vessel schedule change: recalculate all impacted shipments and options
+- Customs hold detection and recommended next steps
+- Missed pickup window recovery options ranked by cost and time impact
 - Proactive risk scoring: which booked shipments are most at risk this week?
-- Rolling horizon re-plan on disruption
+- Rolling horizon re-plan on disruption: re-solve fine graph with updated constraints
 
 ### 7.6 Tracking and Visibility
-- AIS position on ocean legs
-- ML-based ETA prediction (not just carrier schedule)
+
+- Where is this shipment right now? (AIS position on ocean legs)
+- Current ETA prediction (ML-based, not just carrier schedule)
 - Full milestone trace: cargo ready → picked up → departed → transshipment → arrived → customs cleared → delivered
-- On-track vs. at-risk status vs. committed delivery window
-- Portfolio exception view with filters
+- Is this shipment on track or at risk? (vs. committed delivery window)
+- How many days remain to delivery?
+- Remaining legs with mode transitions
+- All shipments at risk: portfolio-level exception view
+- Filter active shipments by mode, carrier, lane, risk status
 
 ### 7.7 Analytics and Performance
+
 - Cost breakdown by lane, carrier, mode, time period
-- Transit time performance vs. SLA by carrier and lane
-- On-time delivery rate
+- Transit time performance vs. committed SLA by carrier and lane
+- On-time delivery rate by carrier, lane, mode
 - Carrier scorecard: cost, reliability, rollover rate, on-time delivery
+- Lane performance trends: is this lane getting more expensive or slower?
 - Route explanation / audit trail: why was this specific route chosen?
 - Savings attribution: how much did optimization save vs. default routing?
-- Counterfactual / regret analysis
-- Carrier volume commitment utilization
+- Counterfactual / regret analysis: what would this shipment have cost if we had chosen differently? (see Section 10.2)
+- Carrier volume commitment utilization: am I meeting minimum contracted volumes?
 - Emissions estimate: CO₂ per route option
+
+### 7.8 Advisory and Decision Support
+
+- Is this quote from my forwarder reasonable vs. market?
+- What are the most reliable carriers for this lane?
+- Am I using my carrier allocations efficiently?
+- What is my exposure if [port / lane / carrier] goes down?
+- Should I pre-book capacity given current demand signals?
+- What is the market benchmark rate for this lane?
 
 ---
 
@@ -450,12 +510,20 @@ Each arc carries:
 
 | Criterion | LangGraph | Direct Anthropic SDK |
 |---|---|---|
+| Behavioral control | High — explicit graph state, conditional edges | High — but you build everything |
 | Decision logging | LangSmith — best-in-class, zero-build | Build it yourself |
 | MCP integration | `langchain-mcp-adapters` — production-tested | Native Anthropic SDK |
 | Model swappability | Yes — model-agnostic | No — Claude-only |
 | Planner-validator pattern | Native supervisor with conditional edges | Custom build |
 | Human-in-the-loop | First-class `interrupt()` + PostgreSQL checkpointer | Build it yourself |
 | Debuggability | Time-travel debugging in LangSmith | Build it yourself |
+| Production maturity | Tier 1 — thousands of production deployments | Tier 3 — newer |
+
+**Why this matters for this system specifically:**
+- We need full logging of every agent decision (CLAUDE.md requirement) — LangSmith provides this with zero custom code
+- We have 6+ agent personas with branching control flow — managing this in a hand-rolled loop is fragile
+- We need model-agnosticism — if we want to run the Execution Monitor on a cheaper/faster model than the Routing Planner, LangGraph handles this cleanly
+- The planner-validator supervisor pattern is a native LangGraph construct; building it from scratch on the Anthropic SDK would reproduce 80% of LangGraph's core
 
 ### 8.2 Architecture Pattern: Hierarchical with Hub-and-Spoke Leaves
 
@@ -485,7 +553,7 @@ Each arc carries:
 
 **Routing Planner Agent** — orchestrates optimization and ML tools to generate end-to-end route recommendations. Output: `{route, total_cost, expected_transit_days, p_on_time, constraints_checked, rationale}`
 
-**Compliance/Validation Agent** — independently reviews planner output as a skeptical auditor. Separate system prompt, no shared planner history, no access to the optimization solver. Mandatory per-item checklist covering: carrier constraint compliance, time window feasibility, weight/volume compliance, business rule compliance, optimization sanity, regulatory check. Output: `{status: PASS|FAIL|ESCALATE, findings: [{rule, status, evidence}], summary}`
+**Compliance/Validation Agent** — independently reviews planner output as a skeptical auditor. Separate system prompt, no shared planner history, no access to the optimization solver. Mandatory per-item checklist: carrier constraint compliance, time window feasibility, weight/volume compliance, business rule compliance, optimization sanity, regulatory check. Output: `{status: PASS|FAIL|ESCALATE, findings: [{rule, status, evidence}], summary}`
 
 **Execution Monitor Agent** — event-driven, watches active shipments, fires rolling horizon re-plan triggers, generates proactive alerts. Runs async, never in the request path.
 
@@ -521,30 +589,66 @@ State persisted via PostgreSQL checkpointer.
 | UN/LOCODE | Real topology | Port and location reference | Free |
 | IATA codes | Real topology | Airport reference | Free |
 | NOAA AIS (historical) | Real signal | Ocean vessel tracking, transit time training | Free |
+| AIS live feed (TBD) | Real signal | Active shipment tracking | Paid (future) |
 | Google Maps Routes API | Real signal | Road transit time estimation | Pay-per-use |
 | OSRM | Real signal | Road routing (free alternative) | Free |
 | OpenSky Network | Real signal | Air freight schedules (historical) | Free |
-| Ocean carrier schedules | Real topology | Sailing schedule graph construction | Public |
+| Ocean carrier schedules | Real topology | Sailing schedule graph construction | Public / scraped |
 | BTS Freight Analysis Framework | Real topology | Trucking lane structure | Free |
-| Synthetic rates | Synthetic | Commercial rate parameters | N/A |
-| DAT | — | **NOT licensed. Do not use.** | — |
-| USLAX / port authority data | Real signal | Terminal throughput, clearance windows | Free / public |
-| BNSF / UP intermodal ramp data | Real topology | Inland ramp locations, service days | Public |
+| Synthetic rates | Synthetic | Commercial rate parameters for optimization | N/A |
+| DAT | — | **NOT licensed. Do not use without explicit license.** | — |
+| USLAX / port authority data | Real signal | Terminal throughput, berth schedules, typical clearance windows by terminal | Free / public |
+| BNSF / UP intermodal ramp data | Real topology | Inland ramp locations, service days, cutoff times | Public |
+| Google Maps Distance Matrix | Real signal | Road distance and historical transit time between inland nodes | Pay-per-use |
 | NOAA / NWS weather | Real signal | Weather disruption risk by port and lane | Free |
 
 ---
 
 ## 10. Differentiation Requirements
 
-Seven capabilities absent from every major TMS platform — explicit design requirements, not nice-to-haves.
+These capabilities do not exist in any current TMS platform. They are explicit design requirements, not nice-to-haves.
 
-1. **Continuous re-optimization (Rolling Horizon)** — batch-wave planning is not acceptable. (→ Section 5)
-2. **Counterfactual / regret analysis** — post-shipment regret = `|cost(chosen) - cost(best_in_hindsight)|`. (→ Section 10.2)
-3. **Learned constraint inference** — log all planner overrides as the primary input for constraint learning. (→ Section 10.3)
-4. **Simultaneous multi-echelon joint optimization** — full door-to-door journey as one MILP on G(N,A). (→ Section 10.4)
-5. **Spot capacity as supply** — spot arcs with rate distributions alongside contracted capacity. (→ Section 10.5)
-6. **Probabilistic planning** — transit time distributions, not point estimates; P(on-time ≤ deadline) as optimization objective. (→ Section 10.6)
-7. **Fully autonomous decision chains (end goal)** — prototype is decision-support; end goal is autonomous plan + execute. (→ Section 10.7)
+### 10.1 Continuous Re-Optimization (Rolling Horizon)
+
+Requirement stated in Section 5. The system must maintain and continuously update a full multi-horizon plan. Batch-wave planning is not acceptable.
+
+### 10.2 Counterfactual / Regret Analysis
+
+After each shipment completes, the system must compute:
+- The set of routes that were feasible at booking time (given constraints known at T=0)
+- The actual outcome for each route (using realized transit times, not estimates)
+- Regret = `|cost(chosen_route) - cost(best_feasible_route_in_hindsight)|`
+
+This data must be stored per shipment and aggregable by lane, carrier, time period, and cargo type. Used for model validation, systematic bias detection, and training data generation.
+
+### 10.3 Learned Constraint Inference
+
+When a human planner overrides a system routing recommendation, the system must log:
+- What was recommended (route, carrier, cost, transit time)
+- What was chosen instead
+- Timestamp and shipment context (lane, cargo type, service level, date)
+- Override reason (if provided by planner)
+
+These override signals are the primary input for constraint learning. Over time, systematic overrides on a lane or carrier reveal implicit constraints not yet modeled. The logged data feeds into both rule extraction (explicit constraint updates) and model retraining (implicit preference learning).
+
+### 10.4 Simultaneous Multi-Echelon Joint Optimization
+
+All existing TMS platforms plan mode legs sequentially. This system must model the full door-to-door journey as a **single optimization problem** on the unified graph G(N, A). The ocean leg, transshipment, drayage, and inland trucking leg are all decision variables in one formulation — not planned one at a time.
+
+### 10.5 Spot Capacity as Supply
+
+Spot market capacity (broker capacity, load board postings) is modeled as a set of arcs in G(N, A) alongside contracted capacity. Spot arcs carry rate distributions rather than fixed rates. The optimizer treats spot as just another supply option — not a fallback of last resort.
+
+### 10.6 Probabilistic Planning
+
+Transit time on each arc is represented as a distribution (mean + variance, or parametric fit from historical data), not a point estimate. The optimization objective must support:
+- Expected cost / expected transit time
+- Probability of on-time delivery given a delivery window (P(arrival ≤ deadline))
+- Risk-adjusted objectives (e.g., minimize cost subject to P(on-time) ≥ 0.95)
+
+### 10.7 Fully Autonomous Decision Chains (End Goal)
+
+The prototype implements decision-support (human approves). The end goal is a fully autonomous planning and exception-management chain: the system detects a disruption, re-optimizes affected shipments, selects the best alternative, books it (via carrier API), and notifies stakeholders — without human intervention.
 
 ---
 
@@ -554,7 +658,7 @@ Each component is independently buildable and testable. No stitching until each 
 
 | Component | Description | Mode(s) |
 |---|---|---|
-| Graph Generator | Constructs G(N, A) from network data. Nodes enriched with real public data: port nodes get terminal throughput, customs clearance windows, anchorage wait distributions; inland nodes get intermodal ramp locations (BNSF, UP), road distance matrices, historical road transit distributions. | Ocean + Trucking |
+| Graph Generator | Constructs G(N, A) from network data sources. Each node is enriched with public real-world data: port nodes get terminal throughput, typical customs clearance windows, and anchorage wait distributions; city/inland nodes get intermodal ramp locations (e.g. BNSF, UP), road distance matrices, and historical road transit time distributions. Arc weights are derived from this node-level enrichment, not left as abstract estimates. | Ocean + Trucking |
 | Ocean Transit Time Model | ML model: distribution over transit time per ocean arc | Ocean |
 | Trucking Transit Time Model | ML model: distribution over transit time per trucking arc | Trucking |
 | Ocean Optimizer | MILP: selects optimal ocean route given demand and constraints | Ocean |
@@ -569,26 +673,134 @@ Each component is independently buildable and testable. No stitching until each 
 | Validation Agent | Reviews planning decisions before surfacing to user | Both |
 | Execution Monitor Agent | Watches active shipments, detects exceptions, triggers re-plans | Both |
 | Agent Interaction Logger | Logs all agent queries and responses with timestamp | Both |
+| LCL Consolidation Optimizer | MILP: given a set of LCL shipments on the same or nearby lanes, determine optimal grouping into shared containers and assignment to sailings. Combines bin-packing (CBM/weight fit) with routing optimization. Distinct from FCL ocean optimizer — requires NVOCC consolidation schedules and LCL rate data. | Ocean (deferred) |
 
 ---
 
 ## 12. Build Sequence
 
-**Phase 0 — PRD** ← CURRENT  
-**Phase 1 — Formal Models (LaTeX)** — one model per component, each approved individually  
-**Phase 2 — Component Builds** — Graph Generator → Transit Time Models → Mode Optimizers → Rules Engine → Adapters → Stitching Layer → Rolling Horizon Controller  
-**Phase 3 — MCP Server** — expose all verified components as tools  
-**Phase 4 — Agent Layer** — Planning Agent → Validation Agent → Execution Monitor  
-**Phase 5 — Integration and End-to-End Testing**  
+Phases are gates. Each phase requires explicit approval before the next begins.
+
+**Phase 0 — PRD** ← CURRENT
+**Phase 1 — Formal Models (LaTeX)** — one model per component, each approved individually
+**Phase 2 — Component Builds** — Graph Generator → Transit Time Models → Mode Optimizers → Rules Engine → Adapters → Stitching Layer → Rolling Horizon Controller
+**Phase 3 — MCP Server** — expose all verified components as tools
+**Phase 4 — Agent Layer** — Planning Agent → Validation Agent → Execution Monitor
+**Phase 5 — Integration and End-to-End Testing**
 **Phase 6 — Iterate** — air mode, improved models, extended agent capabilities
 
 ---
 
-## 13. Open Questions
+## 13. Open Questions and Future Decisions
 
-1. **Decision-support vs. autonomous execution** — define trigger conditions and safety checks required before moving to autonomous execution.
-2. **Design partner selection** — who are the first 2–3 customers? What lanes do we start with?
-3. **Live AIS feed** — evaluate MarineTraffic, VesselFinder, SpireGlobal on cost vs. coverage vs. API quality.
-4. **Carrier booking APIs** — when moving toward autonomous execution, which ocean carriers first? Which trucking carriers for drayage?
-5. **Pricing model** — per-shipment, per-decision, or monthly subscription? What is the per-shipment cost floor given MILP solve + LLM call?
-6. **Emissions optimization** — carbon as a routing objective requires accurate emissions factors per mode, carrier, and vessel. Data source TBD.
+1. **Decision-support vs. autonomous execution**: Prototype is decision-support (human approves). Define the trigger conditions and safety checks required before moving to autonomous execution.
+
+2. **Design partner selection**: Who are the first 2–3 customers? Freight forwarder vs. shipper? What data do they bring? What lanes do we start with?
+
+3. **Live AIS feed**: NOAA historical is sufficient for model training. For production tracking we need a live feed. Evaluate MarineTraffic, VesselFinder, SpireGlobal on cost vs. coverage vs. API quality.
+
+4. **Carrier booking APIs**: When we move toward autonomous execution, we need carrier API integrations for booking. Who are the first ocean carriers? (MSC, CMA CGM, COSCO are the volume leaders — start with one.) Which trucking carriers for drayage and inland?
+
+5. **Pricing model**: Per-shipment, per-decision, or monthly subscription with volume tiers? What is the per-shipment cost floor given compute (MILP solve + LLM call per routing decision)?
+
+6. **Emissions optimization**: Carbon as a routing objective requires accurate emissions factors per mode, carrier, and vessel. Data source TBD.
+
+7. **Multi-agent framework**: LangGraph (decided — see Section 8). LangSmith for observability, PostgreSQL checkpointer for HITL state persistence.
+
+8. **LCL consolidation optimizer**: LCL routing requires a consolidation layer that groups LCL shipments into containers before routing. This is a combined bin-packing + routing MILP — distinct from the FCL ocean optimizer. Requires NVOCC consolidation schedules and LCL rate data. Design and scope TBD for a future phase.
+
+---
+
+## Appendix A: Full Agent Capability Inventory
+
+### A.1 Core Routing and Planning (In Scope)
+- Route single shipment: all viable options
+- Lowest-cost routing, fastest routing, reliability-optimized routing (probabilistic)
+- Multi-objective Pareto frontier (cost / time / reliability)
+- Mode selection: ocean vs. trucking vs. combined
+- Carrier selection within mode
+- FCL vs. LCL consolidation decision
+- Direct vs. transshipment optimization
+- Cargo-ready-to-cutoff feasibility check
+- Multi-stop / relay routing
+
+### A.2 Constraint Handling (In Scope)
+- Hard and soft time windows (pickup and delivery)
+- Service level tiers, carrier preference / blacklist / allocation caps
+- Port / lane avoidance, weight and volume constraints
+- Commodity restrictions (hazmat, temperature, OOG)
+- Trade lane regulatory constraints, budget caps
+- Dangerous goods / temperature segregation
+
+### A.3 Batch Fleet Operations (In Scope)
+- Route full portfolio simultaneously with graph decomposition
+- Priority segmentation, volume consolidation identification
+- Carrier allocation compliance monitoring
+- Exception queue with urgency ranking
+- Bulk re-routing on disruption, portfolio risk status
+
+### A.4 Scenario Analysis (In Scope)
+- Origin port shift, transit time vs. cost tradeoff, LCL vs. FCL upgrade
+- Carrier unavailability, shipment splitting
+- Red Sea avoidance / Cape of Good Hope routing
+- Air vs. ocean comparison, service level upgrade cost
+- Tariff / duty change impact, port closure contingency
+
+### A.5 Disruption and Exception Management (In Scope)
+- Predicted delay detection, ranked recommended actions
+- Rerouting on carrier failure, port strike contingency
+- Vessel schedule change impact, customs hold handling
+- Missed pickup recovery, proactive risk scoring
+
+### A.6 Tracking and Visibility (In Scope — Simplified)
+- Real-time position (AIS), ML-based ETA prediction
+- Full milestone trace, on-track vs. at-risk status
+- Remaining legs and mode transitions, portfolio exception view
+
+### A.7 Analytics (In Scope)
+- Cost breakdown by dimension, transit time vs. SLA performance
+- On-time delivery rate, carrier scorecard, lane performance trends
+- Route explanation / audit trail, savings attribution
+- Counterfactual / regret analysis, carrier volume commitment utilization
+- Emissions estimate per route
+
+### A.8 Advisory (In Scope)
+- Forwarder quote reasonableness, carrier reliability by lane
+- Allocation efficiency, disruption exposure assessment
+- Capacity pre-booking signal, market rate benchmark
+
+### A.9 Deferred Capabilities (Future Phases)
+- 3D load building (weight/cube/pallet bin-packing for trucking)
+- LCL consolidation optimization (bin-packing × routing MILP)
+- Backhaul and continuous move optimization (driver trip chaining)
+- Carbon / emissions as optimization objective
+- Freight audit (actual invoice vs. planned cost matching)
+- Vendor routing guide compliance (inbound supplier shipment rules)
+- Air mode (Phase 6), Rail mode (future)
+- Autonomous booking execution (requires carrier API integrations)
+
+---
+
+## Appendix B: Differentiation Opportunities — Gaps in All Existing TMS Platforms
+
+1. **Continuous re-optimization** *(Requirement: Section 10.1)*
+2. **Learned constraint inference** *(Requirement: Section 10.3)*
+3. **Simultaneous multi-echelon joint optimization** *(Requirement: Section 10.4)*
+4. **Market-responsive spot capacity** *(Requirement: Section 10.5)*
+5. **Counterfactual / regret analysis** *(Requirement: Section 10.2)*
+6. **Fully autonomous end-to-end decision chains** *(Requirement: Section 10.7)*
+7. **Probabilistic planning** *(Requirement: Section 10.6)*
+
+---
+
+## Appendix C: Competitive Landscape Summary
+
+*Research conducted May 2026.*
+
+**What the best TMS platforms do well:** Multi-mode route optimization with complex constraint handling (Oracle TM, Blue Yonder), deep carrier tendering and routing guide management, exception detection and re-tender workflows, analytics and freight spend reporting.
+
+**What AI-native platforms add:** AI customs audit agents, container optimization agents, digital routing guides, natural language search, AIS-powered ocean intelligence via MCP (Pando Pi 2025: autonomous freight procurement, dispatch planning, and payment). project44 / FourKites: predictive ETA, exception prioritization, cross-modal visibility.
+
+**What none of them do** — see Appendix B.
+
+**The market moment:** 42% of logistics leaders are holding back on agentic AI (DC Velocity survey, 2025). Primary concerns: lack of internal expertise (48%), risk of errors (41%), integration difficulty (35%).
