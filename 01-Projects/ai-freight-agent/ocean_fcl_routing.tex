@@ -1,0 +1,770 @@
+%% ocean_fcl_routing.tex
+%% Ocean FCL Multi-Commodity Routing — MVP Formal Model
+%% Phase 1 — approved before any code starts
+%% Status: Draft 2026-05-10
+
+\documentclass[11pt,a4paper]{article}
+
+\usepackage{amsmath,amssymb,amsthm}
+\usepackage{booktabs}
+\usepackage{geometry}
+\usepackage{hyperref}
+\usepackage{array}
+\usepackage{xcolor}
+\usepackage{enumitem}
+\usepackage{longtable}
+\usepackage{caption}
+
+\geometry{margin=2.5cm}
+\setlength{\parskip}{0.4em}
+
+\hypersetup{colorlinks=true, linkcolor=blue, urlcolor=blue}
+
+\newcommand{\ceil}[1]{\left\lceil #1 \right\rceil}
+\newcommand{\defeq}{\triangleq}
+\newcommand{\todo}[1]{\textcolor{red}{\textbf{[TODO: #1]}}}
+\newcommand{\deferred}[1]{\textcolor{gray}{\textit{(Deferred P1: #1)}}}
+
+\theoremstyle{definition}
+\newtheorem{defn}{Definition}
+\newtheorem{remark}{Remark}
+
+\title{\textbf{Ocean FCL Multi-Commodity Routing}\\[0.5em]
+\large MVP Formal Model --- Phase 1}
+\author{AI Freight Agent}
+\date{Draft --- 2026-05-10}
+
+\begin{document}
+
+\maketitle
+
+\begin{abstract}
+This document formally specifies the optimization model for the ocean FCL multi-commodity
+routing problem, constituting the first component in the AI Freight Agent build sequence.
+The model is a multi-commodity minimum-cost flow problem on a directed graph whose
+structure is defined by the physical freight network (see \texttt{docs/ocean\_fcl\_multi\_shipment\_graph.drawio}).
+Scope is limited to FCL (Full Container Load) shipments in 40$'$ containers (FEU).
+LCL consolidation, probabilistic objectives, and commodity-specific customs inspection
+probability are explicitly deferred to P1.
+\end{abstract}
+
+\tableofcontents
+\newpage
+
+%%--------------------------------------------------------------------
+\section{Problem Statement}
+%%--------------------------------------------------------------------
+
+Given a set of shipment requests (commodities), each defined by an origin location,
+destination location, cargo volume, cargo weight, time constraints, and service
+attributes, find a minimum-cost assignment of commodities to paths through the
+multimodal freight network such that:
+\begin{itemize}[noitemsep]
+  \item every commodity is delivered on or before its deadline,
+  \item no ocean sailing exceeds its allocated FEU slot capacity, and
+  \item optional per-commodity budget caps are respected.
+\end{itemize}
+
+The routing network consists of four arc types: pre-carriage truck (origin door to
+port of loading), ocean sailing (port of loading to port of discharge arrival), port
+dwell (discharge arrival to port exit, covering unloading and customs clearance), and
+inland truck or intermodal rail (port exit to destination door).
+
+\paragraph{MVP scope.}
+\begin{itemize}[noitemsep]
+  \item FCL only. LCL deferred (PRD Section 11, Open Question 8).
+  \item Container type: 40$'$ standard (FEU, $\approx 67$\,CBM usable). TEU deferred to P1.
+  \item Port dwell: fixed port-specific mean. Commodity-specific inspection model deferred to P1.
+  \item Objective: minimize total freight cost subject to \emph{deterministic} time-window feasibility.
+        Probabilistic objectives (chance constraints on P(on-time)) deferred to P1.
+  \item No transshipment arcs in MVP. Single-leg ocean sailing only.
+\end{itemize}
+
+%%--------------------------------------------------------------------
+\section{Graph Structure}
+%%--------------------------------------------------------------------
+
+The freight network is a directed graph $G = (N, A)$.
+
+\subsection{Node Sets}
+
+\[
+  N = N_O \;\cup\; N_{\text{POL}} \;\cup\; N_{\text{POD},A} \;\cup\; N_{\text{POD},E} \;\cup\; N_D
+\]
+
+\begin{description}[style=nextline, leftmargin=3cm, labelwidth=2.8cm]
+  \item[$N_O$] \textbf{Origin nodes.} One per shipper origin location (factory or warehouse
+        door). Identified by geographic coordinates (lat, lon). Commodity source nodes.
+        Example: SUZ (Suzhou factory), GZH (Guangzhou warehouse), SZN (Shenzhen facility).
+
+  \item[$N_{\text{POL}}$] \textbf{Port of Loading (POL) nodes.} Container terminals at the
+        origin country where shipments are gated in and loaded onto vessels. Example: SHA
+        (Shanghai), NGB (Ningbo), SZX (Shenzhen/Yantian).
+
+  \item[$N_{\text{POD},A}$] \textbf{Port of Discharge Arrival nodes.} One arrival node per
+        destination port (e.g., $\text{LAX}_A$, $\text{LGB}_A$, $\text{SEA}_A$). The
+        commodity arrives from the ocean leg. It cannot depart until the dwell arc is traversed.
+
+  \item[$N_{\text{POD},E}$] \textbf{Port of Discharge Exit nodes.} One exit node per
+        destination port (e.g., $\text{LAX}_E$, $\text{LGB}_E$, $\text{SEA}_E$). The
+        commodity has cleared customs and is available for inland pickup.
+
+  \item[$N_D$] \textbf{Destination nodes.} One per consignee delivery location (warehouse
+        or DC door). Commodity sink nodes.
+        Example: NYC (New York DC), CHI (Chicago warehouse), DAL (Dallas DC).
+\end{description}
+
+\begin{remark}[POD node expansion]
+Each physical port of discharge is represented by \emph{two} nodes connected by a
+dwell arc: an arrival node $p_A \in N_{\text{POD},A}$ and an exit node
+$p_E \in N_{\text{POD},E}$. This separation makes port dwell an explicit model
+element rather than an implicit constant baked into inland arc transit times.
+It also provides the structural hook for the P1 commodity-specific customs
+inspection model (Section~\ref{sec:deferred}), where dwell arc weights will
+become functions of commodity and shipper attributes rather than port-level constants.
+\end{remark}
+
+\subsection{Arc Sets}
+
+\[
+  A = A_{\text{PC}} \;\cup\; A_{\text{OC}} \;\cup\; A_{\text{DW}} \;\cup\; A_{\text{IL}}
+\]
+
+\begin{description}[style=nextline, leftmargin=3cm, labelwidth=2.8cm]
+  \item[$A_{\text{PC}}$] \textbf{Pre-carriage arcs.} $(i, j)$ with $i \in N_O$,
+        $j \in N_{\text{POL}}$. Truck move from origin door to container terminal.
+        One arc per feasible (origin, POL) pair.
+
+  \item[$A_{\text{OC}}$] \textbf{Ocean sailing arcs.} $(j, p)$ with $j \in N_{\text{POL}}$,
+        $p \in N_{\text{POD},A}$. One arc per scheduled carrier sailing (specific vessel,
+        departure date, and trade lane). Multiple sailings may exist on the same lane.
+
+  \item[$A_{\text{DW}}$] \textbf{Dwell arcs.} $(p_A, p_E)$ with $p_A \in N_{\text{POD},A}$,
+        $p_E \in N_{\text{POD},E}$. One arc per port of discharge. Represents container
+        discharge from vessel plus customs clearance processing.
+
+  \item[$A_{\text{IL}}$] \textbf{Inland arcs.} $(p_E, h)$ with $p_E \in N_{\text{POD},E}$,
+        $h \in N_D$. Truck (FTL/drayage) or intermodal rail move from port exit to
+        destination door.
+\end{description}
+
+%%--------------------------------------------------------------------
+\section{Sets and Indices}
+%%--------------------------------------------------------------------
+
+\begin{center}
+\begin{tabular}{ll}
+\toprule
+Symbol & Description \\
+\midrule
+$K$ & Set of commodities (shipment requests), indexed by $k$ \\
+$N$ & Set of all nodes \\
+$A$ & Set of all directed arcs \\
+$A_{\text{PC}},\, A_{\text{OC}},\, A_{\text{DW}},\, A_{\text{IL}}$ & Arc subsets by type \\
+$A^k \subseteq A$ & Feasible arc set for commodity $k$ (Section~\ref{sec:prefilter}) \\
+$A^k_S \defeq A^k \cap A_S$ & Feasible arcs of type $S$ for commodity $k$ \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+%%--------------------------------------------------------------------
+\section{Parameters}
+%%--------------------------------------------------------------------
+
+\subsection{Commodity Parameters}
+
+For each commodity $k \in K$:
+
+\begin{center}
+\begin{tabular}{llp{6cm}l}
+\toprule
+Parameter & Symbol & Description & Unit \\
+\midrule
+Volume & $v_k$ & Cargo volume & CBM \\
+Weight & $w_k$ & Gross weight & kg \\
+FEU count & $n_k = \ceil{v_k / 67}$ & Containers required; pre-computed, not a decision variable & FEU \\
+Cargo ready & $t_k^{\text{rdy}}$ & Earliest pickup datetime at origin & datetime \\
+Deadline & $T_k^{\text{dead}}$ & Latest acceptable arrival at destination & datetime \\
+Origin & $o(k) \in N_O$ & Commodity source node & --- \\
+Destination & $d(k) \in N_D$ & Commodity sink node & --- \\
+Cargo type & $\tau_k$ & General / hazmat class / temp-controlled / OOG & categorical \\
+HS code & $\text{hs}_k$ & 6-digit Harmonized System commodity code & --- \\
+Incoterm & $\text{inco}_k$ & EXW / FOB / CIF / DDP (determines arc cost responsibility) & --- \\
+Service level & $\text{sl}_k$ & Economy / Standard / Express & categorical \\
+Budget cap & $B_k$ & Hard cost ceiling; $B_k = \infty$ if not set & USD \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\begin{remark}[HS code use]
+The HS code $\text{hs}_k$ is an input in MVP but is not used in the MVP objective or
+constraints --- it is captured for forward compatibility with the P1 customs inspection
+model. The HS chapter (first two digits) will map to an inspection-risk tier.
+\end{remark}
+
+\begin{remark}[Incoterm and arc cost responsibility]
+Under EXW, the buyer (importer) pays all costs from the origin door.
+Under DDP, the seller (exporter) pays all costs to the destination door.
+In MVP, the objective minimizes total door-to-door cost regardless of Incoterm.
+Incoterm is recorded as an attribute and will be used in Phase 2 to split cost
+responsibility and generate correct carrier invoices.
+\end{remark}
+
+\subsection{Pre-Carriage Arc Parameters}
+
+For each $(i, j) \in A_{\text{PC}}$:
+
+\begin{center}
+\begin{tabular}{llp{6.5cm}l}
+\toprule
+Parameter & Symbol & Description & Unit \\
+\midrule
+Cost & $c_{ij}^{\text{PC}}$ & Flat truck rate per move. FCL economics: one chartered truck regardless of fill. Not per-CBM. & USD \\
+Mean transit & $\mu_{ij}^{\text{PC}}$ & Mean time from origin door to terminal gate & days \\
+Std dev transit & $\sigma_{ij}^{\text{PC}}$ & Std dev of transit time & days \\
+Road distance & $\text{dist}_{ij}^{\text{PC}}$ & Road distance; informational, used by instance generator & km \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\subsection{Ocean Sailing Arc Parameters}
+
+For each $(j, p) \in A_{\text{OC}}$:
+
+\begin{center}
+\begin{tabular}{llp{6cm}l}
+\toprule
+Parameter & Symbol & Description & Unit \\
+\midrule
+ETD & $\text{ETD}_{jp}$ & Estimated time of departure from POL $j$ & datetime \\
+CY cutoff & $\text{CYC}_{jp}$ & Latest datetime a container may arrive at the terminal for this sailing. $\text{CYC}_{jp} \leq \text{ETD}_{jp}$, typically $\text{ETD} - 4\,\text{days}$. & datetime \\
+Base rate & $r_{jp}^{\text{FEU}}$ & Ocean freight rate per 40$'$ container & USD/FEU \\
+BAF & $\text{BAF}_{jp}$ & Bunker adjustment factor per FEU & USD/FEU \\
+THC (POL) & $\text{THC}_{jp}^{\text{POL}}$ & Terminal handling charge at origin port per FEU & USD/FEU \\
+THC (POD) & $\text{THC}_{jp}^{\text{POD}}$ & Terminal handling charge at destination port per FEU & USD/FEU \\
+Capacity & $\text{cap}_{jp}$ & Maximum FEU slots available on this sailing (carrier-allocated block, not full vessel) & FEU \\
+Mean transit & $\mu_{jp}^{\text{OC}}$ & Mean ocean transit time, POL $j$ to POD $p$ & days \\
+Std dev transit & $\sigma_{jp}^{\text{OC}}$ & Std dev of ocean transit time & days \\
+Carrier & $\text{carrier}_{jp}$ & Carrier identifier (e.g., MSC, CMA CGM, COSCO) & --- \\
+Vessel & $\text{vessel}_{jp}$ & Vessel name & --- \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\noindent Derived all-in ocean cost per FEU:
+\[
+  c_{jp}^{\text{OC}} \;\defeq\; r_{jp}^{\text{FEU}} + \text{BAF}_{jp} + \text{THC}_{jp}^{\text{POL}} + \text{THC}_{jp}^{\text{POD}}
+\]
+
+\begin{remark}[CY cutoff semantics]
+The CY (Container Yard) cutoff $\text{CYC}_{jp}$ is the hard deadline by which the
+loaded, sealed container must be physically present and registered at the terminal for
+the sailing. Missing the CY cutoff means the container is rolled to the next sailing.
+A separate VGM (Verified Gross Mass) cutoff typically precedes CYC by 24--48 hours;
+doc cutoff (SI/BL instructions) may coincide with CYC or fall 1--2 days earlier.
+In MVP, $\text{CYC}_{jp}$ is the binding time constraint on the pre-carriage leg.
+\end{remark}
+
+\begin{remark}[POD arrival window]
+The expected arrival of a commodity at $p_A$ is $\text{ETD}_{jp} + \mu_{jp}^{\text{OC}}$
+(mean) with uncertainty $\sigma_{jp}^{\text{OC}}$. In MVP, the deterministic expected
+arrival $\text{ETD}_{jp} + \mu_{jp}^{\text{OC}} + \mu_p^{\text{DW}}$ is used in the
+feasibility pre-filter. In P1, a chance constraint will replace this with
+$\Pr(\text{arrival} \leq T_k^{\text{dead}}) \geq \alpha_k$.
+\end{remark}
+
+\subsection{Dwell Arc Parameters}
+
+For each $(p_A, p_E) \in A_{\text{DW}}$, parameterized by port $p$:
+
+\begin{center}
+\begin{tabular}{llp{5.5cm}l}
+\toprule
+Parameter & Symbol & Description & MVP value \\
+\midrule
+Mean dwell & $\mu_p^{\text{DW}}$ & Expected total dwell: unloading from vessel + customs clearance & USLAX: 3.5d; USLGB: 3.5d; USSEA: 2.5d \\
+Std dev dwell & $\sigma_p^{\text{DW}}$ & Std dev of total dwell time & USLAX: 1.5d; USLGB: 1.5d; USSEA: 1.0d \\
+Free time & $f_p$ & Port-provided free days before container storage charges apply & 5 days (standard) \\
+Storage rate & $s_p$ & Per-diem cost after free time & Deferred to P1 \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\noindent Dwell time components:
+\begin{align*}
+  \mu_p^{\text{DW}} &= \mu_p^{\text{unload}} + \mu_p^{\text{clear}} \\
+  \mu_p^{\text{unload}} &\approx 0.5\text{--}1.0\,\text{d} \quad \text{(discharge to accessible in terminal)} \\
+  \mu_p^{\text{clear}} &\approx 1.0\text{--}3.0\,\text{d} \quad \text{(CBP processing, no exam; port-level mean)}
+\end{align*}
+
+\noindent \textit{P1 extension:} In P1, $\mu_p^{\text{DW}}$ becomes a function of commodity
+attributes --- HS code, importer C-TPAT status, country of origin, and consignee history.
+See Section~\ref{sec:deferred}.
+
+\subsection{Inland Arc Parameters}
+
+For each $(p_E, h) \in A_{\text{IL}}$:
+
+\begin{center}
+\begin{tabular}{llp{5.5cm}l}
+\toprule
+Parameter & Symbol & Description & Unit \\
+\midrule
+Cost & $c_{p_E h}^{\text{IL}}$ & Flat rate per container move (truck or rail) & USD/FEU \\
+Mean transit & $\mu_{p_E h}^{\text{IL}}$ & Mean transit time, POD exit to destination door & days \\
+Std dev transit & $\sigma_{p_E h}^{\text{IL}}$ & Std dev of transit time & days \\
+Mode & $\text{mode}_{p_E h}$ & FTL truck or intermodal rail & categorical \\
+Road distance & $\text{dist}_{p_E h}^{\text{IL}}$ & Road/rail distance; informational & km \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+%%--------------------------------------------------------------------
+\section{Feasibility Pre-Filtering}
+\label{sec:prefilter}
+%%--------------------------------------------------------------------
+
+Before constructing the MILP, we compute the feasible arc set $A^k$ for each
+commodity $k$. An arc is feasible for commodity $k$ only if it satisfies all time
+constraints. This reduces the variable count and eliminates infeasible paths from
+the formulation entirely, keeping the MILP small.
+
+\paragraph{Pre-carriage feasibility.}
+Arc $(i, j) \in A_{\text{PC}}$ is in $A^k$ only if:
+\begin{enumerate}[noitemsep]
+  \item $i = o(k)$ \quad (arc originates at commodity's origin node), and
+  \item $\exists\, (j, p) \in A_{\text{OC}}$ such that $t_k^{\text{rdy}} + \mu_{ij}^{\text{PC}} \leq \text{CYC}_{jp}$. \\
+        (Cargo can be delivered to terminal before the CY cutoff of at least one sailing.)
+\end{enumerate}
+
+\paragraph{Ocean arc compatibility.}
+Ocean arc $(j, p) \in A_{\text{OC}}$ is compatible with pre-carriage arc
+$(i, j) \in A^k_{\text{PC}}$ for commodity $k$ if:
+\[
+  t_k^{\text{rdy}} + \mu_{ij}^{\text{PC}} \leq \text{CYC}_{jp}
+\]
+Only compatible (pre-carriage, ocean) pairs generate connected paths in the graph.
+
+\paragraph{End-to-end feasibility.}
+The complete path (pre-carriage $(i,j)$, ocean $(j,p)$, dwell, inland $(p_E, h)$)
+is feasible for commodity $k$ if:
+\begin{enumerate}[noitemsep]
+  \item $h = d(k)$ \quad (inland arc terminates at commodity's destination node), and
+  \item $\text{ETD}_{jp} + \mu_{jp}^{\text{OC}} + \mu_p^{\text{DW}} + \mu_{p_E h}^{\text{IL}} \leq T_k^{\text{dead}}$.
+\end{enumerate}
+
+Dwell arcs $A_{\text{DW}}$ have no feasibility condition beyond arc connectivity; they are
+always in $A^k$ if the associated POD appears in a feasible path.
+
+%%--------------------------------------------------------------------
+\section{Decision Variables}
+%%--------------------------------------------------------------------
+
+\[
+  x_{ij}^k \in \{0, 1\} \qquad \forall\, k \in K,\; (i,j) \in A^k
+\]
+
+$x_{ij}^k = 1$ if commodity $k$ uses arc $(i,j)$; zero otherwise.
+
+%%--------------------------------------------------------------------
+\section{Objective Function}
+%%--------------------------------------------------------------------
+
+Minimize total freight cost across all commodities:
+
+\begin{equation}
+  \min \;\; Z = \sum_{k \in K} \Bigg[
+    \underbrace{\sum_{(i,j) \in A^k_{\text{PC}}} c_{ij}^{\text{PC}}\, x_{ij}^k}_{\text{pre-carriage}}
+    \;+\;
+    \underbrace{\sum_{(j,p) \in A^k_{\text{OC}}} n_k\, c_{jp}^{\text{OC}}\, x_{jp}^k}_{\text{ocean (per FEU)}}
+    \;+\;
+    \underbrace{\sum_{(p_E,h) \in A^k_{\text{IL}}} n_k\, c_{p_E h}^{\text{IL}}\, x_{p_E h}^k}_{\text{inland (per FEU)}}
+  \Bigg]
+  \label{eq:obj}
+\end{equation}
+
+\paragraph{Cost structure notes.}
+\begin{itemize}[noitemsep]
+  \item \textit{Pre-carriage:} $c_{ij}^{\text{PC}}$ is a flat truck move rate. Under FCL
+        economics, the shipper charters the truck; cost does not scale with CBM.
+  \item \textit{Ocean:} Cost scales by $n_k$ (number of FEU) since each container is a
+        separately quoted unit. $c_{jp}^{\text{OC}}$ is the all-in per-FEU rate
+        (base + BAF + THC POL + THC POD).
+  \item \textit{Inland:} Cost scales by $n_k$ under the assumption that each FEU moves
+        on a separate chassis/truck. This is the standard for FCL drayage.
+  \item \textit{Dwell:} Port storage cost (beyond free time) is deferred to P1. In MVP,
+        dwell time enters only as a feasibility parameter, not a cost term.
+\end{itemize}
+
+%%--------------------------------------------------------------------
+\section{Constraints}
+%%--------------------------------------------------------------------
+
+\subsection{Flow Conservation}
+
+For each commodity $k \in K$ and each node $n \in N$:
+
+\begin{equation}
+  \sum_{\substack{(i,n) \in A^k}} x_{in}^k \;-\; \sum_{\substack{(n,j) \in A^k}} x_{nj}^k \;=\; b_k(n)
+  \qquad \forall\, k \in K,\; n \in N
+  \label{eq:flow}
+\end{equation}
+
+where
+\[
+  b_k(n) = \begin{cases}
+    +1 & \text{if } n = o(k) \quad \text{(commodity departs origin)} \\
+    -1 & \text{if } n = d(k) \quad \text{(commodity arrives at destination)} \\
+    \phantom{+}0 & \text{otherwise}
+  \end{cases}
+\]
+
+Flow conservation ensures each commodity is routed along exactly one complete
+end-to-end path: one pre-carriage arc, one ocean sailing, the dwell arc at the
+selected POD, and one inland arc. With the feasibility pre-filter applied, any
+feasible solution automatically satisfies time-window requirements.
+
+\subsection{Ocean Sailing Capacity}
+
+For each ocean sailing arc $(j, p) \in A_{\text{OC}}$:
+
+\begin{equation}
+  \sum_{k \in K} n_k\, x_{jp}^k \;\leq\; \text{cap}_{jp}
+  \qquad \forall\, (j,p) \in A_{\text{OC}}
+  \label{eq:cap}
+\end{equation}
+
+The total FEU demand on any single sailing cannot exceed the carrier-allocated slot
+capacity. This constraint \emph{couples} routing decisions across commodities: two
+commodities from different origins may share the same sailing, and their container
+counts jointly consume the finite slot pool. This is the core multi-commodity
+coupling constraint.
+
+\subsection{Budget Cap (Optional)}
+
+For each commodity $k \in K$ with finite $B_k$:
+
+\begin{equation}
+  \sum_{(i,j) \in A^k_{\text{PC}}} c_{ij}^{\text{PC}}\, x_{ij}^k
+  + \sum_{(j,p) \in A^k_{\text{OC}}} n_k\, c_{jp}^{\text{OC}}\, x_{jp}^k
+  + \sum_{(p_E,h) \in A^k_{\text{IL}}} n_k\, c_{p_E h}^{\text{IL}}\, x_{p_E h}^k
+  \;\leq\; B_k
+  \label{eq:budget}
+\end{equation}
+
+\subsection{Variable Domains}
+
+\begin{equation}
+  x_{ij}^k \in \{0, 1\} \qquad \forall\, k \in K,\; (i,j) \in A^k
+  \label{eq:domain}
+\end{equation}
+
+%%--------------------------------------------------------------------
+\section{Complete Formulation}
+%%--------------------------------------------------------------------
+
+\begin{align}
+  \min \quad & Z = \sum_{k \in K} \left[
+    \sum_{(i,j) \in A^k_{\text{PC}}} c_{ij}^{\text{PC}} x_{ij}^k
+    + \sum_{(j,p) \in A^k_{\text{OC}}} n_k c_{jp}^{\text{OC}} x_{jp}^k
+    + \sum_{(p_E,h) \in A^k_{\text{IL}}} n_k c_{p_E h}^{\text{IL}} x_{p_E h}^k
+  \right] \tag{P} \label{eq:P} \\[4pt]
+  \text{s.t.} \quad
+  & \sum_{(i,n) \in A^k} x_{in}^k - \sum_{(n,j) \in A^k} x_{nj}^k = b_k(n)
+    && \forall\, k \in K,\; n \in N \tag{P.1} \\[2pt]
+  & \sum_{k \in K} n_k x_{jp}^k \leq \text{cap}_{jp}
+    && \forall\, (j,p) \in A_{\text{OC}} \tag{P.2} \\[2pt]
+  & \text{(P.3): budget constraints \eqref{eq:budget} for commodities with finite } B_k \notag \\[2pt]
+  & x_{ij}^k \in \{0,1\}
+    && \forall\, k \in K,\; (i,j) \in A^k \tag{P.4}
+\end{align}
+
+\begin{remark}[Problem structure]
+Problem (P) is a Binary Multi-Commodity Network Flow (BMCNF). The LP relaxation
+(replacing binary constraints with $x_{ij}^k \in [0,1]$) is typically tight for
+network flow problems (total unimodularity in pure flow networks). However, the
+capacity constraints \eqref{eq:cap} couple commodities and break total unimodularity,
+making integrality of the LP relaxation non-guaranteed in general. In practice, for
+small to medium instances, HiGHS will solve the MIP to optimality quickly.
+\end{remark}
+
+\begin{remark}[Infeasibility]
+A commodity $k$ may be infeasible if no path exists that meets its deadline (empty
+$A^k$ after pre-filtering). The solver should detect this during pre-filtering and
+report it as an infeasible demand rather than passing an infeasible MILP. In that
+case, the agent should surface the infeasibility with a recommended recovery action
+(e.g., relax the deadline, consider air mode).
+\end{remark}
+
+%%--------------------------------------------------------------------
+\section{Transit Time Estimation}
+\label{sec:transit}
+%%--------------------------------------------------------------------
+
+Arc transit times are used in feasibility pre-filtering and in the instance generator.
+They are not optimization variables in MVP; in P1, they become the parameters of
+the probabilistic transit time distributions.
+
+\subsection{Trucking (Pre-Carriage and Inland)}
+
+Given origin coordinates $(\phi_i, \lambda_i)$ and destination coordinates $(\phi_j, \lambda_j)$:
+
+\paragraph{Step 1 --- Geodesic distance (Haversine).}
+\[
+  d_{ij}^{\text{geo}} = 2R \arcsin\!\left(\sqrt{
+    \sin^2\!\tfrac{\phi_j - \phi_i}{2}
+    + \cos\phi_i \cos\phi_j \sin^2\!\tfrac{\lambda_j - \lambda_i}{2}
+  }\right), \qquad R = 6{,}371\,\text{km}
+\]
+
+\paragraph{Step 2 --- Road distance correction.}
+\[
+  \text{dist}_{ij}^{\text{road}} = \rho \cdot d_{ij}^{\text{geo}}
+\]
+where $\rho$ is a region-specific road factor:
+\begin{itemize}[noitemsep]
+  \item China pre-carriage (Pearl River Delta, Yangtze Delta): $\rho = 1.25$
+  \item US inland (OTR, point-to-point): $\rho = 1.20$
+\end{itemize}
+
+\paragraph{Step 3 --- Transit time.}
+\[
+  \mu_{ij}^{\text{truck}} = \frac{\text{dist}_{ij}^{\text{road}}}{v^{\text{truck}}}
+\]
+\[
+  v^{\text{truck}} = \begin{cases}
+    800\,\text{km/day} & \text{US OTR (accounts for HOS 11-hour driving limit)} \\
+    600\,\text{km/day} & \text{China pre-carriage (congestion, regulations)}
+  \end{cases}
+\]
+
+\paragraph{Step 4 --- Standard deviation.}
+\[
+  \sigma_{ij}^{\text{truck}} = 0.15 \cdot \mu_{ij}^{\text{truck}} \qquad \text{(15\% CV, empirical for road freight)}
+\]
+
+\subsection{Ocean Sailing}
+
+\paragraph{Step 1 --- Geodesic distance.} Same Haversine formula.
+
+\paragraph{Step 2 --- Sailing distance.} Ocean routing deviates from great-circle due
+to landmasses and shipping lane waypoints.
+\[
+  \text{dist}_{jp}^{\text{sail}} = \rho^{\text{sail}} \cdot d_{jp}^{\text{geo}},
+  \qquad \rho^{\text{sail}} = 1.15 \text{ (Trans-Pacific)}
+\]
+
+\paragraph{Step 3 --- Transit time.}
+\[
+  \mu_{jp}^{\text{OC}} = \frac{\text{dist}_{jp}^{\text{sail}}}{v^{\text{vessel}}},
+  \qquad v^{\text{vessel}} = 400\,\text{km/day} \;\approx\; 9\,\text{knots}
+\]
+(Average container carrier service speed, inclusive of port approach and anchorage wait.)
+
+\paragraph{Step 4 --- Standard deviation.}
+\[
+  \sigma_{jp}^{\text{OC}} = 0.10 \cdot \mu_{jp}^{\text{OC}} \qquad \text{(10\% CV, empirical for liner services)}
+\]
+
+\begin{remark}
+These are parametric estimates for instance generation and MVP feasibility checks.
+Production models will fit lane-carrier-season-specific distributions from historical
+AIS data (NOAA for US waters; commercial AIS for full voyage coverage).
+\end{remark}
+
+%%--------------------------------------------------------------------
+\section{Instance Generator Specification}
+\label{sec:instance}
+%%--------------------------------------------------------------------
+
+The instance generator produces synthetic but geographically and commercially
+realistic problem instances for solver testing and validation. Building the generator
+is a prerequisite to any solver benchmarking.
+
+\paragraph{Note on scope.} The instance generator is to be \emph{reviewed with the developer
+before coding begins}. This specification defines the interface and algorithm; the
+implementation is a joint session.
+
+\subsection{Public Data Sources}
+
+\begin{center}
+\begin{tabular}{lll}
+\toprule
+Data & Source & Use \\
+\midrule
+Port lat/lon and UN/LOCODE & UN/LOCODE database (free) & POL and POD node coordinates \\
+City lat/lon & GeoNames (free) / OpenStreetMap Nominatim & Origin and destination geocoding \\
+Ocean sailing ETDs & Carrier websites (public) & Sailing schedule arc construction \\
+Trucking transit time & Haversine + road factor (Section~\ref{sec:transit}) & Pre-carriage and inland arcs \\
+Rate parameters & Synthetic distributions (BTS FAF for lane structure) & Ocean rates, inland costs \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\subsection{Generator Configuration Parameters}
+
+\begin{center}
+\begin{tabular}{ll}
+\toprule
+Parameter & Description \\
+\midrule
+$|K|$ & Number of commodities to generate \\
+$\mathcal{O}$ & Origin cities: Shenzhen, Guangzhou, Suzhou, Shanghai, Ningbo \\
+$\mathcal{D}$ & Destination cities: Chicago, Dallas, Los Angeles, New York, Atlanta, Seattle \\
+$[v_{\min}, v_{\max}]$ & Volume range, e.g.\ $[10, 300]$ CBM \\
+$[w_{\min}, w_{\max}]$ & Weight range, e.g.\ $[500, 20\,000]$ kg \\
+Cargo-ready spread & Uniform$[0, 14]$ days from scenario start \\
+Deadline spread & Uniform$[30, 60]$ days from cargo-ready date \\
+\midrule
+\multicolumn{2}{l}{\textit{Synthetic rate parameters}} \\
+Pre-carriage rate & \$150--800 (function of road distance) \\
+FEU base rate & \$2\,000--6\,000 (Trans-Pacific, lane-specific) \\
+BAF & 15--25\% of base rate \\
+THC POL & \$150--300/FEU \\
+THC POD & \$300--500/FEU \\
+Sailing capacity & Uniform$[50, 200]$ FEU per sailing \\
+Inland cost (truck) & \$1\,500--6\,000 (function of road distance) \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\subsection{Generator Algorithm}
+
+\begin{enumerate}
+  \item Load POL and POD node coordinates from UN/LOCODE for the ports in scope
+        (SHA, NGB, SZX on China side; USLAX, USLGB, USSEA on US side).
+  \item For each commodity $k = 1, \ldots, |K|$:
+    \begin{enumerate}
+      \item Sample origin city from $\mathcal{O}$; geocode to lat/lon.
+      \item Sample destination city from $\mathcal{D}$; geocode to lat/lon.
+      \item Sample $v_k \sim \text{Uniform}(v_{\min}, v_{\max})$,
+            $w_k \sim \text{Uniform}(w_{\min}, w_{\max})$.
+      \item Compute $n_k = \ceil{v_k / 67}$.
+      \item Sample $t_k^{\text{rdy}}$ (cargo-ready date); set $T_k^{\text{dead}} = t_k^{\text{rdy}} + \text{Uniform}(30, 60)\,\text{d}$.
+    \end{enumerate}
+  \item Construct $A_{\text{PC}}$: for each (origin city, POL) pair, compute
+        $(\text{dist}, \mu, \sigma)$ via Section~\ref{sec:transit}; sample cost
+        from rate distribution.
+  \item Construct $A_{\text{OC}}$: load or synthesize a weekly sailing schedule for
+        each (POL, POD) pair; assign ETD, CYC (ETD $-$ 4 days), carrier, vessel name;
+        compute $(\mu, \sigma)$ via Section~\ref{sec:transit}; sample FEU rate and
+        capacity.
+  \item Construct $A_{\text{DW}}$: one arc per POD with port-specific constants from
+        Section 4.4.
+  \item Construct $A_{\text{IL}}$: for each (POD exit, destination city) pair, compute
+        $(\text{dist}, \mu, \sigma)$ via Section~\ref{sec:transit}; sample cost from
+        rate distribution.
+  \item Run feasibility pre-filter (Section~\ref{sec:prefilter}); mark infeasible
+        commodities for reporting.
+  \item Serialize instance to JSON with schema matching the parameter tables above.
+\end{enumerate}
+
+%%--------------------------------------------------------------------
+\section{Deferred: P1 Extensions}
+\label{sec:deferred}
+%%--------------------------------------------------------------------
+
+The following items are explicitly out of MVP scope. Each is tracked as a P1 item in
+the PRD.
+
+\subsection{Commodity-Specific Customs Inspection Model (P1)}
+\label{sec:p1-customs}
+
+In MVP, dwell time is a port-level constant. In P1, it becomes a function of the
+commodity and the importer:
+
+\[
+  \mu_k^{\text{DW}}(p) = \mu_p^{\text{unload}} + t^{\text{no-exam}} + p_k^{\text{exam}}(p) \cdot t^{\text{exam}}
+\]
+
+where the inspection probability is:
+
+\[
+  p_k^{\text{exam}}(p) = \operatorname{clip}\!\left(
+    \lambda_p^{\text{base}} \cdot \rho_k^{\text{HS}} \cdot \rho_k^{\text{orig}} \cdot
+    (1 - \delta_k^{\text{CTPAT}}),\; 0,\; 1
+  \right)
+\]
+
+\begin{center}
+\begin{tabular}{lll}
+\toprule
+Parameter & Description & Source \\
+\midrule
+$\lambda_p^{\text{base}}$ & Baseline random examination rate at port $p$ (2--5\%) & CBP statistics (public) \\
+$\rho_k^{\text{HS}}$ & HS chapter risk multiplier: 1.0 (low), 2.0 (medium), 4.0 (high) & HS code of commodity \\
+$\rho_k^{\text{orig}}$ & Country-of-origin risk multiplier & Country of origin \\
+$\delta_k^{\text{CTPAT}}$ & C-TPAT discount: 0 (not certified), 0.50 (certified partner) & Importer attribute \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\textbf{HS risk tier mapping (examples):}
+\begin{itemize}[noitemsep]
+  \item Low (1.0): industrial machinery Ch.\ 84, electronics Ch.\ 85 from low-risk origins
+  \item Medium (2.0): textiles Ch.\ 50--63, footwear Ch.\ 64
+  \item High (4.0): food and agricultural Ch.\ 2--21, chemicals Ch.\ 28--29, certain
+        electronics from flagged origins
+\end{itemize}
+
+\subsection{Probabilistic Delivery Constraint (P1)}
+
+Replace deterministic feasibility check with a chance constraint:
+\[
+  \Pr\!\left(\text{delivery time}_k \leq T_k^{\text{dead}}\right) \geq \alpha_k
+\]
+where $\alpha_k \in \{0.80, 0.90, 0.95\}$ maps to service levels (Economy, Standard, Express).
+
+Since delivery time is a sum of correlated arc-level random variables, this requires
+one of: (a) scenario expansion, (b) distributionally robust reformulation, or
+(c) Monte Carlo feasibility check on top of the deterministic MILP. Trade-offs to be
+evaluated in P1 design review.
+
+\subsection{Multi-Objective Pareto Frontier (P1)}
+
+Extend the objective to return the Pareto frontier of (cost, expected transit time,
+on-time probability) using an epsilon-constraint or weighted-sum method.
+
+\subsection{Spot Rate Distributions (P1)}
+
+Ocean arc rates are currently deterministic parameters. In P1, model rates as
+lane-specific distributions and minimize expected cost.
+
+\subsection{TEU Option (P1)}
+
+Allow the model to select between FEU and TEU per commodity based on cargo density
+(high weight-to-volume ratio may favour a 20$'$ container). Add integer variable
+for container type selection.
+
+\subsection{Port Storage Cost (P1)}
+
+Add per-diem storage cost $s_p$ for containers that exceed free-time $f_p$ at the POD.
+Requires tracking expected discharge-to-pickup time relative to $f_p$.
+
+%%--------------------------------------------------------------------
+\section{Open Items}
+%%--------------------------------------------------------------------
+
+\begin{enumerate}
+  \item \textbf{Inland cost multi-FEU:} Confirmed --- inland arc cost scales by $n_k$
+        (one chassis per FEU). Update \eqref{eq:obj} accordingly (already reflected).
+
+  \item \textbf{Carrier allocation caps:} The PRD mentions carrier allocation caps as a
+        constraint (tool \texttt{carrier\_select}). This formulation does not yet model
+        allocation caps (monthly contracted min/max volume per carrier per lane). Add
+        as a constraint in P1 if needed for the MVP tool set.
+
+  \item \textbf{Infeasible commodity handling:} When no feasible path exists for commodity
+        $k$, the solver should return a structured infeasibility report, not just an
+        infeasible MILP flag. Define the infeasibility report schema before coding.
+
+  \item \textbf{Multiple sailings per week:} The instance generator should support multiple
+        sailings per (POL, POD) pair per week, as is realistic. Confirm arc generation
+        logic handles this without duplicating capacity.
+
+  \item \textbf{Transshipment:} Not modeled in MVP. Some Trans-Pacific lanes involve a
+        feeder vessel + mainliner (e.g., via Singapore or Kaohsiung). Add transshipment
+        arcs in P1.
+\end{enumerate}
+
+\end{document}

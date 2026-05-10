@@ -1,12 +1,3 @@
----
-tags:
-  - ai-freight-agent
-  - PRD
-  - product
-status: In Review — Phase 0
-version: '0.1'
-last_synced: '2026-05-08'
----
 # Product Requirements Document
 ## AI Multimodal Freight Routing Agent
 
@@ -270,7 +261,7 @@ The 15 P0 tools cover the daily operational core across all four personas. Build
 
 **Exception management core (2 tools):** `reroute_shipment`, `disruption_impact_scan`
 
-**Operations workflow core (2 tools):** `cutoff_alert`, routing guide + fallback in `carrier_select`
+**Operations workflow core (2 tools):** `cutoff_alert`, `routing guide + fallback in `carrier_select``
 
 **Analytics core (3 tools):** `freight_spend_analytics`, `carrier_scorecard`, `otd_analytics`
 
@@ -291,8 +282,6 @@ The ocean + trucking pair forces mode-transition handling (the hard part) from d
 ## 5. Key Architectural Concept: Rolling Horizon Planning
 
 *This is a first-principles design decision that differentiates this system from all existing TMS platforms.*
-
-See also: [[Rolling Horizon Planning]]
 
 ### 5.1 The Problem with Sequential Leg Planning
 
@@ -322,7 +311,7 @@ As a shipment advances and uncertainty about the next leg decreases (e.g., AIS-d
   - [B] Drayage + Rail — depart Jul 4 20:00, arrive Jul 6 08:00 — $389
   - [C] Expedite (FedEx CC) — depart Jul 4 14:30, arrive Jul 4 22:00 — $1,480
 
-Diagram file: `docs/rolling_horizon_planning.drawio`
+See diagram: `docs/rolling_horizon_planning.drawio`
 
 ### 5.4 Design Principle
 
@@ -349,6 +338,7 @@ Each ocean shipment request provides:
 | `weight_kg` | Gross weight |
 | `volume_cbm` | Volume in cubic meters |
 | `cargo_type` | General, hazmat class, temperature-controlled, OOG |
+| `hs_code` | 6-digit Harmonized System commodity code — determines customs inspection risk tier (P1) and tariff lookup |
 | `incoterm` | EXW, FOB, CIF, DDP, etc. |
 | `service_level` | Economy, Standard, Express |
 | `carrier_preferences` | Preferred, acceptable, excluded carriers |
@@ -391,12 +381,57 @@ The routing network is modeled as a directed graph G(N, A):
 - **Inland trucking arcs**: point-to-point truck moves
 - **Transshipment arcs**: inter-terminal transfers at hub ports (time and cost)
 
-Each arc carries:
-- `transit_time_distribution`: mean + variance (probabilistic, not point estimate)
-- `cost`: base rate + fuel surcharge + accessorials
-- `capacity`: available slots or load units (for constrained arcs)
-- `cutoff_time`: latest departure to meet a downstream schedule
-- `service_type`: carrier, service name, frequency
+**MVP container type:** FEU (40' standard container, ≈ 67 CBM usable) only. TEU support deferred to P1. Number of FEU required per shipment: `n_k = ceil(volume_cbm / 67)`.
+
+**Arc attribute schemas by type:**
+
+*Pre-carriage arcs (origin door → POL):*
+| Attribute | Description |
+|---|---|
+| `cost` | Flat truck rate per move (not per CBM — FCL is a dedicated truck) |
+| `transit_time_mean` | Mean days, origin door to terminal gate |
+| `transit_time_sigma` | Std dev of transit time |
+| `distance_km` | Road distance (informational; used by instance generator) |
+
+*Ocean sailing arcs (POL → POD_arrival):*
+| Attribute | Description |
+|---|---|
+| `etd` | Estimated time of departure from POL |
+| `cy_cutoff` | **Latest** datetime a container may arrive at terminal for this sailing. Hard constraint on pre-carriage delivery. Typically ETD − 4 days. |
+| `rate_per_feu` | Base ocean freight rate per 40' container (USD/FEU) |
+| `baf` | Bunker adjustment factor per FEU |
+| `thc_pol` | Terminal handling charge at origin port per FEU |
+| `thc_pod` | Terminal handling charge at destination port per FEU |
+| `capacity_feu` | Max FEU slots available on this sailing (carrier-allocated block) |
+| `transit_time_mean` | Mean transit days, POL to POD |
+| `transit_time_sigma` | Std dev of transit time |
+| `carrier` | Carrier identifier |
+| `vessel` | Vessel name |
+
+*Dwell arcs (POD_arrival → POD_exit):*
+
+Each physical port of discharge (POL) is represented by **two nodes**: a POD_arrival node (vessel has arrived, container discharged) and a POD_exit node (customs cleared, ready for inland pickup). These are connected by a dwell arc that makes port unloading and customs clearance an explicit model element rather than a hidden constant.
+
+| Attribute | Description | MVP value |
+|---|---|---|
+| `unload_mean` | Mean time from vessel arrival to container accessible in terminal | Port-specific constant |
+| `clearance_mean` | Mean customs processing time, no exam | Port-specific constant |
+| `total_dwell_mean` | `unload_mean + clearance_mean` | USLAX/USLGB: 3.5 days; USSEA: 2.5 days |
+| `total_dwell_sigma` | Std dev of total dwell | USLAX/USLGB: 1.5 days; USSEA: 1.0 days |
+| `free_days` | Port storage free time before demurrage applies | 5 days (standard) |
+
+**P1 — Commodity-specific dwell model (deferred):** In P1, dwell arc weight will become a function of commodity and importer attributes: HS code inspection risk tier, importer C-TPAT certification status, country of origin, and consignee inspection history. Inspection probability model: `p_exam = clip(λ_base × ρ_HS × ρ_origin × (1 − δ_CTPAT), 0, 1)`. Expected clearance time = `t_no_exam + p_exam × t_exam`. This allows the model to differentiate dwell time by commodity type and shipper trustworthiness.
+
+*Inland arcs (POD_exit → destination door):*
+| Attribute | Description |
+|---|---|
+| `cost` | Flat rate per container move (one chassis per FEU for FCL drayage) |
+| `transit_time_mean` | Mean days, POD exit to destination door |
+| `transit_time_sigma` | Std dev of transit time |
+| `mode` | FTL truck (solid arc in diagram) or intermodal rail (dashed arc) |
+| `distance_km` | Road/rail distance (informational) |
+
+**Transit time estimation from coordinates:** For all trucking arcs (pre-carriage and inland), transit time is estimated from node lat/lon using: road distance = Haversine distance × road factor (1.25 China, 1.20 US); transit days = road distance / average truck speed (600 km/day China, 800 km/day US). For ocean arcs: sailing distance = Haversine × 1.15 (Trans-Pacific lane factor); transit days = sailing distance / 400 km/day (≈ 9 knots average, inclusive of approach and anchorage).
 
 **Graph decomposition for batch solving:** When routing a batch of N shipments, the demand-supply graph can be decomposed before the MILP solve. Two shipments are independent if they share no feasible supply arcs — no common carrier service legs, port pairs, or trucking lanes that both could use. Independent subsets form disconnected components in the demand-supply intersection graph and can be partitioned and solved separately. This decomposition reduces MILP problem size and enables parallelism. The batch planner computes connected components first, dispatches each component to the optimizer independently, and merges results. Shipments that share supply (e.g., competing for the same vessel sailing or carrier allocation cap) remain in the same component and are optimized jointly.
 
@@ -508,6 +543,8 @@ Each arc carries:
 
 **Decision: LangGraph, not direct Anthropic SDK.**
 
+This reverses the initial CLAUDE.md decision. The research is unambiguous for a system with 6+ agent personas:
+
 | Criterion | LangGraph | Direct Anthropic SDK |
 |---|---|---|
 | Behavioral control | High — explicit graph state, conditional edges | High — but you build everything |
@@ -524,6 +561,8 @@ Each arc carries:
 - We have 6+ agent personas with branching control flow — managing this in a hand-rolled loop is fragile
 - We need model-agnosticism — if we want to run the Execution Monitor on a cheaper/faster model than the Routing Planner, LangGraph handles this cleanly
 - The planner-validator supervisor pattern is a native LangGraph construct; building it from scratch on the Anthropic SDK would reproduce 80% of LangGraph's core
+
+CLAUDE.md tech stack will be updated to reflect this change.
 
 ### 8.2 Architecture Pattern: Hierarchical with Hub-and-Spoke Leaves
 
@@ -549,40 +588,101 @@ Each arc carries:
                                └───────────┘   └────────────────┘
 ```
 
+The Planning Supervisor runs the planner → validator loop for every routing request. The Operations Supervisor manages the two background agents that run continuously. The Top-Level Router receives incoming requests and dispatches to the appropriate supervisor.
+
 ### 8.3 Agent Personas
 
-**Routing Planner Agent** — orchestrates optimization and ML tools to generate end-to-end route recommendations. Output: `{route, total_cost, expected_transit_days, p_on_time, constraints_checked, rationale}`
+#### Routing Planner Agent
+**Responsibility:** Given a shipment request or batch of requests, call the optimization and ML tools to generate end-to-end route recommendations with supporting rationale.
 
-**Compliance/Validation Agent** — independently reviews planner output as a skeptical auditor. Separate system prompt, no shared planner history, no access to the optimization solver. Mandatory per-item checklist: carrier constraint compliance, time window feasibility, weight/volume compliance, business rule compliance, optimization sanity, regulatory check. Output: `{status: PASS|FAIL|ESCALATE, findings: [{rule, status, evidence}], summary}`
+**Tools available:** Graph generator, ocean optimizer, trucking optimizer, transit time models, rolling horizon controller, rules engine, AIS adapter, road routing adapter, rate lookup
 
-**Execution Monitor Agent** — event-driven, watches active shipments, fires rolling horizon re-plan triggers, generates proactive alerts. Runs async, never in the request path.
+**Output:** Structured route recommendation: `{route: [legs], total_cost, expected_transit_days, p_on_time, constraints_checked: [list], rationale: str}`
 
-**Market Intelligence Agent** — scheduled refresh + on-demand queries. Maintains live view of spot rates, port congestion, disruptions. Queryable by Routing Planner as a tool call.
+**Does not have access to:** Carrier booking APIs (writes), external notification systems
+
+#### Compliance/Validation Agent
+**Responsibility:** Independently review the Routing Planner's output against rules, regulations, business policy, and logical consistency. Not a peer reviewer — a skeptical auditor.
+
+**Tools available:** Carrier restriction database, business rules engine, rate benchmark lookup, regulatory constraint checker. **No access to the optimization solver** — the validator cannot re-run the planner's work, only verify it.
+
+**Independence guarantees (anti-sycophancy):**
+1. Receives only the planner's structured output — not the planner's conversation history or chain of thought
+2. Uses a different system prompt, explicitly framed as "find problems, not confirm correctness"
+3. Must address every item on a defined checklist — cannot skip items
+4. Consider running a different model from the planner (e.g., different Claude version or temperature setting) to reduce agreement bias
+
+**Validation checklist (mandatory, per-item structured output):**
+- Carrier constraint compliance: are all carriers on this route permitted for this lane, cargo type, and date?
+- Time window feasibility: can the recommended route physically meet the pickup and delivery windows given the transit time distributions?
+- Weight and volume compliance: do cargo specs fit within capacity on each leg?
+- Business rule compliance: does this route conform to routing guide, allocation caps, and customer-specific rules?
+- Optimization sanity check: is total cost within expected bounds for this lane and service level?
+- Regulatory check: are there trade lane restrictions, embargoes, or hazmat rules that apply?
+
+**Output:** `{status: PASS|FAIL|ESCALATE, findings: [{rule: str, status: PASS|FAIL, evidence: str}], summary: str}`
+
+**Three-outcome logic:**
+- `PASS`: all checklist items pass — recommendation forwarded to user
+- `FAIL`: one or more items fail — recommendation returned to planner for revision (max 3 revision cycles, then auto-ESCALATE)
+- `ESCALATE`: validator detects a conflict it cannot resolve (e.g., delivery window requires carrier X but carrier X has an active restriction) — human review required via `interrupt()`
+
+#### Execution Monitor Agent
+**Responsibility:** Continuously watches active shipments against their planned itineraries. Detects exceptions (delay, rollover, customs hold, missed pickup), fires rolling horizon re-plan triggers, and generates proactive alerts with recommended actions.
+
+**Operates:** Event-driven (subscribes to AIS updates, EDI 214 events, carrier APIs) + polling for shipments approaching re-plan trigger thresholds. Runs asynchronously — not in the request/response path.
+
+**Tools available:** AIS adapter, shipment state store, rolling horizon controller, routing planner (can request a re-plan), alert dispatch
+
+**Output:** Exception alerts with ranked recommended actions; re-plan triggers with updated state context.
+
+#### Market Intelligence Agent
+**Responsibility:** Maintains a live view of market conditions — spot rate indices, carrier capacity signals, port congestion alerts, weather disruptions, geopolitical events. Provides context to the Routing Planner on demand and pushes alerts when conditions change materially.
+
+**Operates:** Scheduled refresh (configurable interval) + on-demand query from Routing Planner.
+
+**Tools available:** Rate index feeds, port congestion APIs, weather/disruption feeds, news monitoring
+
+**Output:** `{market_context: {lane: {spot_rate_range, capacity_signal, disruption_alerts}}}` — queryable by the Routing Planner as a tool call.
+
+#### Future Personas (Deferred)
+- **Customer Communication Agent** — translates routing decisions and exceptions into shipper-facing language, manages notification drafts. No write access to booking systems.
+- **Scenario / What-If Agent** — stress-tests approved routes against parameterized scenarios. Used in planning mode, not real-time.
 
 ### 8.4 Human-in-the-Loop Checkpoints
 
-LangGraph `interrupt()` fires at:
-1. Validator returns ESCALATE
-2. Planner-validator loop reaches 3 revision cycles without PASS
-3. Any booking action (future autonomous mode)
-4. Exception requires rerouting a high-value or time-critical shipment (<24h window)
+LangGraph `interrupt()` fires at the following points, pausing execution for human review:
 
-State persisted via PostgreSQL checkpointer.
+1. **Validator returns ESCALATE** — recommendation has an unresolvable conflict
+2. **Planner-validator loop reaches 3 revision cycles without PASS** — auto-escalate
+3. **Any booking action** (future, when autonomous execution is enabled) — all writes to carrier systems require explicit human approval until the system is validated at scale
+4. **Exception requires rerouting a high-value or time-critical shipment** — configurable threshold (e.g., shipments with &lt;24h delivery window remaining)
 
-### 8.5 Production Failure Mode Mitigations
+State is persisted via PostgreSQL checkpointer — human can resume the workflow after reviewing without losing context.
+
+### 8.5 Logging
+
+All agent interactions are logged via LangSmith. Every tool call, every state transition, every agent input and output is captured with timestamp. This satisfies the CLAUDE.md requirement for agent interaction logging.
+
+Additionally, the agent interaction log (`logs/agent_interactions.jsonl`) captures the user-facing query/response pairs for capability extension analysis — separate from the internal LangSmith trace.
+
+### 8.6 Production Failure Mode Mitigations
 
 | Failure Mode | Mitigation |
 |---|---|
 | Infinite planner-validator loop | Max 3 revision cycles, then auto-ESCALATE |
-| Sycophantic validator | Independent tool access, skeptic framing, PASS rate monitoring |
-| Context loss on agent handoff | Typed Pydantic schemas at every boundary |
-| Concurrent booking conflicts | Optimistic locking on carrier capacity state |
-| Latency cascade | Execution Monitor and Market Intelligence run async |
-| Validation theater | Monitor PASS rate; >90% PASS without findings triggers review |
+| Sycophantic validator | Independent tool access, explicit skeptic framing, PASS rate monitoring |
+| Context loss on agent handoff | Typed Pydantic schemas at every boundary; pass only what downstream needs |
+| Concurrent booking conflicts | Optimistic locking on carrier capacity state; serialize writes through a single stateful node |
+| Latency cascade | Execution Monitor and Market Intelligence run async — never in the request path |
+| Model version drift | Version-pin model + system prompt pairs; test planner-validator pair as a unit before deployment |
+| Validation theater | Monitor PASS rate in production; >90% PASS rate without findings triggers review |
 
 ---
 
 ## 9. Data Sources
+
+All data sources are either real network topology or synthetic commercial parameters. Data provenance is documented at the point of use in code.
 
 | Source | Type | Use | License |
 |---|---|---|---|
@@ -635,6 +735,8 @@ These override signals are the primary input for constraint learning. Over time,
 
 All existing TMS platforms plan mode legs sequentially. This system must model the full door-to-door journey as a **single optimization problem** on the unified graph G(N, A). The ocean leg, transshipment, drayage, and inland trucking leg are all decision variables in one formulation — not planned one at a time.
 
+The rolling horizon architecture (Section 5) implements this: G_coarse enables joint optimization at booking time with uncertainty; G_fine enables high-resolution optimization at execution time.
+
 ### 10.5 Spot Capacity as Supply
 
 Spot market capacity (broker capacity, load board postings) is modeled as a set of arcs in G(N, A) alongside contracted capacity. Spot arcs carry rate distributions rather than fixed rates. The optimizer treats spot as just another supply option — not a fallback of last resort.
@@ -646,9 +748,11 @@ Transit time on each arc is represented as a distribution (mean + variance, or p
 - Probability of on-time delivery given a delivery window (P(arrival ≤ deadline))
 - Risk-adjusted objectives (e.g., minimize cost subject to P(on-time) ≥ 0.95)
 
+This is the formal foundation for reliability-optimized routing (Section 7.1).
+
 ### 10.7 Fully Autonomous Decision Chains (End Goal)
 
-The prototype implements decision-support (human approves). The end goal is a fully autonomous planning and exception-management chain: the system detects a disruption, re-optimizes affected shipments, selects the best alternative, books it (via carrier API), and notifies stakeholders — without human intervention.
+The prototype implements decision-support (human approves). The end goal is a fully autonomous planning and exception-management chain: the system detects a disruption, re-optimizes affected shipments, selects the best alternative, books it (via carrier API), and notifies stakeholders — without human intervention. A compliance/validation agent checks planning decisions before execution.
 
 ---
 
@@ -674,6 +778,8 @@ Each component is independently buildable and testable. No stitching until each 
 | Execution Monitor Agent | Watches active shipments, detects exceptions, triggers re-plans | Both |
 | Agent Interaction Logger | Logs all agent queries and responses with timestamp | Both |
 | LCL Consolidation Optimizer | MILP: given a set of LCL shipments on the same or nearby lanes, determine optimal grouping into shared containers and assignment to sailings. Combines bin-packing (CBM/weight fit) with routing optimization. Distinct from FCL ocean optimizer — requires NVOCC consolidation schedules and LCL rate data. | Ocean (deferred) |
+| Instance Generator | Produces synthetic but geographically realistic problem instances for solver testing and model validation. Uses UN/LOCODE port coordinates, GeoNames city geocoding, public sailing schedule data, and Haversine-based transit time estimation. Outputs structured JSON instances matching the model parameter schema. Required before any solver benchmarking. Build is a joint session — do not implement independently. | Ocean + Trucking |
+| Customs Inspection Model | **P1.** Commodity-specific dwell time model for POD nodes. Computes inspection probability as a function of HS code risk tier, importer C-TPAT status, country of origin, and consignee inspection history. Feeds into dwell arc weights in the Ocean Optimizer. Deferred from MVP — MVP uses fixed port-level dwell constants (USLAX/USLGB: 3.5 days; USSEA: 2.5 days). | Ocean (P1) |
 
 ---
 
@@ -681,19 +787,29 @@ Each component is independently buildable and testable. No stitching until each 
 
 Phases are gates. Each phase requires explicit approval before the next begins.
 
-**Phase 0 — PRD** ← CURRENT
-**Phase 1 — Formal Models (LaTeX)** — one model per component, each approved individually
-**Phase 2 — Component Builds** — Graph Generator → Transit Time Models → Mode Optimizers → Rules Engine → Adapters → Stitching Layer → Rolling Horizon Controller
-**Phase 3 — MCP Server** — expose all verified components as tools
-**Phase 4 — Agent Layer** — Planning Agent → Validation Agent → Execution Monitor
+**Phase 0 — PRD** ← CURRENT  
+**Phase 1 — Formal Models (LaTeX)**  
+One model per component. Each approved individually before code starts.
+
+**Phase 2 — Component Builds**  
+Order: Graph Generator → Transit Time Models → Mode Optimizers → Rules Engine → Adapters → Stitching Layer → Rolling Horizon Controller
+
+**Phase 3 — MCP Server**  
+Expose all verified components as tools.
+
+**Phase 4 — Agent Layer**  
+Planning Agent → Validation Agent → Execution Monitor
+
 **Phase 5 — Integration and End-to-End Testing**
-**Phase 6 — Iterate** — air mode, improved models, extended agent capabilities
+
+**Phase 6 — Iterate**  
+Add air mode, improve models, extend agent capabilities.
 
 ---
 
 ## 13. Open Questions and Future Decisions
 
-1. **Decision-support vs. autonomous execution**: Prototype is decision-support (human approves). Define the trigger conditions and safety checks required before moving to autonomous execution.
+1. **Decision-support vs. autonomous execution**: Prototype is decision-support (human approves). Define the trigger conditions and safety checks required before moving to autonomous execution. *(Key commercial and liability decision — defer until prototype is validated with design partners.)*
 
 2. **Design partner selection**: Who are the first 2–3 customers? Freight forwarder vs. shipper? What data do they bring? What lanes do we start with?
 
@@ -713,9 +829,13 @@ Phases are gates. Each phase requires explicit approval before the next begins.
 
 ## Appendix A: Full Agent Capability Inventory
 
+*Complete list of 60+ capabilities across 8 categories. In-scope items are implemented in the prototype. Deferred items are documented for future phases.*
+
 ### A.1 Core Routing and Planning (In Scope)
 - Route single shipment: all viable options
-- Lowest-cost routing, fastest routing, reliability-optimized routing (probabilistic)
+- Lowest-cost routing
+- Fastest routing
+- Reliability-optimized routing (probabilistic)
 - Multi-objective Pareto frontier (cost / time / reliability)
 - Mode selection: ocean vs. trucking vs. combined
 - Carrier selection within mode
@@ -726,81 +846,121 @@ Phases are gates. Each phase requires explicit approval before the next begins.
 
 ### A.2 Constraint Handling (In Scope)
 - Hard and soft time windows (pickup and delivery)
-- Service level tiers, carrier preference / blacklist / allocation caps
-- Port / lane avoidance, weight and volume constraints
+- Service level tiers
+- Carrier preference / blacklist / allocation caps
+- Port / lane avoidance
+- Weight and volume constraints
 - Commodity restrictions (hazmat, temperature, OOG)
-- Trade lane regulatory constraints, budget caps
+- Trade lane regulatory constraints
+- Budget caps
 - Dangerous goods / temperature segregation
 
 ### A.3 Batch Fleet Operations (In Scope)
-- Route full portfolio simultaneously with graph decomposition
-- Priority segmentation, volume consolidation identification
+- Route full portfolio simultaneously
+- Priority segmentation
+- Volume consolidation identification
 - Carrier allocation compliance monitoring
 - Exception queue with urgency ranking
-- Bulk re-routing on disruption, portfolio risk status
+- Bulk re-routing on disruption
+- Portfolio risk status
 
 ### A.4 Scenario Analysis (In Scope)
-- Origin port shift, transit time vs. cost tradeoff, LCL vs. FCL upgrade
-- Carrier unavailability, shipment splitting
+- Origin port shift
+- Transit time vs. cost tradeoff
+- LCL vs. FCL upgrade
+- Carrier unavailability
+- Shipment splitting
 - Red Sea avoidance / Cape of Good Hope routing
-- Air vs. ocean comparison, service level upgrade cost
-- Tariff / duty change impact, port closure contingency
+- Air vs. ocean comparison
+- Service level upgrade cost
+- Tariff / duty change impact
+- Port closure contingency
 
 ### A.5 Disruption and Exception Management (In Scope)
-- Predicted delay detection, ranked recommended actions
-- Rerouting on carrier failure, port strike contingency
-- Vessel schedule change impact, customs hold handling
-- Missed pickup recovery, proactive risk scoring
+- Predicted delay detection
+- Ranked recommended actions
+- Rerouting on carrier failure
+- Port strike contingency
+- Vessel schedule change impact
+- Customs hold handling
+- Missed pickup recovery
+- Proactive risk scoring
 
 ### A.6 Tracking and Visibility (In Scope — Simplified)
-- Real-time position (AIS), ML-based ETA prediction
-- Full milestone trace, on-track vs. at-risk status
-- Remaining legs and mode transitions, portfolio exception view
+- Real-time position (AIS)
+- ML-based ETA prediction
+- Full milestone trace
+- On-track vs. at-risk status
+- Remaining legs and mode transitions
+- Portfolio exception view
 
 ### A.7 Analytics (In Scope)
-- Cost breakdown by dimension, transit time vs. SLA performance
-- On-time delivery rate, carrier scorecard, lane performance trends
-- Route explanation / audit trail, savings attribution
-- Counterfactual / regret analysis, carrier volume commitment utilization
+- Cost breakdown by dimension
+- Transit time vs. SLA performance
+- On-time delivery rate
+- Carrier scorecard
+- Lane performance trends
+- Route explanation / audit trail
+- Savings attribution
+- Counterfactual / regret analysis
+- Carrier volume commitment utilization
 - Emissions estimate per route
 
 ### A.8 Advisory (In Scope)
-- Forwarder quote reasonableness, carrier reliability by lane
-- Allocation efficiency, disruption exposure assessment
-- Capacity pre-booking signal, market rate benchmark
+- Forwarder quote reasonableness check
+- Carrier reliability by lane
+- Allocation efficiency
+- Disruption exposure assessment
+- Capacity pre-booking signal
+- Market rate benchmark
 
 ### A.9 Deferred Capabilities (Future Phases)
 - 3D load building (weight/cube/pallet bin-packing for trucking)
-- LCL consolidation optimization (bin-packing × routing MILP)
+- Dangerous goods and temperature segregation routing (constraint modeling in scope; physical co-load planning deferred)
 - Backhaul and continuous move optimization (driver trip chaining)
-- Carbon / emissions as optimization objective
+- Carbon / emissions as optimization objective (emissions estimation in scope; optimization deferred)
 - Freight audit (actual invoice vs. planned cost matching)
 - Vendor routing guide compliance (inbound supplier shipment rules)
-- Air mode (Phase 6), Rail mode (future)
+- Air mode (Phase 6)
+- Rail mode (future)
 - Autonomous booking execution (requires carrier API integrations)
 
 ---
 
 ## Appendix B: Differentiation Opportunities — Gaps in All Existing TMS Platforms
 
-1. **Continuous re-optimization** *(Requirement: Section 10.1)*
-2. **Learned constraint inference** *(Requirement: Section 10.3)*
-3. **Simultaneous multi-echelon joint optimization** *(Requirement: Section 10.4)*
-4. **Market-responsive spot capacity** *(Requirement: Section 10.5)*
-5. **Counterfactual / regret analysis** *(Requirement: Section 10.2)*
-6. **Fully autonomous end-to-end decision chains** *(Requirement: Section 10.7)*
-7. **Probabilistic planning** *(Requirement: Section 10.6)*
+The following seven capabilities are absent from every major TMS platform (Blue Yonder, Oracle TM, SAP TM, Manhattan Associates, MercuryGate) and represent genuine differentiation opportunities. Each has been elevated to an explicit design requirement in Section 10.
+
+1. **Continuous re-optimization** — existing TMS runs batch planning waves. We design for rolling horizon re-optimization. *(Requirement: Section 10.1)*
+
+2. **Learned constraint inference** — no existing system learns implicit preferences from planner override history. We log all overrides for constraint learning. *(Requirement: Section 10.3)*
+
+3. **Simultaneous multi-echelon joint optimization** — existing systems plan legs sequentially. We model the full door-to-door journey as a single MILP on the unified graph. *(Requirement: Section 10.4)*
+
+4. **Market-responsive spot capacity** — existing systems use static rate tables. We model spot as live supply arcs alongside contracted capacity. *(Requirement: Section 10.5)*
+
+5. **Counterfactual / regret analysis** — no existing system computes post-hoc regret over routing decisions. We store and analyze the gap between chosen route and best-available-in-hindsight. *(Requirement: Section 10.2)*
+
+6. **Fully autonomous end-to-end decision chains** — all current AI features are assistive (recommend, alert). End goal is a planning agent checked by a compliance agent that can execute autonomously. *(Requirement: Section 10.7)*
+
+7. **Probabilistic planning** — all existing optimization uses point estimates for transit time. We model transit time distributions and support probability-of-on-time-delivery as an optimization objective. *(Requirement: Section 10.6)*
 
 ---
 
 ## Appendix C: Competitive Landscape Summary
 
-*Research conducted May 2026.*
+*Based on TMS platform research (Blue Yonder, Oracle TM, SAP TM, Manhattan Associates, MercuryGate) and AI-native freight platform research (project44, Pando Pi, Portcast, Shipsy, and others). Research conducted May 2026.*
 
-**What the best TMS platforms do well:** Multi-mode route optimization with complex constraint handling (Oracle TM, Blue Yonder), deep carrier tendering and routing guide management, exception detection and re-tender workflows, analytics and freight spend reporting.
+**What the best TMS platforms do well:**
+- Multi-mode route optimization with complex constraint handling (Oracle TM, Blue Yonder)
+- Deep carrier tendering and routing guide management
+- Exception detection and re-tender workflows
+- Analytics and freight spend reporting
+- Ocean + air native depth (Oracle TM strongest)
 
-**What AI-native platforms add:** AI customs audit agents, container optimization agents, digital routing guides, natural language search, AIS-powered ocean intelligence via MCP (Pando Pi 2025: autonomous freight procurement, dispatch planning, and payment). project44 / FourKites: predictive ETA, exception prioritization, cross-modal visibility.
+**What AI-native platforms add:**
+- Leading AI-native freight forwarders (2026): AI customs audit agents, container optimization agents, digital routing guides with rule logic, natural language search, AIS-powered ocean intelligence via MCP
+- Pando Pi (2025): Autonomous freight procurement, dispatch planning, and payment — "AI Teams for Logistics"
+- project44 / FourKites: Predictive ETA, exception prioritization, cross-modal visibility
 
-**What none of them do** — see Appendix B.
-
-**The market moment:** 42% of logistics leaders are holding back on agentic AI (DC Velocity survey, 2025). Primary concerns: lack of internal expertise (48%), risk of errors (41%), integration difficulty (35%).
+**What none of them do** — see Appendix B. The window for a well-designed, reliable, explainable agentic routing system is open.
