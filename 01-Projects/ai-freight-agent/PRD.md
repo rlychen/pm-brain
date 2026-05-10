@@ -381,7 +381,7 @@ The routing network is modeled as a directed graph G(N, A):
 - **Inland trucking arcs**: point-to-point truck moves
 - **Transshipment arcs**: inter-terminal transfers at hub ports (time and cost)
 
-**MVP container type:** FEU (40' standard container, ≈ 67 CBM usable) only. TEU support deferred to P1. Number of FEU required per shipment: `n_k = ceil(volume_cbm / 67)`.
+**Container types:** FEU (40'HC, ≈ 67 CBM usable, ≈ 26,000 kg payload) and TEU (20', ≈ 33 CBM usable, ≈ 24,000 kg payload). The optimizer selects the cost-minimizing mix per (commodity, sailing) pair. Minimum container count per shipment: `n_k = max(ceil(volume_cbm / 67), ceil(weight_kg / 26000))`, accounting for both volume and weight limits. Container mix pre-computation is described in the formal model (`model/ocean_fcl_routing.tex`, Section 4.6).
 
 **Arc attribute schemas by type:**
 
@@ -398,14 +398,17 @@ The routing network is modeled as a directed graph G(N, A):
 |---|---|
 | `etd` | Estimated time of departure from POL |
 | `cy_cutoff` | **Latest** datetime a container may arrive at terminal for this sailing. Hard constraint on pre-carriage delivery. Typically ETD − 4 days. |
-| `rate_per_feu` | Base ocean freight rate per 40' container (USD/FEU) |
-| `baf` | Bunker adjustment factor per FEU |
-| `thc_pol` | Terminal handling charge at origin port per FEU |
-| `thc_pod` | Terminal handling charge at destination port per FEU |
-| `capacity_feu` | Max FEU slots available on this sailing (carrier-allocated block) |
+| `rate_per_feu` | Base ocean freight rate per 40'HC container (USD/FEU) |
+| `rate_per_teu` | Base rate per 20' container (USD/TEU). Typically 0.63–0.83 × FEU rate — not 0.5× because TEU costs more per CBM to handle. |
+| `baf` | Bunker adjustment factor per container (same fraction applied to FEU and TEU rates) |
+| `thc_pol` | Terminal handling charge at origin port per container |
+| `thc_pod` | Terminal handling charge at destination port per container |
+| `capacity_teu` | Max TEU slots on this sailing (vessel-level cap). 1 FEU = 2 TEU slots; 1 TEU = 1 TEU slot. |
+| `service_string` | Carrier service string this sailing belongs to (e.g., "MSC Tiger"). Ties to carrier allocation pool. |
+| `alloc_period` | Monthly allocation period this ETD falls in (YYYY-MM). |
 | `transit_time_mean` | Mean transit days, POL to POD |
 | `transit_time_sigma` | Std dev of transit time |
-| `carrier` | Carrier identifier |
+| `carrier` | Carrier name (e.g., MSC, CMA CGM, COSCO) |
 | `vessel` | Vessel name |
 
 *Dwell arcs (POD_arrival → POD_exit):*
@@ -431,9 +434,19 @@ Each physical port of discharge (POL) is represented by **two nodes**: a POD_arr
 | `mode` | FTL truck (solid arc in diagram) or intermodal rail (dashed arc) |
 | `distance_km` | Road/rail distance (informational) |
 
-**Transit time estimation from coordinates:** For all trucking arcs (pre-carriage and inland), transit time is estimated from node lat/lon using: road distance = Haversine distance × road factor (1.25 China, 1.20 US); transit days = road distance / average truck speed (600 km/day China, 800 km/day US). For ocean arcs: sailing distance = Haversine × 1.15 (Trans-Pacific lane factor); transit days = sailing distance / 400 km/day (≈ 9 knots average, inclusive of approach and anchorage).
+**Transit time estimation from coordinates:** For all trucking arcs (pre-carriage and inland), transit time is estimated from node lat/lon using: road distance = Haversine distance × road factor (1.25 China, 1.20 US); transit days = road distance / average truck speed (600 km/day China, 800 km/day US). For ocean arcs: sailing distance = Haversine × 1.15 (Trans-Pacific lane factor); transit days = sailing distance / 600 km/day (≈ 14 knots average, inclusive of port approach and anchorage). Validation: SHA → USLAX geodesic ≈ 9,200 km → sailing distance ≈ 10,580 km → transit ≈ 17.6 days, within published carrier schedule range of 14–18 days.
 
-**Graph decomposition for batch solving:** When routing a batch of N shipments, the demand-supply graph can be decomposed before the MILP solve. Two shipments are independent if they share no feasible supply arcs — no common carrier service legs, port pairs, or trucking lanes that both could use. Independent subsets form disconnected components in the demand-supply intersection graph and can be partitioned and solved separately. This decomposition reduces MILP problem size and enables parallelism. The batch planner computes connected components first, dispatches each component to the optimizer independently, and merges results. Shipments that share supply (e.g., competing for the same vessel sailing or carrier allocation cap) remain in the same component and are optimized jointly.
+**String-based carrier allocation capacity:** Ocean carriers sell capacity on *service strings* — fixed port-call loops (e.g., MSC Tiger TPEB: SHA → NGB → SZX → USLAX → USLGB). A freight forwarder's contracted block space agreement (BSA) covers the entire string, not a specific port pair. A booking on SHA→USLAX and a booking on NGB→USLGB on the same string in the same month both draw from the same allocated pool.
+
+The optimizer tracks two capacity constraints per sailing:
+1. **Vessel-level cap** (`capacity_teu`): maximum TEU slots on a specific sailing. Shared across all forwarders.
+2. **String allocation cap**: the forwarder's remaining contracted block on this string in this monthly period (`rem(s,t) = alloc(s,t) − util(s,t)`). Current utilization (`util`) is an external state input read from the shipment state store before each solve.
+
+This means routing decisions for two shipments on the same string in the same month are coupled — the optimizer must respect the joint allocation cap even when the shipments use different port pairs. See formal model Section 4.5 and constraint P.3 in `model/ocean_fcl_routing.tex`.
+
+**P1 — Time-phased capacity release (deferred):** The MVP commits all remaining `rem(s,t)` in a single routing run. In P1, a demand forecast will drive capacity release in tranches across sequential routing batches, reserving space for future urgent shipments. See Open Question 9.
+
+**Graph decomposition for batch solving:** When routing a batch of N shipments, the demand-supply graph can be decomposed before the MILP solve. Two shipments are independent if they share no feasible supply arcs — no common carrier service legs or carrier allocation pools. Independent subsets form disconnected components in the demand-supply intersection graph and are solved separately. This decomposition reduces MILP problem size and enables parallelism. The batch planner builds the commodity-supply bipartite graph, finds connected components, dispatches each independently, and merges results. Shipments that share a sailing or draw from the same allocation pool remain in the same component and are optimized jointly. Example: TPEB and FEWB commodities always decompose into independent subproblems (different strings, different ports, no shared supply). See formal model Section 9 in `model/ocean_fcl_routing.tex`.
 
 ---
 
@@ -656,7 +669,7 @@ LangGraph `interrupt()` fires at the following points, pausing execution for hum
 1. **Validator returns ESCALATE** — recommendation has an unresolvable conflict
 2. **Planner-validator loop reaches 3 revision cycles without PASS** — auto-escalate
 3. **Any booking action** (future, when autonomous execution is enabled) — all writes to carrier systems require explicit human approval until the system is validated at scale
-4. **Exception requires rerouting a high-value or time-critical shipment** — configurable threshold (e.g., shipments with &lt;24h delivery window remaining)
+4. **Exception requires rerouting a high-value or time-critical shipment** — configurable threshold (e.g., shipments with <24h delivery window remaining)
 
 State is persisted via PostgreSQL checkpointer — human can resume the workflow after reviewing without losing context.
 
@@ -765,7 +778,7 @@ Each component is independently buildable and testable. No stitching until each 
 | Graph Generator | Constructs G(N, A) from network data sources. Each node is enriched with public real-world data: port nodes get terminal throughput, typical customs clearance windows, and anchorage wait distributions; city/inland nodes get intermodal ramp locations (e.g. BNSF, UP), road distance matrices, and historical road transit time distributions. Arc weights are derived from this node-level enrichment, not left as abstract estimates. | Ocean + Trucking |
 | Ocean Transit Time Model | ML model: distribution over transit time per ocean arc | Ocean |
 | Trucking Transit Time Model | ML model: distribution over transit time per trucking arc | Trucking |
-| Ocean Optimizer | MILP: selects optimal ocean route given demand and constraints | Ocean |
+| Ocean Optimizer | MILP: Binary Multi-Commodity Network Flow. Selects optimal ocean route for a batch of commodities given demand, vessel capacity, and string-based carrier allocation constraints. Builds commodity-specific subgraphs (only arcs reachable on a complete origin→destination path), pre-computes optimal FEU/TEU container mix per (commodity, sailing), decomposes independent subproblems before solving, and returns structured infeasibility reports for commodities with no feasible path. Formal model: `model/ocean_fcl_routing.tex`. | Ocean |
 | Trucking Optimizer | MILP: selects optimal trucking route given demand and constraints | Trucking |
 | Multimodal Stitching Layer | Assembles mode-specific solutions into a coherent end-to-end plan | Both |
 | Rolling Horizon Controller | Monitors shipment state, fires re-plan triggers, manages G_coarse/G_fine resolution | Both |
@@ -824,6 +837,8 @@ Add air mode, improve models, extend agent capabilities.
 7. **Multi-agent framework**: LangGraph (decided — see Section 8). LangSmith for observability, PostgreSQL checkpointer for HITL state persistence.
 
 8. **LCL consolidation optimizer**: LCL routing requires a consolidation layer that groups LCL shipments into containers before routing. This is a combined bin-packing + routing MILP — distinct from the FCL ocean optimizer. Requires NVOCC consolidation schedules and LCL rate data. Design and scope TBD for a future phase.
+
+9. **Time-phased carrier capacity release**: The MVP commits all of `rem(s,t)` (remaining contracted block on a string in a period) in a single routing run. A production forwarder cannot do this — future urgent shipments need reserved headroom. The correct approach is to release capacity in tranches across sequential routing batches, driven by a demand forecast model. This requires: (a) a rolling demand forecast by trade lane and period, (b) a capacity allocation policy (hold-back fraction), (c) integration with the routing batch scheduler. Deferred to P1; the string allocation constraint structure is already in place to support it.
 
 ---
 
