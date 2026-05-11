@@ -338,7 +338,7 @@ Each ocean shipment request provides:
 | `weight_kg` | Gross weight |
 | `volume_cbm` | Volume in cubic meters |
 | `cargo_type` | General, hazmat class, temperature-controlled, OOG |
-| `hs_code` | 6-digit Harmonized System commodity code — determines customs inspection risk tier (P1) and tariff lookup |
+| `hs_code` | 6-digit Harmonized System commodity code — determines customs inspection risk tier (P1) and tariff lookup. MVP: single code per shipment. **P1:** replace with list of HS codes to support mixed-product FCL bookings; inspection risk = max tier across codes. |
 | `incoterm` | EXW, FOB, CIF, DDP, etc. |
 | `service_level` | Economy, Standard, Express |
 | `carrier_preferences` | Preferred, acceptable, excluded carriers |
@@ -381,7 +381,13 @@ The routing network is modeled as a directed graph G(N, A):
 - **Inland trucking arcs**: point-to-point truck moves
 - **Transshipment arcs**: inter-terminal transfers at hub ports (time and cost)
 
-**Container types:** FEU (40'HC, ≈ 67 CBM usable, ≈ 26,000 kg payload) and TEU (20', ≈ 33 CBM usable, ≈ 24,000 kg payload). The optimizer selects the cost-minimizing mix per (commodity, sailing) pair. Minimum container count per shipment: `n_k = max(ceil(volume_cbm / 67), ceil(weight_kg / 26000))`, accounting for both volume and weight limits. Container mix pre-computation is described in the formal model (`model/ocean_fcl_routing.tex`, Section 4.6).
+**Container types:** FEU (40'HC, ≈ 76 CBM usable, ≈ 26,500 kg payload) and TEU (20', ≈ 33 CBM usable, ≈ 24,000 kg payload). The optimizer selects the cost-minimizing mix per (commodity, sailing) pair. Minimum container count per shipment: `n_k = max(ceil(volume_cbm / 76), ceil(weight_kg / 26500))`, accounting for both volume and weight limits. Container mix pre-computation is described in the formal model (`model/ocean_fcl_routing.tex`, Section 4.6).
+
+| Container type | Code | TEU slots | Usable volume (CBM) | Payload (kg) | Notes |
+|---|---|---|---|---|---|
+| 20' standard | TEU | 1 | 33 | 24,000 | — |
+| 40' standard | FEU (std) | 2 | 67 | 26,500 | Deferred to P1 |
+| 40' High Cube | FEU (HC) | 2 | 76 | 26,500 | MVP FEU type; dominant on TPEB |
 
 **Arc attribute schemas by type:**
 
@@ -669,7 +675,7 @@ LangGraph `interrupt()` fires at the following points, pausing execution for hum
 1. **Validator returns ESCALATE** — recommendation has an unresolvable conflict
 2. **Planner-validator loop reaches 3 revision cycles without PASS** — auto-escalate
 3. **Any booking action** (future, when autonomous execution is enabled) — all writes to carrier systems require explicit human approval until the system is validated at scale
-4. **Exception requires rerouting a high-value or time-critical shipment** — configurable threshold (e.g., shipments with <24h delivery window remaining)
+4. **Exception requires rerouting a high-value or time-critical shipment** — configurable threshold (e.g., shipments with &lt;24h delivery window remaining)
 
 State is persisted via PostgreSQL checkpointer — human can resume the workflow after reviewing without losing context.
 
