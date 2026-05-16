@@ -1,0 +1,149 @@
+<mxGraphModel dx="1422" dy="762" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1500" pageHeight="680" math="0" shadow="0">
+  <root>
+    <mxCell id="0" />
+    <mxCell id="1" parent="0" />
+
+    <!-- TITLE -->
+    <mxCell id="title" value="FCL Ocean Planning Graph: Shenzhen → Chicago (Single Shipment)" style="text;html=1;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;whiteSpace=wrap;fontSize=13;fontStyle=1;" vertex="1" parent="1">
+      <mxGeometry x="50" y="10" width="1400" height="28" as="geometry" />
+    </mxCell>
+
+    <!-- COLUMN HEADERS -->
+    <mxCell id="h1" value="Origin" style="text;html=1;strokeColor=none;fillColor=none;align=center;fontSize=10;fontStyle=2;fontColor=#555555;" vertex="1" parent="1">
+      <mxGeometry x="40" y="48" width="130" height="18" as="geometry" />
+    </mxCell>
+    <mxCell id="h2" value="Pre-carriage" style="text;html=1;strokeColor=none;fillColor=none;align=center;fontSize=10;fontStyle=2;fontColor=#555555;" vertex="1" parent="1">
+      <mxGeometry x="210" y="48" width="120" height="18" as="geometry" />
+    </mxCell>
+    <mxCell id="h3" value="Trans-Pacific Ocean" style="text;html=1;strokeColor=none;fillColor=none;align=center;fontSize=10;fontStyle=2;fontColor=#555555;" vertex="1" parent="1">
+      <mxGeometry x="490" y="48" width="300" height="18" as="geometry" />
+    </mxCell>
+    <mxCell id="h4" value="Dest Port" style="text;html=1;strokeColor=none;fillColor=none;align=center;fontSize=10;fontStyle=2;fontColor=#555555;" vertex="1" parent="1">
+      <mxGeometry x="860" y="48" width="110" height="18" as="geometry" />
+    </mxCell>
+    <mxCell id="h5" value="Inland (Truck / Intermodal)" style="text;html=1;strokeColor=none;fillColor=none;align=center;fontSize=10;fontStyle=2;fontColor=#555555;" vertex="1" parent="1">
+      <mxGeometry x="1020" y="48" width="220" height="18" as="geometry" />
+    </mxCell>
+
+    <!-- ===== NODES ===== -->
+
+    <!-- Origin door -->
+    <mxCell id="origin" value="&lt;b&gt;Origin Door&lt;/b&gt;&lt;br&gt;Shenzhen, Guangdong&lt;br&gt;&lt;i&gt;Earliest pickup: T+0&lt;/i&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#666666;fontColor=#333333;fontSize=10;" vertex="1" parent="1">
+      <mxGeometry x="40" y="290" width="130" height="54" as="geometry" />
+    </mxCell>
+
+    <!-- Chinese ports -->
+    <mxCell id="cnsha" value="&lt;b&gt;CNSHA&lt;/b&gt;&lt;br&gt;Shanghai" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=10;" vertex="1" parent="1">
+      <mxGeometry x="265" y="93" width="110" height="45" as="geometry" />
+    </mxCell>
+    <mxCell id="cnngb" value="&lt;b&gt;CNNGB&lt;/b&gt;&lt;br&gt;Ningbo" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=10;" vertex="1" parent="1">
+      <mxGeometry x="265" y="290" width="110" height="45" as="geometry" />
+    </mxCell>
+    <mxCell id="cnszx" value="&lt;b&gt;CNSZX&lt;/b&gt;&lt;br&gt;Shenzhen / Yantian" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=10;" vertex="1" parent="1">
+      <mxGeometry x="265" y="487" width="110" height="45" as="geometry" />
+    </mxCell>
+
+    <!-- US ports -->
+    <mxCell id="uslax" value="&lt;b&gt;USLAX&lt;/b&gt;&lt;br&gt;Los Angeles" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=10;" vertex="1" parent="1">
+      <mxGeometry x="870" y="93" width="110" height="45" as="geometry" />
+    </mxCell>
+    <mxCell id="uslgb" value="&lt;b&gt;USLGB&lt;/b&gt;&lt;br&gt;Long Beach" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=10;" vertex="1" parent="1">
+      <mxGeometry x="870" y="290" width="110" height="45" as="geometry" />
+    </mxCell>
+    <mxCell id="ussea" value="&lt;b&gt;USSEA&lt;/b&gt;&lt;br&gt;Seattle / Tacoma" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=10;" vertex="1" parent="1">
+      <mxGeometry x="870" y="487" width="110" height="45" as="geometry" />
+    </mxCell>
+
+    <!-- Chicago destination -->
+    <mxCell id="chicago" value="&lt;b&gt;Chicago, IL&lt;/b&gt;&lt;br&gt;Destination Door&lt;br&gt;&lt;i&gt;Latest arrival: T+X&lt;/i&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=10;" vertex="1" parent="1">
+      <mxGeometry x="1165" y="287" width="130" height="54" as="geometry" />
+    </mxCell>
+
+    <!-- ===== PRE-CARRIAGE ARCS ===== -->
+    <mxCell id="pc1" value="Truck | ~2d | ~$800" style="edgeStyle=orthogonalEdgeStyle;fontSize=9;html=1;" edge="1" source="origin" target="cnsha" parent="1">
+      <mxGeometry relative="1" as="geometry" />
+    </mxCell>
+    <mxCell id="pc2" value="Truck | ~2d | ~$900" style="edgeStyle=orthogonalEdgeStyle;fontSize=9;html=1;" edge="1" source="origin" target="cnngb" parent="1">
+      <mxGeometry relative="1" as="geometry" />
+    </mxCell>
+    <mxCell id="pc3" value="Truck | ~0.5d | ~$150" style="edgeStyle=orthogonalEdgeStyle;fontSize=9;html=1;" edge="1" source="origin" target="cnszx" parent="1">
+      <mxGeometry relative="1" as="geometry" />
+    </mxCell>
+
+    <!-- ===== OCEAN ARCS ===== -->
+
+    <!-- From CNSHA -->
+    <mxCell id="oc1" value="MSC / MSC GÜLSÜN | ETD T+3 | CY cutoff T+1 | 14d" style="fontSize=9;html=1;" edge="1" source="cnsha" target="uslax" parent="1">
+      <mxGeometry relative="1" as="geometry" />
+    </mxCell>
+    <mxCell id="oc2" value="COSCO / COSCO SHIPPING NEBULA | ETD T+5 | CY cutoff T+2 | 15d" style="fontSize=9;html=1;" edge="1" source="cnsha" target="uslgb" parent="1">
+      <mxGeometry relative="1" as="geometry" />
+    </mxCell>
+    <mxCell id="oc3" value="ONE / ONE BLUE JAY | ETD T+7 | CY cutoff T+4 | 17d" style="fontSize=9;html=1;" edge="1" source="cnsha" target="ussea" parent="1">
+      <mxGeometry relative="1" as="geometry" />
+    </mxCell>
+
+    <!-- From CNNGB -->
+    <mxCell id="oc4" value="Evergreen / EVER ACE | ETD T+4 | CY cutoff T+1 | 13d" style="fontSize=9;html=1;" edge="1" source="cnngb" target="uslax" parent="1">
+      <mxGeometry relative="1" as="geometry" />
+    </mxCell>
+    <mxCell id="oc5" value="Yang Ming / YM UNIFORMITY | ETD T+6 | CY cutoff T+3 | 14d" style="fontSize=9;html=1;" edge="1" source="cnngb" target="uslgb" parent="1">
+      <mxGeometry relative="1" as="geometry" />
+    </mxCell>
+
+    <!-- From CNSZX -->
+    <mxCell id="oc6" value="CMA CGM / CMA CGM MARCO POLO | ETD T+2 | CY cutoff T+0 | 12d" style="fontSize=9;html=1;" edge="1" source="cnszx" target="uslax" parent="1">
+      <mxGeometry relative="1" as="geometry" />
+    </mxCell>
+    <mxCell id="oc7" value="OOCL / OOCL HONG KONG | ETD T+3 | CY cutoff T+1 | 13d" style="fontSize=9;html=1;" edge="1" source="cnszx" target="uslgb" parent="1">
+      <mxGeometry relative="1" as="geometry" />
+    </mxCell>
+
+    <!-- ===== INLAND ARCS ===== -->
+
+    <!-- From USLAX (2 options) -->
+    <mxCell id="in1" value="FTL Truck | ~2d | ~$4,200 est." style="fontSize=9;html=1;exitX=1;exitY=0.25;exitDx=0;exitDy=0;entryX=0;entryY=0.15;entryDx=0;entryDy=0;" edge="1" source="uslax" target="chicago" parent="1">
+      <mxGeometry relative="1" as="geometry" />
+    </mxCell>
+    <mxCell id="in2" value="BNSF Intermodal | ~3d | ~$2,800 est." style="fontSize=9;html=1;dashed=1;exitX=1;exitY=0.75;exitDx=0;exitDy=0;entryX=0;entryY=0.3;entryDx=0;entryDy=0;" edge="1" source="uslax" target="chicago" parent="1">
+      <mxGeometry relative="1" as="geometry" />
+    </mxCell>
+
+    <!-- From USLGB (2 options) -->
+    <mxCell id="in3" value="FTL Truck | ~2d | ~$4,000 est." style="fontSize=9;html=1;exitX=1;exitY=0.25;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" edge="1" source="uslgb" target="chicago" parent="1">
+      <mxGeometry relative="1" as="geometry" />
+    </mxCell>
+    <mxCell id="in4" value="UP Intermodal | ~3d | ~$2,600 est." style="fontSize=9;html=1;dashed=1;exitX=1;exitY=0.75;exitDx=0;exitDy=0;entryX=0;entryY=0.63;entryDx=0;entryDy=0;" edge="1" source="uslgb" target="chicago" parent="1">
+      <mxGeometry relative="1" as="geometry" />
+    </mxCell>
+
+    <!-- From USSEA (2 options) -->
+    <mxCell id="in5" value="FTL Truck | ~3d | ~$5,500 est." style="fontSize=9;html=1;exitX=1;exitY=0.25;exitDx=0;exitDy=0;entryX=0;entryY=0.75;entryDx=0;entryDy=0;" edge="1" source="ussea" target="chicago" parent="1">
+      <mxGeometry relative="1" as="geometry" />
+    </mxCell>
+    <mxCell id="in6" value="BNSF Intermodal | ~2d | ~$2,200 est." style="fontSize=9;html=1;dashed=1;exitX=1;exitY=0.75;exitDx=0;exitDy=0;entryX=0;entryY=0.88;entryDx=0;entryDy=0;" edge="1" source="ussea" target="chicago" parent="1">
+      <mxGeometry relative="1" as="geometry" />
+    </mxCell>
+
+    <!-- ===== LEGEND ===== -->
+    <mxCell id="leg_box" value="" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#aaaaaa;" vertex="1" parent="1">
+      <mxGeometry x="40" y="590" width="560" height="62" as="geometry" />
+    </mxCell>
+    <mxCell id="leg_title" value="&lt;b&gt;Legend&lt;/b&gt;" style="text;html=1;fontSize=10;align=left;" vertex="1" parent="1">
+      <mxGeometry x="52" y="594" width="80" height="16" as="geometry" />
+    </mxCell>
+    <mxCell id="leg_a" value="—— Solid: truck (pre-carriage or inland FTL)" style="text;html=1;fontSize=9;align=left;" vertex="1" parent="1">
+      <mxGeometry x="52" y="612" width="260" height="15" as="geometry" />
+    </mxCell>
+    <mxCell id="leg_b" value="- - - Dashed: intermodal rail (inland)" style="text;html=1;fontSize=9;align=left;" vertex="1" parent="1">
+      <mxGeometry x="52" y="630" width="240" height="15" as="geometry" />
+    </mxCell>
+    <mxCell id="leg_c" value="Ocean arc label: Carrier / Vessel | ETD | CY cutoff | Transit days" style="text;html=1;fontSize=9;fontStyle=2;align=left;" vertex="1" parent="1">
+      <mxGeometry x="320" y="612" width="270" height="15" as="geometry" />
+    </mxCell>
+    <mxCell id="leg_d" value="Inland arc label: Mode | Transit days | Rough cost estimate (G_coarse)" style="text;html=1;fontSize=9;fontStyle=2;align=left;" vertex="1" parent="1">
+      <mxGeometry x="320" y="630" width="270" height="15" as="geometry" />
+    </mxCell>
+
+  </root>
+</mxGraphModel>

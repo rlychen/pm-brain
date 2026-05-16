@@ -1,0 +1,172 @@
+<mxGraphModel dx="1422" dy="762" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1400" pageHeight="720" math="0" shadow="0">
+  <root>
+    <mxCell id="0" />
+    <mxCell id="1" parent="0" />
+
+    <!-- TITLE -->
+    <mxCell id="title" value="Air Freight Shipment Subgraph — G(N_k, A_k) for Shipment S3: TPE → NYC" style="text;html=1;strokeColor=none;fillColor=none;align=center;fontSize=13;fontStyle=1;" vertex="1" parent="1">
+      <mxGeometry x="50" y="8" width="1300" height="22" as="geometry" />
+    </mxCell>
+    <mxCell id="sub" value="One shipment's routing options. All paths from S3 origin to NYC consignee. Each path = a sequence of arcs. Multi-hop routes have 2 air arcs each. Through-flight (5Y9123) is one flight in two legs." style="text;html=1;strokeColor=none;fillColor=none;align=center;fontSize=9;fontStyle=2;fontColor=#555555;" vertex="1" parent="1">
+      <mxGeometry x="50" y="28" width="1300" height="16" as="geometry" />
+    </mxCell>
+
+    <!-- SECTION HEADERS -->
+    <mxCell id="h_pickup" value="Pickup" style="text;html=1;strokeColor=none;fillColor=none;align=center;fontSize=9;fontStyle=2;fontColor=#888888;" vertex="1" parent="1">
+      <mxGeometry x="15" y="55" width="110" height="16" as="geometry" />
+    </mxCell>
+    <mxCell id="h_ocfs" value="Origin CFS / ULD build-up" style="text;html=1;strokeColor=none;fillColor=none;align=center;fontSize=9;fontStyle=2;fontColor=#888888;" vertex="1" parent="1">
+      <mxGeometry x="135" y="55" width="170" height="16" as="geometry" />
+    </mxCell>
+    <mxCell id="h_oap" value="Origin airport" style="text;html=1;strokeColor=none;fillColor=none;align=center;fontSize=9;fontStyle=2;fontColor=#888888;" vertex="1" parent="1">
+      <mxGeometry x="310" y="55" width="120" height="16" as="geometry" />
+    </mxCell>
+    <mxCell id="h_hub" value="Hub airport (optional)" style="text;html=1;strokeColor=none;fillColor=none;align=center;fontSize=9;fontStyle=2;fontColor=#888888;" vertex="1" parent="1">
+      <mxGeometry x="540" y="55" width="160" height="16" as="geometry" />
+    </mxCell>
+    <mxCell id="h_dap" value="Destination airport" style="text;html=1;strokeColor=none;fillColor=none;align=center;fontSize=9;fontStyle=2;fontColor=#888888;" vertex="1" parent="1">
+      <mxGeometry x="830" y="55" width="120" height="16" as="geometry" />
+    </mxCell>
+    <mxCell id="h_dcfs" value="Dest CFS / breakdown" style="text;html=1;strokeColor=none;fillColor=none;align=center;fontSize=9;fontStyle=2;fontColor=#888888;" vertex="1" parent="1">
+      <mxGeometry x="970" y="55" width="155" height="16" as="geometry" />
+    </mxCell>
+    <mxCell id="h_final" value="Final delivery" style="text;html=1;strokeColor=none;fillColor=none;align=center;fontSize=9;fontStyle=2;fontColor=#888888;" vertex="1" parent="1">
+      <mxGeometry x="1145" y="55" width="120" height="16" as="geometry" />
+    </mxCell>
+
+    <!-- ===== SHIPMENT ORIGIN ===== -->
+    <mxCell id="s3o" value="&lt;b&gt;S3&lt;/b&gt;&lt;br&gt;TPE&lt;br&gt;origin" style="ellipse;whiteSpace=wrap;html=1;fillColor=#F8CECC;strokeColor=#b85450;fontColor=#3d1512;fontSize=10;" vertex="1" parent="1">
+      <mxGeometry x="35" y="340" width="65" height="65" as="geometry" />
+    </mxCell>
+
+    <!-- ===== ORIGIN CFS ===== -->
+    <mxCell id="tpe_cfs" value="TPE&#10;CFS" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=10;fontStyle=1;verticalAlign=middle;align=center;" vertex="1" parent="1">
+      <mxGeometry x="180" y="345" width="80" height="55" as="geometry" />
+    </mxCell>
+
+    <!-- ===== ORIGIN AIRPORT ===== -->
+    <mxCell id="tpe" value="TPE" style="ellipse;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=11;fontStyle=1;" vertex="1" parent="1">
+      <mxGeometry x="335" y="347" width="65" height="55" as="geometry" />
+    </mxCell>
+
+    <!-- ===== HUB AIRPORTS (3 options) ===== -->
+    <mxCell id="hkg" value="HKG" style="ellipse;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=11;fontStyle=1;" vertex="1" parent="1">
+      <mxGeometry x="595" y="180" width="65" height="55" as="geometry" />
+    </mxCell>
+    <mxCell id="nrt" value="NRT" style="ellipse;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=11;fontStyle=1;" vertex="1" parent="1">
+      <mxGeometry x="595" y="347" width="65" height="55" as="geometry" />
+    </mxCell>
+    <mxCell id="anc" value="ANC" style="ellipse;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=11;fontStyle=1;" vertex="1" parent="1">
+      <mxGeometry x="595" y="510" width="65" height="55" as="geometry" />
+    </mxCell>
+
+    <!-- ===== DESTINATION AIRPORT ===== -->
+    <mxCell id="jfk" value="JFK" style="ellipse;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=11;fontStyle=1;" vertex="1" parent="1">
+      <mxGeometry x="855" y="347" width="65" height="55" as="geometry" />
+    </mxCell>
+
+    <!-- ===== DESTINATION CFS ===== -->
+    <mxCell id="jfk_cfs" value="JFK&#10;CFS" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=10;fontStyle=1;verticalAlign=middle;align=center;" vertex="1" parent="1">
+      <mxGeometry x="990" y="345" width="80" height="55" as="geometry" />
+    </mxCell>
+
+    <!-- ===== CONSIGNEE ===== -->
+    <mxCell id="nyc" value="&lt;b&gt;NYC&lt;/b&gt;&lt;br&gt;S3&lt;br&gt;dest" style="ellipse;whiteSpace=wrap;html=1;fillColor=#F8CECC;strokeColor=#b85450;fontColor=#3d1512;fontSize=10;" vertex="1" parent="1">
+      <mxGeometry x="1170" y="340" width="65" height="65" as="geometry" />
+    </mxCell>
+
+    <!-- ===== ARCS ===== -->
+    <!-- Pickup -->
+    <mxCell id="pu_s3" value="(s3o, tpe_cfs)&#10;truck ~0.3d" style="fontSize=8;html=1;" edge="1" source="s3o" target="tpe_cfs" parent="1">
+      <mxGeometry relative="1" as="geometry" />
+    </mxCell>
+    <!-- CFS to origin airport -->
+    <mxCell id="cfs_tpe" value="(tpe_cfs, tpe)&#10;built ULD trucked, ~0.2d&#10;+ fixed CFS build-up time" style="fontSize=8;html=1;" edge="1" source="tpe_cfs" target="tpe" parent="1">
+      <mxGeometry relative="1" as="geometry" />
+    </mxCell>
+
+    <!-- Direct air arc TPE → JFK -->
+    <mxCell id="air_direct" value="(tpe, jfk) DIRECT&#10;CI001 / 16h&#10;LD3, LD7, PMC available" style="fontSize=8;html=1;strokeColor=#0066cc;strokeWidth=2;" edge="1" source="tpe" target="jfk" parent="1">
+      <mxGeometry relative="1" as="geometry" />
+    </mxCell>
+
+    <!-- Via HKG (CX564 + CX880) -->
+    <mxCell id="air_tpe_hkg" value="(tpe, hkg)&#10;CX564 / 1.5h&#10;belly LD3" style="fontSize=8;html=1;strokeColor=#0066cc;" edge="1" source="tpe" target="hkg" parent="1">
+      <mxGeometry relative="1" as="geometry" />
+    </mxCell>
+    <mxCell id="air_hkg_jfk" value="(hkg, jfk)&#10;CX880 / 16h&#10;belly LD3/LD7&#10;+ MCT at HKG ~4h" style="fontSize=8;html=1;strokeColor=#0066cc;" edge="1" source="hkg" target="jfk" parent="1">
+      <mxGeometry relative="1" as="geometry" />
+    </mxCell>
+
+    <!-- Via NRT (JL802 + JL004 — interline if different carriers, but here both JAL) -->
+    <mxCell id="air_tpe_nrt" value="(tpe, nrt)&#10;JL802 / 3h&#10;belly LD3" style="fontSize=8;html=1;strokeColor=#cc0066;" edge="1" source="tpe" target="nrt" parent="1">
+      <mxGeometry relative="1" as="geometry" />
+    </mxCell>
+    <mxCell id="air_nrt_jfk" value="(nrt, jfk)&#10;JL004 / 13h&#10;belly LD3/LD7&#10;+ MCT at NRT ~6h" style="fontSize=8;html=1;strokeColor=#cc0066;" edge="1" source="nrt" target="jfk" parent="1">
+      <mxGeometry relative="1" as="geometry" />
+    </mxCell>
+
+    <!-- Through-flight via ANC (5Y9123 in two legs - same aircraft) -->
+    <mxCell id="air_tpe_anc" value="(tpe, anc)&#10;&lt;b&gt;5Y9123 L1 / 9h&lt;/b&gt;&#10;freighter PMC+LD3/LD7" style="fontSize=8;html=1;strokeColor=#009933;strokeWidth=2;" edge="1" source="tpe" target="anc" parent="1">
+      <mxGeometry relative="1" as="geometry" />
+    </mxCell>
+    <mxCell id="air_anc_jfk" value="(anc, jfk)&#10;&lt;b&gt;5Y9123 L2 / 8h&lt;/b&gt;&#10;same aircraft, no re-ULD&#10;+ MCT at ANC ~1.5h" style="fontSize=8;html=1;strokeColor=#009933;strokeWidth=2;" edge="1" source="anc" target="jfk" parent="1">
+      <mxGeometry relative="1" as="geometry" />
+    </mxCell>
+
+    <!-- Destination airport to CFS -->
+    <mxCell id="dap_dcfs" value="(jfk, jfk_cfs)&#10;built ULD trucked, ~0.3d&#10;+ fixed CFS breakdown time" style="fontSize=8;html=1;" edge="1" source="jfk" target="jfk_cfs" parent="1">
+      <mxGeometry relative="1" as="geometry" />
+    </mxCell>
+
+    <!-- Dest CFS to consignee -->
+    <mxCell id="dcfs_nyc" value="(jfk_cfs, nyc)&#10;TRK / 0.3d" style="fontSize=8;html=1;" edge="1" source="jfk_cfs" target="nyc" parent="1">
+      <mxGeometry relative="1" as="geometry" />
+    </mxCell>
+
+    <!-- ===== ROUTING OPTION ANNOTATIONS ===== -->
+    <mxCell id="opt_box" value="" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;" vertex="1" parent="1">
+      <mxGeometry x="35" y="450" width="500" height="180" as="geometry" />
+    </mxCell>
+    <mxCell id="opt_title" value="&lt;b&gt;Path enumeration: A^k for S3 (TPE → NYC)&lt;/b&gt;" style="text;html=1;fontSize=10;align=left;verticalAlign=top;" vertex="1" parent="1">
+      <mxGeometry x="50" y="458" width="475" height="18" as="geometry" />
+    </mxCell>
+    <mxCell id="opt_text" value="&lt;b&gt;Path 1&lt;/b&gt; (direct):&#10;  s3o → tpe_cfs → tpe → jfk → jfk_cfs → nyc&#10;  Air arcs: 1   |   Transit: ~17h air + 1.4d ground&#10;&#10;&lt;b&gt;Path 2&lt;/b&gt; (via HKG, interline-free within Cathay):&#10;  s3o → tpe_cfs → tpe → hkg → jfk → jfk_cfs → nyc&#10;  Air arcs: 2   |   Transit: ~22h air (incl. MCT) + 1.4d ground&#10;&#10;&lt;b&gt;Path 3&lt;/b&gt; (via NRT, JAL both legs):&#10;  s3o → tpe_cfs → tpe → nrt → jfk → jfk_cfs → nyc&#10;  Air arcs: 2   |   Transit: ~22h air + ~6h MCT + 1.4d ground&#10;&#10;&lt;b&gt;Path 4&lt;/b&gt; (through-flight via ANC, freighter):&#10;  s3o → tpe_cfs → tpe → anc → jfk → jfk_cfs → nyc&#10;  Air arcs: 2 (same flight 5Y9123)   |   ~18.5h + 1.4d ground" style="text;html=1;fontSize=8;align=left;verticalAlign=top;" vertex="1" parent="1">
+      <mxGeometry x="50" y="478" width="475" height="148" as="geometry" />
+    </mxCell>
+
+    <!-- ===== NOTATION SIDEBAR ===== -->
+    <mxCell id="not_box" value="" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e1f0ff;strokeColor=#6c8ebf;" vertex="1" parent="1">
+      <mxGeometry x="555" y="450" width="385" height="180" as="geometry" />
+    </mxCell>
+    <mxCell id="not_title" value="&lt;b&gt;Notation for this subgraph&lt;/b&gt;" style="text;html=1;fontSize=10;align=left;verticalAlign=top;" vertex="1" parent="1">
+      <mxGeometry x="565" y="458" width="365" height="18" as="geometry" />
+    </mxCell>
+    <mxCell id="not_text" value="&lt;b&gt;k = 3&lt;/b&gt;  (shipment S3)&#10;&lt;b&gt;N_k&lt;/b&gt; = {s3o, tpe_cfs, tpe, hkg, nrt, anc, jfk, jfk_cfs, nyc}&#10;&lt;b&gt;A_k&lt;/b&gt; = pickup ∪ build ∪ air ∪ breakdown ∪ delivery&#10;&#10;&lt;b&gt;A^k_PU&lt;/b&gt; = {(s3o, tpe_cfs)}                pickup arcs&#10;&lt;b&gt;A^k_OC&lt;/b&gt; = {(tpe_cfs, tpe)}              CFS→origin airport&#10;&lt;b&gt;A^k_AIR&lt;/b&gt; = 5 arcs:&#10;     (tpe, jfk), (tpe, hkg), (hkg, jfk),&#10;     (tpe, nrt), (nrt, jfk), (tpe, anc), (anc, jfk)&#10;&lt;b&gt;A^k_DC&lt;/b&gt; = {(jfk, jfk_cfs)}              dest airport→CFS&#10;&lt;b&gt;A^k_FD&lt;/b&gt; = {(jfk_cfs, nyc)}              final delivery&#10;&#10;Each arc (i,j) ∈ A^k_AIR maps to one flight f ∈ F" style="text;html=1;fontSize=8;align=left;verticalAlign=top;fontFamily=monospace;" vertex="1" parent="1">
+      <mxGeometry x="565" y="478" width="365" height="148" as="geometry" />
+    </mxCell>
+
+    <!-- ===== ULD SIDEBAR ===== -->
+    <mxCell id="uld_box" value="" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f8cecc;strokeColor=#b85450;" vertex="1" parent="1">
+      <mxGeometry x="960" y="450" width="380" height="180" as="geometry" />
+    </mxCell>
+    <mxCell id="uld_title" value="&lt;b&gt;ULD assignment on a chosen path&lt;/b&gt;" style="text;html=1;fontSize=10;align=left;verticalAlign=top;" vertex="1" parent="1">
+      <mxGeometry x="970" y="458" width="360" height="18" as="geometry" />
+    </mxCell>
+    <mxCell id="uld_text" value="If Path 4 (5Y9123 through-flight via ANC) is selected:&#10;&#10;• Build at TPE-CFS:  1 LD3 contains shipment S3&#10;• Trucked to TPE airport, loaded onto 5Y9123 main deck&#10;• L1: TPE→ANC, ULD stays on aircraft (no re-ULD)&#10;• Technical stop at ANC: refuel + crew change only&#10;• L2: ANC→JFK, same ULD continues on same aircraft&#10;• At JFK: ULD unloaded, trucked to JFK-CFS&#10;• Broken down at JFK-CFS, S3 cargo released to NYC&#10;&#10;&lt;b&gt;ULD allocation accounting:&lt;/b&gt;&#10;• L1 (TPE→ANC) consumes 1 LD3 from contract c_5Y_L1&#10;• L2 (ANC→JFK) consumes 1 LD3 from contract c_5Y_L2&#10;• Both contracts may be the same (route-level) or different&#10;• Through-ULD saves rehandling cost at ANC, not ULD count" style="text;html=1;fontSize=8;align=left;verticalAlign=top;" vertex="1" parent="1">
+      <mxGeometry x="970" y="478" width="360" height="148" as="geometry" />
+    </mxCell>
+
+    <!-- ===== LEGEND ===== -->
+    <mxCell id="leg_box" value="" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#aaaaaa;" vertex="1" parent="1">
+      <mxGeometry x="35" y="650" width="1305" height="55" as="geometry" />
+    </mxCell>
+    <mxCell id="leg_text" value="&lt;b&gt;Subgraph G(N_k, A_k):&lt;/b&gt;  All possible routing arcs for shipment k. Routing decision selects a subset of A_k that forms a path from origin to destination. Each path is a sequence of arcs (i,j) where i,j ∈ N_k. The optimizer selects x_{ij}^k = 1 for arcs on the chosen path." style="text;html=1;fontSize=8;align=left;verticalAlign=middle;" vertex="1" parent="1">
+      <mxGeometry x="45" y="656" width="1285" height="16" as="geometry" />
+    </mxCell>
+    <mxCell id="leg_arcs2" value="&lt;b&gt;Arc colors:&lt;/b&gt;  &lt;font color='#0066cc'&gt;Blue&lt;/font&gt; = same-carrier air arc   &lt;font color='#cc0066'&gt;Red&lt;/font&gt; = interline (re-ULD required at hub)   &lt;font color='#009933'&gt;Green&lt;/font&gt; = freighter route   &lt;b&gt;Bold&lt;/b&gt; = through-flight (same flight number, multiple legs, no re-ULD at intermediate stop)" style="text;html=1;fontSize=8;align=left;verticalAlign=middle;" vertex="1" parent="1">
+      <mxGeometry x="45" y="676" width="1285" height="16" as="geometry" />
+    </mxCell>
+
+  </root>
+</mxGraphModel>

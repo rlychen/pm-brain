@@ -1,0 +1,1065 @@
+%% ocean_fcl_routing.tex
+%% Ocean FCL Multi-Commodity Routing — MVP Formal Model
+%% Phase 1 — must be approved before any code starts
+%% Status: Draft v2 — 2026-05-10
+
+\documentclass[11pt,a4paper]{article}
+
+\usepackage{amsmath,amssymb,amsthm}
+\usepackage{booktabs}
+\usepackage{geometry}
+\usepackage{hyperref}
+\usepackage{array}
+\usepackage{xcolor}
+\usepackage{enumitem}
+\usepackage{longtable}
+\usepackage{graphicx}
+
+\geometry{margin=2.5cm}
+\setlength{\parskip}{0.4em}
+\hypersetup{colorlinks=true, linkcolor=blue}
+
+\newcommand{\ceil}[1]{\left\lceil #1 \right\rceil}
+\newcommand{\floor}[1]{\left\lfloor #1 \right\rfloor}
+\newcommand{\defeq}{\triangleq}
+
+\theoremstyle{definition}
+\newtheorem{defn}{Definition}
+\newtheorem{remark}{Remark}
+
+\title{\textbf{Ocean FCL Multi-Commodity Routing}\\[0.4em]
+\large MVP Formal Model --- Phase 1, v2}
+\author{AI Freight Agent}
+\date{Draft --- 2026-05-10}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+Formal specification of the optimization model for the ocean FCL multi-commodity routing
+problem. The model is a Binary Multi-Commodity Flow problem on a commodity-specific
+subgraph derived from the physical freight network
+(see \texttt{docs/ocean\_fcl\_multi\_shipment\_graph.drawio}).
+Scope: FCL only, FEU+TEU containers, string-based carrier allocation capacity, deterministic
+time windows. Probabilistic objectives, hazmat/OOG cargo differentiation, and time-phased
+capacity management are explicitly deferred to P1.
+\end{abstract}
+
+\tableofcontents
+\newpage
+
+%%--------------------------------------------------------------------
+\section{Problem Statement}
+%%--------------------------------------------------------------------
+
+Given a set of shipment requests (commodities), each defined by an origin location,
+destination location, cargo volume, cargo weight, and time constraints, find a
+minimum-cost assignment of commodities to paths through the multimodal freight network such that:
+\begin{itemize}[noitemsep]
+  \item every commodity is delivered on or before its deadline,
+  \item no ocean sailing exceeds its vessel slot capacity,
+  \item no carrier service string exceeds its contracted forwarder allocation in any period, and
+  \item optional per-commodity budget caps are respected.
+\end{itemize}
+
+\paragraph{MVP scope.}
+\begin{itemize}[noitemsep]
+  \item FCL only; LCL deferred (PRD Open Question 8).
+  \item Container types: FEU (40$'$HC, $\approx 76$\,CBM usable, $\approx 26{,}500$\,kg payload) and TEU
+        (20$'$, $\approx 33$\,CBM usable, $\approx 24{,}000$\,kg payload). Optimizer selects mix.
+  \item Port dwell: fixed port-specific mean. Commodity-specific inspection model deferred to P1.
+  \item Carrier allocation: string-level monthly contracted block, with current utilization tracked.
+        Time-phased capacity release deferred to P1.
+  \item Objective: minimize total freight cost subject to deterministic time-window feasibility.
+        Probabilistic objectives deferred to P1.
+  \item No transshipment in MVP. Single-leg ocean sailing only.
+\end{itemize}
+
+%%--------------------------------------------------------------------
+\section{Graph Structure}
+%%--------------------------------------------------------------------
+
+\subsection{Physical Network Graph \texorpdfstring{$G(N, A)$}{G(N,A)}}
+
+The freight network is a directed graph $G = (N, A)$.
+
+\[
+  N = N_O \cup N_{\text{POL}} \cup N_{\text{POD},A} \cup N_{\text{POD},E} \cup N_D
+\]
+
+\begin{description}[leftmargin=3.2cm, labelwidth=3cm, style=nextline]
+  \item[$N_O$ — Origins] One per shipper origin door. Commodity source nodes.
+  \item[$N_{\text{POL}}$ — Ports of Loading] Container terminals (e.g., SHA, NGB, SZX). Shipments
+        arrive by pre-carriage, depart on vessel sailings.
+  \item[$N_{\text{POD},A}$ — POD Arrival] One per discharge port (e.g., LAX$_A$, LGB$_A$, SEA$_A$).
+        Vessel arrives; container cannot depart until dwell arc traversed.
+  \item[$N_{\text{POD},E}$ — POD Exit] One per discharge port (LAX$_E$, LGB$_E$, SEA$_E$).
+        Customs cleared; container available for inland pickup.
+  \item[$N_D$ — Destinations] One per delivery door. Commodity sink nodes.
+\end{description}
+
+\[
+  A = A_{\text{PC}} \cup A_{\text{OC}} \cup A_{\text{DW}} \cup A_{\text{IL}}
+\]
+
+\begin{description}[leftmargin=3.2cm, labelwidth=3cm, style=nextline]
+  \item[$A_{\text{PC}}$ — Pre-carriage] $(i,j)$, $i \in N_O$, $j \in N_{\text{POL}}$.
+        Truck from origin door to container terminal.
+  \item[$A_{\text{OC}}$ — Ocean sailings] $(i,j)$, $i \in N_{\text{POL}}$, $j \in N_{\text{POD},A}$.
+        One arc per scheduled carrier sailing (specific vessel, departure date, trade lane).
+  \item[$A_{\text{DW}}$ — Dwell] $(p_A, p_E)$, one per POD. Vessel unloading plus customs clearance.
+  \item[$A_{\text{IL}}$ — Inland] $(p_E, h)$, $p_E \in N_{\text{POD},E}$, $h \in N_D$.
+        Truck or intermodal rail, POD exit to destination door.
+\end{description}
+
+\begin{remark}[POD node expansion]
+Each physical POD is split into two nodes — arrival ($p_A$) and exit ($p_E$) — connected by a
+dwell arc. This makes port processing time an explicit model element and provides the structural
+hook for the P1 commodity-specific customs inspection model (Section~\ref{sec:deferred}).
+\end{remark}
+
+  \begin{figure}[h]
+    \centering
+    \includegraphics[width=\textwidth]{../docs/shipment_graph.pdf}
+    \caption{Multi-shipment freight network $G(N, A)$.}
+    \label{fig:multi_shipment_graph}
+  \end{figure}
+
+\subsection{Commodity-Specific Subgraph \texorpdfstring{$G(N_k, A_k)$}{G(Nk,Ak)}}
+\label{sec:subgraph}
+
+The MILP for commodity $k$ operates on a subgraph $G(N_k, A_k) \subseteq G(N, A)$ containing
+only arcs that (i) are time-feasible for commodity $k$ and (ii) lie on at least one complete
+path from $o(k)$ to $d(k)$. See Section~\ref{sec:prefilter} for the construction algorithm.
+
+
+
+
+%%--------------------------------------------------------------------
+\section{Sets and Indices}
+%%--------------------------------------------------------------------
+
+\begin{center}
+\begin{tabular}{lp{11cm}}
+\toprule
+Symbol & Description \\
+\midrule
+$K$ & Set of commodities, indexed by $k$ \\
+$N,\, A$ & All nodes and arcs \\
+$A_{\text{PC}},\, A_{\text{OC}},\, A_{\text{DW}},\, A_{\text{IL}}$ & Arc subsets by type \\
+$A^k \subseteq A$ & Feasible arc set for commodity $k$ (Section~\ref{sec:prefilter}) \\
+$A^k_S \defeq A^k \cap A_S$ & Feasible arcs of type $S$ for commodity $k$ \\
+$S$ & Set of carrier service strings (e.g., MSC Tiger, CMA CGM AEX-1) \\
+$T$ & Set of allocation time periods (monthly) \\
+$P(s)$ & Feasible (POL, POD) port pairs covered by string $s$ \\
+$N_k$ & Nodes incident to $A^k$: $N_k \defeq \{n : \exists\,(n,j) \in A^k \text{ or } \exists\,(i,n) \in A^k\}$. Used to eliminate vacuous flow constraints in P.1. \\
+$\tau_k(i)$ & Earliest arrival time of commodity $k$ at POL $i$: $\tau_k(i) \defeq t_k^{\text{rdy}} + \mu_{o(k),i}^{\text{PC}}$. Defined here for reference; computed in subgraph pre-filter step 1 (Section~\ref{sec:prefilter}). \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+%%--------------------------------------------------------------------
+\section{Parameters}
+%%--------------------------------------------------------------------
+
+\subsection{Commodity Parameters}
+
+\begin{center}
+\begin{tabular}{llp{6cm}l}
+\toprule
+Parameter & Symbol & Description & Unit \\
+\midrule
+Volume & $v_k$ & Cargo volume & CBM \\
+Weight & $w_k$ & Gross weight & kg \\
+FEU-equivalent count & $n_k$ & See Eq.~\eqref{eq:nk}; pre-computed & — \\
+Cargo ready & $t_k^{\text{rdy}}$ & Earliest pickup from origin door & datetime \\
+Deadline & $T_k^{\text{dead}}$ & Latest acceptable arrival at destination & datetime \\
+Origin & $o(k)$ & Source node $\in N_O$ & — \\
+Destination & $d(k)$ & Sink node $\in N_D$ & — \\
+Cargo type & $\tau_k$ & General / hazmat / temp-controlled / OOG & categorical \\
+HS code & $\text{hs}_k$ & 6-digit Harmonized System code (P1 customs model) & — \\
+Incoterm & $\text{inco}_k$ & EXW / FOB / CIF / DDP & — \\
+Budget cap & $B_k$ & Hard cost ceiling; $\infty$ if not set & USD \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\paragraph{Container count.}
+\begin{equation}
+  n_k \defeq \max\!\left(\ceil{\frac{v_k}{76}},\ \ceil{\frac{w_k}{26{,}500}}\right)
+  \label{eq:nk}
+\end{equation}
+
+This accounts for both volume (76\,CBM per 40$'$HC FEU) and weight (26,500\,kg payload limit
+per FEU). $n_k$ is the minimum number of FEU-sized moves for land transport; the optimizer
+may substitute some FEUs with TEUs on ocean arcs to reduce cost (Section~\ref{sec:containermix}).
+
+\paragraph{Container specifications.}
+
+\begin{center}
+\begin{tabular}{llllll}
+\toprule
+Container type & Code & TEU slots & Usable volume & Payload & Ocean freight rate \\
+\midrule
+20$'$ standard & TEU & 1 & 33\,CBM & 24{,}000\,kg & $\rho \cdot c_{ij}^{\text{FEU}}$, $\rho$ lane-specific (see \S\ref{sec:ocean-params}) \\
+40$'$ standard & FEU (std) & 2 & 67\,CBM & 26{,}500\,kg & $c_{ij}^{\text{FEU}} - \$50$--\$200 vs.\ HC \\
+40$'$ High Cube & FEU (HC) & 2 & 76\,CBM & 26{,}500\,kg & $c_{ij}^{\text{FEU}}$ (baseline; defined in \S\ref{sec:ocean-params}) \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\noindent MVP uses the 40$'$HC as the FEU type (76\,CBM, 26{,}500\,kg). The 40$'$ standard
+is deferred to P1. TEU-only routing for heavy, low-volume cargo is also P1.
+
+\paragraph{Container rate ratios.}
+The TEU/FEU cost ratio $\rho = c_{ij}^{\text{TEU}} / c_{ij}^{\text{FEU}}$ varies by trade lane.
+Historical averages 2020--May 2024 (Xeneta\footnote{\url{https://www.xeneta.com/blog/beware-a-potential-flaw-in-index-linked-ocean-container-shipping-contracts-which-could-cost-millions-of-dollars}}):
+
+\begin{center}
+\begin{tabular}{llcc}
+\toprule
+Trade lane & Route & $\rho$ (avg) & $\rho$ (range) \\
+\midrule
+TPEB & China -- US West Coast & 0.79 & 0.71--0.86 \\
+FEWB & Shanghai -- Antwerp    & 0.56 & 0.52--0.61 \\
+TAWB & N.\ Europe -- US East Coast & 0.78 & 0.68--0.94 \\
+\bottomrule
+\end{tabular}
+\end{center}
+\noindent Spot ratios fluctuate with equipment balance and demand cycles; on Far East -- North
+Europe, $\rho$ fell to 0.58 at peak demand (July 2024).\footnote{\url{https://www.xeneta.com/blog/dramatic-increases-in-feu-and-teu-ocean-container-market-spreads-key-considerations-for-shippers}}
+FEU (HC) vs.\ FEU (std) ocean freight premium: \$50--\$200 per container, reflecting the 13\%
+volume advantage of the HC over the standard 40$'$.\footnote{\url{https://www.icontainers.com/help/40-foot-high-cube-container/}}
+FEU (std) is not separately modelled in MVP.
+
+
+\begin{remark}[Cargo type in MVP]
+$\tau_k$ is recorded for all commodities but is not used in MVP constraints. Hazmat, OOG, and
+reefer cargo are routed identically to general cargo in MVP. The instance generator should
+restrict generated commodities to general cargo unless explicitly testing cargo-type extensions.
+\end{remark}
+
+\subsection{Pre-Carriage Arc Parameters}
+
+For each $(i,j) \in A_{\text{PC}}$:
+
+\begin{center}
+\begin{tabular}{llp{6cm}l}
+\toprule
+Parameter & Symbol & Description & Unit \\
+\midrule
+Cost & $c_{ij}^{\text{PC}}$ & Truck rate per container move. Scales by $n_k$ (one truck per container). & USD/move \\
+Mean transit & $\mu_{ij}^{\text{PC}}$ & Mean days, origin door to terminal gate & days \\
+Std dev & $\sigma_{ij}^{\text{PC}}$ & Std dev of transit time & days \\
+Road distance & $\text{dist}_{ij}^{\text{PC}}$ & Road distance (informational; used by generator) & km \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\subsection{Ocean Sailing Arc Parameters}
+\label{sec:ocean-params}
+
+For each $(i,j) \in A_{\text{OC}}$:
+
+\begin{center}
+\begin{tabular}{llp{5.5cm}l}
+\toprule
+Parameter & Symbol & Description & Unit \\
+\midrule
+ETD & $\text{ETD}_{ij}$ & Estimated time of departure from POL $i$ & datetime \\
+CY cutoff & $\text{CYC}_{ij}$ & Latest container arrival at terminal. $\text{CYC}_{ij} \leq \text{ETD}_{ij}$; typically $\text{ETD} - 4\,\text{d}$ & datetime \\
+Booking cutoff & $\text{BKG}_{ij}$ & Latest booking confirmation with carrier. \textit{[Note C2: Not enforced in MVP. P1: add as a hard pre-filter --- exclude any sailing where $\text{BKG}_{ij}$ has passed at solve time.]} & datetime \\
+FEU rate & $r_{ij}^{\text{FEU}}$ & Base ocean freight rate per 40$'$HC container & USD/FEU \\
+TEU rate & $r_{ij}^{\text{TEU}}$ & Base rate per 20$'$ container. Typically $0.56$--$0.86 \times r_{ij}^{\text{FEU}}$ (see rate ratio table) & USD/TEU \\
+BAF & $\text{BAF}_{ij}$ & Bunker adjustment per container (same fraction applied to FEU and TEU rates) & USD \\
+PSS & $\text{PSS}_{ij}$ & Peak Season Surcharge per container; zero if not applicable. \textit{[Note H5: Not in MVP cost formula. P1: add $+\,\text{PSS}_{ij}$ to the $c_{ij}^{\text{FEU}}$ derivation below and to the instance generator.]} & USD \\
+THC (POL) & $\text{THC}_{ij}^{\text{POL}}$ & Terminal handling at origin per container & USD \\
+THC (POD) & $\text{THC}_{ij}^{\text{POD}}$ & Terminal handling at destination per container & USD \\
+Vessel capacity & $\text{cap}_{ij}^{\text{TEU}}$ & Per-sailing slot cap (constraint P.2). MVP proxy: $\alpha \cdot \text{alloc}(s_{ij}, t_{ij})$, $\alpha \approx 0.20$ (configurable). & TEU \\
+String & $s_{ij} \in S$ & Carrier service string this sailing belongs to & — \\
+Period & $t_{ij} \in T$ & Allocation period (month) this ETD falls in & — \\
+Mean transit & $\mu_{ij}^{\text{OC}}$ & Mean transit days, POL to POD & days \\
+Std dev & $\sigma_{ij}^{\text{OC}}$ & Std dev of transit & days \\
+Carrier & $\text{carrier}_{ij}$ & Carrier name (e.g., MSC, CMA CGM, COSCO) & — \\
+Vessel & $\text{vessel}_{ij}$ & Vessel name & — \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\noindent All-in per-FEU cost (derived):
+\[
+  c_{ij}^{\text{FEU}} \defeq r_{ij}^{\text{FEU}} + \text{BAF}_{ij} + \text{THC}_{ij}^{\text{POL}} + \text{THC}_{ij}^{\text{POD}}
+\]
+Similarly $c_{ij}^{\text{TEU}}$ uses $r_{ij}^{\text{TEU}}$ in place of $r_{ij}^{\text{FEU}}$.
+
+\subsection{Dwell Arc Parameters}
+
+For each $(p_A, p_E) \in A_{\text{DW}}$:
+
+\begin{center}
+\begin{tabular}{llp{5cm}l}
+\toprule
+Parameter & Symbol & Description & MVP value \\
+\midrule
+Mean dwell & $\mu_p^{\text{DW}}$ & Unloading + customs clearance (no exam) & USLAX/USLGB: 3.5\,d; USSEA: 2.5\,d \\
+Std dev & $\sigma_p^{\text{DW}}$ & Std dev of total dwell & USLAX/USLGB: 1.5\,d; USSEA: 1.0\,d \\
+Free time & $f_p$ & Free days before storage charges & 5\,d \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\noindent P1: dwell becomes a function of $\text{hs}_k$, C-TPAT status, origin country, consignee
+history. See Section~\ref{sec:deferred}.
+
+\subsection{Inland Arc Parameters}
+
+For each $(p_E, h) \in A_{\text{IL}}$:
+
+\begin{center}
+\begin{tabular}{llp{5.5cm}l}
+\toprule
+Parameter & Symbol & Description & Unit \\
+\midrule
+Cost & $c_{p_E h}^{\text{IL}}$ & Flat rate per container move (one chassis per container) & USD/move \\
+Mean transit & $\mu_{p_E h}^{\text{IL}}$ & Mean days, POD exit to destination & days \\
+Std dev & $\sigma_{p_E h}^{\text{IL}}$ & Std dev of transit & days \\
+Mode & $\text{mode}_{p_E h}$ & FTL truck or intermodal rail & — \\
+Road distance & $\text{dist}_{p_E h}^{\text{IL}}$ & Informational & km \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\subsection{Carrier Allocation Parameters (String-Level)}
+\label{sec:alloc-params}
+
+Ocean carriers sell capacity in blocks on \emph{service strings}. A string is a fixed port-call
+loop (e.g., MSC Tiger TPEB: SHA $\to$ NGB $\to$ SZX $\to$ USLAX $\to$ USLGB). A forwarder's
+contracted allocation covers \emph{all} (POL, POD) pairs on a string — not a specific port pair.
+
+For each string $s \in S$ and period $t \in T$:
+
+\begin{center}
+\begin{tabular}{llp{6cm}l}
+\toprule
+Parameter & Symbol & Description & Unit \\
+\midrule
+Contracted allocation & $\text{alloc}(s,t)$ & Forwarder's contracted block on string $s$ in period $t$ & TEU \\
+Current utilization & $\text{util}(s,t)$ & TEU already booked/confirmed on $s$ in $t$ at solve time & TEU \\
+Remaining capacity & $\text{rem}(s,t)$ & $\text{alloc}(s,t) - \text{util}(s,t)$; input to optimizer & TEU \\
+Vessel cap fraction & $\alpha$ & Fraction of string allocation used as per-sailing slot cap proxy. Default $0.20$. & — \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+$\text{rem}(s,t)$ is computed before each solve from the shipment state store. The optimizer
+sees only remaining capacity — utilization is an external state input, not a decision variable.
+
+\begin{remark}[String vs.\ port-pair capacity]
+A forwarder's contracted block on MSC Tiger (e.g., 400\,TEU slots/month) applies to
+\emph{all sailings} of that string in the month, across \emph{all} POL/POD combinations.
+A booking on SHA$\to$USLAX and a booking on NGB$\to$USLGB both draw from the same pool.
+\end{remark}
+
+\begin{remark}[Unit convention]
+All allocation quantities --- $\text{alloc}(s,t)$, $\text{util}(s,t)$, $\text{rem}(s,t)$ ---
+are in \textbf{TEU slots}, consistent with $\text{slots}(k,ij)$.
+Real carrier BSA contracts may be quoted in FEU (common on TPEB) or TEU depending on carrier
+and trade lane. Convert to TEU slots at input time: $\text{alloc}_{\text{FEU}} \times 2 =
+\text{alloc in TEU slots}$.
+\end{remark}
+
+\subsection{Pre-Computed Container Mix}
+\label{sec:containermix}
+
+For each commodity $k$ and each feasible ocean arc $(i,j) \in A^k_{\text{OC}}$, we pre-compute
+the optimal container mix that minimizes ocean cost while satisfying volume and weight constraints:
+
+\begin{align}
+  (f_k^*, t_k^*)\big|_{ij} &= \arg\min_{f,\,t \,\geq\, 0,\; \text{integer}} \;\;
+    f \cdot c_{ij}^{\text{FEU}} + t \cdot c_{ij}^{\text{TEU}} \notag \\
+  &\text{s.t.}\quad 76f + 33t \geq v_k \quad \text{(volume)} \label{eq:mix-vol} \\
+  &\phantom{\text{s.t.}}\quad 26{,}500f + 24{,}000t \geq w_k \quad \text{(weight)} \label{eq:mix-wt} \\
+  &\phantom{\text{s.t.}}\quad f, t \in \mathbb{Z}_{\geq 0} \notag
+\end{align}
+
+This is a 2-variable integer program, solvable analytically (see Section~\ref{sec:mix-algo}).
+The results feed into the main MILP as parameters:
+
+\begin{center}
+\begin{tabular}{lll}
+\toprule
+Derived parameter & Expression & Description \\
+\midrule
+$\text{cost}(k,ij)$ & $f_k^*\big|_{ij} \cdot c_{ij}^{\text{FEU}} + t_k^*\big|_{ij} \cdot c_{ij}^{\text{TEU}}$ & Optimal ocean cost for commodity $k$ on sailing $(i,j)$ \\
+$\text{slots}(k,ij)$ & $2 f_k^*\big|_{ij} + t_k^*\big|_{ij}$ & TEU slots consumed on the vessel \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\begin{remark}[$n_k$ and physical container count]
+$n_k$ counts FEU-sized moves and is used to price the land legs: $n_k$ trucks at rate
+$c^{\text{PC}}$ or $c^{\text{IL}}$, one chassis per container. On ocean arcs, the mix
+pre-computation may assign a different combination of FEUs and TEUs. The total physical
+container count on sailing $(i,j)$ is $f_k^*\big|_{ij} + t_k^*\big|_{ij}$, which is always
+$\geq n_k$ (you cannot cover the same cargo with fewer physical containers than the FEU
+minimum). The gap is at most 1:
+\[
+  \bigl(f_k^*\big|_{ij} + t_k^*\big|_{ij}\bigr) - n_k \leq 1
+\]
+This holds because replacing one FEU with two or more TEUs is never cost-effective at
+$\rho \in (0.56, 0.86)$: three TEUs cost $3\rho \geq 1.68\,c_{ij}^{\text{FEU}}$ but cover
+only $99\,\text{CBM}$, less volume per dollar than one FEU. The only viable substitution is
+replacing the single residual FEU with one TEU when the remaining volume fits ($\leq 33$\,CBM),
+which leaves the total count unchanged at $n_k$. In practice the deviation is zero; the bound
+$\leq 1$ is a theoretical guarantee.
+\end{remark}
+
+\paragraph{Container mix analytical solution.}
+\label{sec:mix-algo}
+Given cost ratio $\rho = c_{ij}^{\text{TEU}} / c_{ij}^{\text{FEU}} \in (0.56, 0.86)$ (see rate ratio table above) and constraints
+\eqref{eq:mix-vol}--\eqref{eq:mix-wt}:
+
+\begin{enumerate}[noitemsep]
+  \item Compute the minimum FEU count needed from volume and weight:
+        $f_v = \ceil{v_k / 76}$, $f_w = \ceil{w_k / 26{,}500}$. Set $f_{\min} = \max(f_v, f_w)$.
+  \item For each candidate $f \in \{f_{\min},\, f_{\min}-1,\, \ldots,\, 0\}$:
+        \begin{enumerate}[noitemsep, label=\alph*.]
+          \item $t_v = \max\!\left(0,\, \ceil{(v_k - 76f)/33}\right)$
+                (minimum TEUs to cover remaining volume).
+          \item $t_w = \max\!\left(0,\, \ceil{(w_k - 26{,}500f)/24{,}000}\right)$
+                (minimum TEUs to cover remaining weight).
+          \item $t = \max(t_v, t_w)$.
+          \item Evaluate $C(f,t) = f \cdot c_{ij}^{\text{FEU}} + t \cdot c_{ij}^{\text{TEU}}$.
+        \end{enumerate}
+  \item Return $(f^*, t^*) = \arg\min C(f,t)$ over all candidates from step 2.
+\end{enumerate}
+
+The enumeration runs over at most $f_{\min}+1$ candidates, which is small in practice
+(typical $f_{\min} \leq 5$). Since $\rho \in (0.63, 0.83)$, one FEU covers
+$76/33 \approx 2.3$ TEU-equivalents of volume at a cost of $1/\rho \in (1.20, 1.59)$
+TEU-equivalents --- so FEU is always cheaper per CBM. The optimal solution is therefore
+$(f_{\min}, 0)$ or $(f_{\min}-1, t)$ for small residual $t$, but explicit enumeration
+guarantees optimality without relying on this structural property.
+
+%%--------------------------------------------------------------------
+\section{Commodity-Specific Subgraph Construction}
+\label{sec:prefilter}
+%%--------------------------------------------------------------------
+
+Before the MILP is built, we construct $G(N_k, A_k)$ for each commodity $k$. The subgraph
+contains only arcs that are (i) time-feasible and (ii) reachable on a complete path from
+$o(k)$ to $d(k)$. Any arc not on such a path is excluded.
+
+\paragraph{Key structural observation.}
+In this network, each commodity $k$ has \emph{at most one pre-carriage arc per POL}: the arc
+$(o(k), j)$ for each $j \in N_{\text{POL}}$. The transit time $\mu_{o(k),j}^{\text{PC}}$ is
+therefore unambiguous for a given (commodity, POL) pair. This eliminates the arc-pairing
+ambiguity that would arise if multiple different pre-carriage routes from different origins
+could reach the same POL with different transit times.
+
+\paragraph{Construction algorithm.}
+
+\begin{enumerate}
+  \item \textbf{Pre-carriage pass.} For each POL $i \in N_{\text{POL}}$, compute earliest arrival:
+    \[
+      \tau_k(i) \defeq t_k^{\text{rdy}} + \mu_{o(k),i}^{\text{PC}}
+    \]
+    Arc $(o(k), i)$ is \emph{candidate} iff $\exists\, (i,j) \in A_{\text{OC}}$ such that
+    $\tau_k(i) \leq \text{CYC}_{ij}$ (can make at least one sailing from $i$).
+
+  \item \textbf{Ocean sailing pass.} For each arc $(i,j) \in A_{\text{OC}}$:
+    \[
+      (i,j) \in A^k_{\text{OC}} \iff
+        \tau_k(i) \leq \text{CYC}_{ij}
+        \;\text{ and }\;
+        \text{ETD}_{ij} + \mu_{ij}^{\text{OC}} + \mu_p^{\text{DW}} + \mu_{p_E,d(k)}^{\text{IL}}
+          \leq T_k^{\text{dead}}
+    \]
+    where $j \in N_{\text{POD},A}$, $p$ is the physical port at $j$, and $p_E$ is its exit node.
+    The first condition is the CY cutoff check (directly against commodity $k$'s pre-carriage
+    transit to POL $i$ — no ambiguity). The second is the end-to-end deadline check.
+
+  \item \textbf{Dwell pass.} Include dwell arc $(p_A, p_E)$ iff $\exists\, (i,j) \in A^k_{\text{OC}}$
+    with $j = p_A$ (i.e., some feasible sailing arrives at that POD).
+
+  \item \textbf{Inland pass.} For each POD exit $p_E$ and inland arc $(p_E, h) \in A_{\text{IL}}$:
+    \[
+      (p_E, h) \in A^k_{\text{IL}} \iff h = d(k) \;\text{ and }\;
+      \exists\, (i,j) \in A^k_{\text{OC}} : \text{ETD}_{ij} + \mu_{ij}^{\text{OC}}
+        + \mu_p^{\text{DW}} + \mu_{p_E h}^{\text{IL}} \leq T_k^{\text{dead}}
+    \]
+
+  \item \textbf{Trim pre-carriage.} Remove any pre-carriage arc $(o(k), i)$ for which no
+    ocean arc $(i,j) \in A^k_{\text{OC}}$ remains adjacent to $i$.
+
+  \item \textbf{Reachability sweep.} Run a forward BFS from $o(k)$ and a backward BFS from
+    $d(k)$ on the candidate arc set. Retain only arcs on paths reachable from both ends.
+    Result: $G(N_k, A_k)$ where every arc lies on at least one complete $o(k) \to d(k)$ path.
+\end{enumerate}
+
+\paragraph{Pre-filter scope guard.}
+\textit{[Note H3: The pre-filter only processes (origin, destination) pairs whose trade lane
+is covered by the configured carrier services. O-D pairs outside the configured scope must be
+hard-rejected before the pre-filter runs, with a structured error returned to the agent.]}
+
+\textit{[Note H4: Hazmat, OOG, and reefer commodities ($\tau_k \neq \text{general}$) must be
+rejected at the pre-filter boundary with a structured infeasibility report. Routing them
+identically to general cargo produces silently incorrect results. The instance generator
+already restricts to general cargo (see §4.1 Remark); enforce the same check at runtime.]}
+
+\textit{[Note H2: The deadline check in step 2 uses mean transit times. When a sailing's margin
+is tight, mean-based inclusion overstates on-time probability. P1: add a safety buffer
+$\delta \approx 1$--$2\,\text{d}$ to the deadline check:
+$\text{ETD}_{ij} + \mu_{ij}^{\text{OC}} + \mu_p^{\text{DW}} + \mu_{p_E,d(k)}^{\text{IL}} + \delta \leq T_k^{\text{dead}}$.
+The CYC risk note in Open Item 3 partially addresses this for the pre-carriage side.]}
+
+\paragraph{Infeasible commodities.}
+If $A^k = \emptyset$ after the above (no feasible path exists), commodity $k$ is \emph{removed
+from $K$ before the MILP is built}. The pre-solve returns a structured infeasibility report:
+\[
+  \texttt{\{commodity\_id, reason: "no\_feasible\_path",
+  earliest\_achievable\_days, deadline\_shortfall\_days\}}
+\]
+The agent surfaces this to the user with a recommended recovery action (relax deadline,
+consider air mode). The MILP is never passed an infeasible commodity.
+
+%%--------------------------------------------------------------------
+\section{Decision Variables}
+%%--------------------------------------------------------------------
+
+\[
+  x_{ij}^k \in \{0, 1\} \qquad \forall\, k \in K,\; (i,j) \in A^k
+\]
+
+$x_{ij}^k = 1$ if commodity $k$ is routed on arc $(i,j)$.
+
+\begin{remark}[No-split semantics]
+$x_{ij}^k = 1$ means \emph{all} containers for commodity $k$ traverse arc $(i,j)$ together.
+Commodity splitting across multiple sailings or paths is prohibited. For an ocean arc, this
+means all $f_k^*\big|_{ij}$ FEUs and $t_k^*\big|_{ij}$ TEUs depart on the same vessel.
+This reflects standard FCL booking practice: one booking covers all containers for a shipment.
+\end{remark}
+
+%%--------------------------------------------------------------------
+\section{Objective Function}
+%%--------------------------------------------------------------------
+
+\begin{equation}
+  \min \;\; Z = \sum_{k \in K} \left[
+    \underbrace{\sum_{(i,j) \in A^k_{\text{PC}}} n_k \cdot c_{ij}^{\text{PC}} \cdot x_{ij}^k}_{\text{pre-carriage}}
+    +
+    \underbrace{\sum_{(i,j) \in A^k_{\text{OC}}} \text{cost}(k,ij) \cdot x_{ij}^k}_{\text{ocean (optimal mix)}}
+    +
+    \underbrace{\sum_{(p_E,h) \in A^k_{\text{IL}}} n_k \cdot c_{p_E h}^{\text{IL}} \cdot x_{p_E h}^k}_{\text{inland}}
+  \right]
+  \label{eq:obj}
+\end{equation}
+
+\paragraph{Cost structure.}
+\begin{itemize}[noitemsep]
+  \item \textit{Pre-carriage:} $n_k$ trucks (one chassis per container), each at flat rate $c_{ij}^{\text{PC}}$.
+  \item \textit{Ocean:} $\text{cost}(k,ij)$ is the pre-computed optimal cost for commodity $k$ on sailing $(i,j)$,
+        accounting for the optimal FEU/TEU mix. Dwell cost (port storage beyond free time) deferred to P1.
+  \item \textit{Inland:} $n_k$ chassis moves, each at flat rate $c_{p_E h}^{\text{IL}}$ (one chassis per container for FCL drayage).
+\end{itemize}
+
+\textit{[Note C1: Pre-carriage and inland costs use $n_k$ as the container-count multiplier. The actual count on the chosen sailing is $f_k^*\big|_{ij} + t_k^*\big|_{ij}$. Because $2\rho > 1$ for all $\rho \in (0.56, 0.86)$, the optimizer never replaces a FEU with 2 TEUs, so $f^*+t^* = n_k$ in every feasible solution. Using $n_k$ is therefore exact, not an approximation.]}
+
+%%--------------------------------------------------------------------
+\section{Constraints}
+%%--------------------------------------------------------------------
+
+\subsection{Flow Conservation}
+
+For each commodity $k \in K$ and node $n \in N_k$:
+
+\begin{equation}
+  \sum_{(n,j) \in A^k} x_{nj}^k \;-\; \sum_{(i,n) \in A^k} x_{in}^k \;=\; b_k(n)
+  \qquad \forall\, k \in K,\; n \in N_k
+  \label{eq:flow}
+\end{equation}
+
+\[
+  b_k(n) = \begin{cases}
+    +1 & n = o(k) \quad \text{(net outflow = 1 at source)} \\
+    -1 & n = d(k) \quad \text{(net inflow = 1 at sink)} \\
+    \phantom{+}0 & \text{otherwise}
+  \end{cases}
+\]
+
+Flow conservation ensures each commodity routes along exactly one complete path (one arc of
+each type: PC, OC, DW, IL). The subgraph construction guarantees any arc in $A^k$ is on a
+valid complete path, so feasibility is structurally enforced — no additional time constraints
+are needed in the MILP.
+
+\subsection{Vessel Capacity Constraint}
+
+For each ocean arc $(i,j) \in A_{\text{OC}}$:
+
+\begin{equation}
+  \sum_{k \in K:\, (i,j) \in A^k_{\text{OC}}} \text{slots}(k,ij) \cdot x_{ij}^k
+  \;\leq\; \text{cap}_{ij}^{\text{TEU}}
+  \qquad \forall\, (i,j) \in A_{\text{OC}}
+  \label{eq:vcap}
+\end{equation}
+
+The total TEU slots consumed on a single sailing cannot exceed that sailing's slot
+availability. Without this constraint, the string allocation constraint alone allows all
+monthly forwarder allocation to concentrate on one departure, which is physically impossible.
+
+\paragraph{Proxy for $\text{cap}_{ij}^{\text{TEU}}$.}
+Real per-sailing slot availability is not directly observable by a forwarder. As a
+non-binding placeholder:
+\[
+  \text{cap}_{ij}^{\text{TEU}} \defeq \alpha \cdot \text{alloc}(s_{ij},\, t_{ij})
+\]
+$\alpha \approx 0.20$ (configurable). Rationale: with $\approx 4$ sailings per month per
+string, $\alpha = 0.20$ caps any single departure at roughly 80\,\% of the full monthly
+contracted block --- large enough to be non-binding on typical MVP instances, tight enough
+to prevent degenerate concentration. See Open Item~7 for the path to a real estimate.
+
+\subsection{String Allocation Constraint}
+
+For each carrier service string $s \in S$ and time period $t \in T$:
+
+\begin{equation}
+  \sum_{\substack{(i,j) \in A_{\text{OC}} \\ s_{ij} = s,\; t_{ij} = t}}
+  \sum_{k \in K:\, (i,j) \in A^k_{\text{OC}}} \text{slots}(k,ij) \cdot x_{ij}^k
+  \;\leq\; \text{rem}(s,t)
+  \qquad \forall\, s \in S,\; t \in T
+  \label{eq:alloc}
+\end{equation}
+
+The total TEU slots consumed across \emph{all sailings of string $s$ in period $t$} cannot
+exceed the forwarder's remaining allocated capacity. This constraint couples routing decisions
+across all (POL, POD) pairs on the same string within the same month.
+
+
+\subsection{Budget Cap (Optional)}
+
+For each $k \in K$ with finite $B_k$:
+
+\begin{equation}
+  \sum_{(i,j) \in A^k_{\text{PC}}} n_k c_{ij}^{\text{PC}} x_{ij}^k
+  + \sum_{(i,j) \in A^k_{\text{OC}}} \text{cost}(k,ij)\, x_{ij}^k
+  + \sum_{(p_E,h) \in A^k_{\text{IL}}} n_k c_{p_E h}^{\text{IL}} x_{p_E h}^k
+  \leq B_k
+  \label{eq:budget}
+\end{equation}
+
+\subsection{Variable Domains}
+
+\begin{equation}
+  x_{ij}^k \in \{0,1\} \qquad \forall\, k \in K,\; (i,j) \in A^k \label{eq:domain}
+\end{equation}
+
+%%--------------------------------------------------------------------
+\section{Complete Formulation}
+%%--------------------------------------------------------------------
+
+\begin{align}
+  \min \quad & Z = \sum_{k \in K} \left[
+    \sum_{(i,j) \in A^k_{\text{PC}}} n_k c_{ij}^{\text{PC}} x_{ij}^k
+    + \sum_{(i,j) \in A^k_{\text{OC}}} \text{cost}(k,ij)\, x_{ij}^k
+    + \sum_{(p_E,h) \in A^k_{\text{IL}}} n_k c_{p_E h}^{\text{IL}} x_{p_E h}^k
+  \right] \tag{P} \label{eq:P} \\[4pt]
+  \text{s.t.} \quad
+  & \sum_{(n,j) \in A^k} x_{nj}^k - \sum_{(i,n) \in A^k} x_{in}^k = b_k(n)
+    && \forall\, k \in K,\; n \in N_k \tag{P.1} \\[2pt]
+  & \sum_{k \in K:\, (i,j) \in A^k_{\text{OC}}} \text{slots}(k,ij)\, x_{ij}^k
+      \leq \text{cap}_{ij}^{\text{TEU}}
+    && \forall\, (i,j) \in A_{\text{OC}} \tag{P.2} \\[2pt]
+  & \sum_{\substack{(i,j) \in A_{\text{OC}} \\ s_{ij}=s,\, t_{ij}=t}} \sum_{k:\, (i,j) \in A^k_{\text{OC}}} \text{slots}(k,ij)\, x_{ij}^k
+      \leq \text{rem}(s,t)
+    && \forall\, s \in S,\; t \in T \tag{P.3} \\[2pt]
+  & \text{(P.4): budget constraints \eqref{eq:budget} for commodities with finite } B_k \notag \\[2pt]
+  & x_{ij}^k \in \{0,1\}
+    && \forall\, k \in K,\; (i,j) \in A^k \tag{P.5}
+\end{align}
+
+\begin{remark}[Problem structure]
+(P) is a Binary Multi-Commodity Network Flow (BMCNF). The LP relaxation of a pure MCF is
+TU; coupling via the string allocation constraint (P.3) breaks TU, making
+integrality non-guaranteed. For small MVP instances ($|K| \leq 50$), HiGHS solves to
+optimality easily. At forwarder scale ($|K| \geq 500$), LP bound quality and symmetry
+breaking become relevant (see Section~\ref{sec:solver}).
+\end{remark}
+
+%%--------------------------------------------------------------------
+\section{Graph Decomposition for Independent Subproblems}
+\label{sec:decomp}
+%%--------------------------------------------------------------------
+
+When routing a mixed batch of commodities (e.g., from both TPEB and FEWB trade lanes),
+groups of commodities may share no supply arcs and no allocation pools — making their
+routing decisions completely independent. Identifying and solving these independently
+reduces MILP solve time and enables parallelism.
+
+\subsection{Commodity-Supply Graph}
+
+Define a commodity-supply graph $H = (K, E_H)$:
+\begin{itemize}[noitemsep]
+  \item \textbf{Nodes:} one per commodity $k \in K$.
+  \item \textbf{Edges:} $(k_1, k_2) \in E_H$ iff commodities $k_1$ and $k_2$ share supply:
+    \begin{enumerate}[noitemsep]
+      \item $\exists\, (i,j) \in A^{k_1}_{\text{OC}} \cap A^{k_2}_{\text{OC}}$ (same feasible sailing), \textit{or}
+      \item $\exists\, s \in S,\; t \in T$ such that both $k_1$ and $k_2$ have a feasible
+            sailing on string $s$ in period $t$: i.e., $\exists\,(i,j) \in A^{k_1}_{\text{OC}}$
+            with $s_{ij}=s,\; t_{ij}=t$, and $\exists\,(i',j') \in A^{k_2}_{\text{OC}}$
+            with $s_{i'j'}=s,\; t_{i'j'}=t$ (same allocation pool). Arc membership in
+            $A^k_{\text{OC}}$ is determined by the subgraph pre-filter
+            (Section~\ref{sec:prefilter}), not the MILP solve itself.
+    \end{enumerate}
+\end{itemize}
+
+\subsection{Decomposition Algorithm}
+
+\begin{enumerate}[noitemsep]
+  \item Build $H$ from $\{A^k_{\text{OC}}\}_{k \in K}$ and the sailing-to-string mapping $s_{ij}$.
+  \item Find connected components $\mathcal{C}_1, \mathcal{C}_2, \ldots$ of $H$.
+  \item For each component $\mathcal{C}_i$: solve the MILP restricted to $K_i = \mathcal{C}_i$.
+  \item Merge solutions.
+\end{enumerate}
+
+\textit{[Note M9: $\text{rem}(s,t)$ must be computed once before the decomposition and
+held fixed for all component solves. Updating it between components --- e.g., subtracting
+slots used by a solved component before solving the next --- is incorrect: the allocation
+constraint in each component references the full remaining capacity at solve time, and
+components are, by construction, independent.]}
+
+\paragraph{Example.} TPEB commodities (SHA$\to$USLAX on MSC Tiger) and FEWB commodities
+(SHA$\to$NLRTM on MSC Silk) use different strings with separate allocation pools and no
+overlapping sailings. They form disconnected components in $H$ and are solved independently.
+Within TPEB, two commodities that both have SHA$\to$USLAX in their feasible arc sets are
+connected in $H$ (shared sailing, shared allocation) and solved jointly.
+
+%%--------------------------------------------------------------------
+\section{Transit Time Estimation}
+\label{sec:transit}
+%%--------------------------------------------------------------------
+
+Transit times are used in the subgraph pre-filter and by the instance generator. They are
+parameters in MVP; in P1 they become distribution parameters for chance constraints.
+
+\subsection{Trucking (Pre-Carriage and Inland)}
+
+\paragraph{Geodesic distance (Haversine):}
+\[
+  d_{ij}^{\text{geo}} = 2R \arcsin\!\sqrt{
+    \sin^2\tfrac{\phi_j - \phi_i}{2}
+    + \cos\phi_i \cos\phi_j \sin^2\tfrac{\lambda_j - \lambda_i}{2}
+  }, \quad R = 6{,}371\,\text{km}
+\]
+
+\paragraph{Road distance:}
+\[
+  \text{dist}_{ij}^{\text{road}} = \kappa \cdot d_{ij}^{\text{geo}}, \quad
+  \kappa = \begin{cases}
+    1.25 & \text{China pre-carriage} \\
+    1.20 & \text{US inland}
+  \end{cases}
+\]
+
+\paragraph{Transit time:}
+\[
+  \mu_{ij}^{\text{truck}} = \frac{\text{dist}_{ij}^{\text{road}}}{v^{\text{truck}}}, \quad
+  v^{\text{truck}} = \begin{cases}
+    600\,\text{km/day} & \text{China (urban congestion, regulations)} \\
+    800\,\text{km/day} & \text{US OTR (HOS 11-hour limit)}
+  \end{cases}
+\]
+
+\paragraph{Std dev:} $\sigma_{ij}^{\text{truck}} = 0.15\,\mu_{ij}^{\text{truck}}$ (15\% CV).
+
+\paragraph{Transit time range (for robust model, P1):}
+Each arc carries $[\mu - 2\sigma,\; \mu + 2\sigma]$ as a 95\% interval. The instance
+generator outputs both mean and std dev; the range is the hook for P1 robustness.
+
+\subsection{Ocean Sailing}
+
+\paragraph{Sailing distance:}
+\[
+  \text{dist}_{ij}^{\text{sail}} = 1.15 \cdot d_{ij}^{\text{geo}} \quad \text{(Trans-Pacific lane factor)}
+\]
+\textit{[Note H1: 1.15 is calibrated for TPEB. For FEWB and TAWB, the factor is approximately
+1.06 (shorter great-circle deviation on the Europe--Asia and transatlantic lanes). P1: replace
+the scalar with a per-arc or per-trade-lane parameter $\gamma_{ij}$.]}
+
+\paragraph{Transit time:}
+\[
+  \mu_{ij}^{\text{OC}} = \frac{\text{dist}_{ij}^{\text{sail}}}{600\,\text{km/day}}
+  \quad (\approx 13.5\,\text{knots average, inclusive of port approach and anchorage})
+\]
+
+\paragraph{Validation:} SHA$\to$USLAX geodesic $\approx 9{,}200$\,km. Sailing distance
+$\approx 10{,}580$\,km. Transit $\approx 17.6$\,days. Published carrier schedule for this
+lane: 14--18 days. Estimate is within range.
+
+\paragraph{Std dev:} $\sigma_{ij}^{\text{OC}} = 0.10\,\mu_{ij}^{\text{OC}}$ (10\% CV).
+
+%%--------------------------------------------------------------------
+\section{Instance Generator Specification}
+\label{sec:instance}
+%%--------------------------------------------------------------------
+
+The instance generator produces synthetic but geographically and commercially realistic
+problem instances for solver testing. The generator is demand-first: commodity requests
+are generated first, then supply (sailings) is built to cover that demand at a configurable
+capacity utilization level.
+
+\textbf{Note on build process.} The generator implementation is a joint session between the
+developer and the system designer. Do not implement independently.
+
+\subsection{Configuration Schema}
+
+All instance parameters are controlled by a \texttt{GeneratorConfig} object:
+
+\begin{verbatim}
+GeneratorConfig:
+
+  # Trade lanes (drives POL/POD sets, carrier services, realistic schedules)
+  trade_lanes: List[str]         # e.g. ["TPEB", "FEWB", "TAWB"]
+
+  # Demand
+  n_commodities: int             # total commodities to generate
+  start_date: date               # scenario anchor date
+  date_horizon_days: int         # window over which cargo-ready dates spread
+  cargo_ready_spread_days: int   # subset of horizon for cargo-ready sampling
+
+  # Commodity profile
+  volume_range_cbm: [float, float]      # [min, max]
+  weight_range_kg: [float, float]       # [min, max] — upper end tests weight-limited n_k
+  deadline_slack_days: [int, int]       # [min, max] days added beyond fastest feasible path
+  cargo_type_mix: dict                  # {general: 0.80, hazmat: 0.10, reefer: 0.10}
+                                        # MVP: all routed as general; mix recorded only
+
+  # Supply calibration
+  load_factor: float             # target (total TEU demand) / (total TEU capacity)
+                                 # 0.5 = easy, 0.8 = realistic tight, >1.0 = capacity-infeasible
+  target_infeasible_fraction: float  # fraction of commodities with no feasible path
+                                     # injected deliberately; tests infeasibility handling
+  sailings_per_week_per_string: int  # 1 = weekly service (standard)
+  n_carriers_per_lane: int           # competing carriers per trade lane
+
+  # Carrier allocation (string-level)
+  allocation_per_service_month_teu: int  # forwarder contracted block per string per month
+  initial_utilization_fraction: float   # fraction already booked at solve time
+                                        # rem = alloc * (1 - initial_utilization_fraction)
+  target_alloc_utilization_fraction: float  # target fraction of alloc consumed at solve optimum
+                                            # used to calibrate alloc vs cap (see step 5)
+  vessel_cap_alpha: float               # alpha in cap_{ij} = alpha * alloc(s,t); default 0.20
+
+  # Container cost (market-calibrated defaults)
+  feu_base_rate_range_usd: [float, float]   # [min, max], e.g. [2000, 6000]
+  teu_feu_cost_ratio: float                 # TEU rate = FEU rate * ratio; TPEB: ~0.79, FEWB: ~0.56, TAWB: ~0.78 (Xeneta 2020-2024)
+  feu_hc_premium_usd: float                 # surcharge for 40'HC vs 40' standard; ~$50-150
+  baf_fraction: float                       # BAF as fraction of base rate; ~0.15-0.25
+  thc_pol_range_usd: [float, float]         # per container
+  thc_pod_range_usd: [float, float]         # per container
+
+  # Transit time
+  transit_sigma_fraction: float   # sigma = fraction * mean for all arc types; default 0.12
+                                  # [Note M5: Section 9 specifies 0.15 for trucking and 0.10
+                                  #  for ocean. This config field is a single override. P1:
+                                  #  split into trucking_sigma_fraction and ocean_sigma_fraction.]
+  vessel_speed_kmday: float       # default 600 (~13.5 knots)
+
+  # Random seed
+  random_seed: int
+\end{verbatim}
+
+\subsection{Trade Lane Definitions}
+
+\begin{center}
+\begin{tabular}{lllll}
+\toprule
+Code & Direction & POL ports & POD ports & Example strings \\
+\midrule
+TPEB & Asia $\to$ US West & SHA, NGB, SZX & USLAX, USLGB, USSEA & MSC Tiger, CMA CGM AEX-1, ONE NE5 \\
+FEWB & Asia $\to$ Europe & SHA, NGB, SZX, SGSIN & NLRTM, DEHAM, GBFXT, BEFBR & MSC Silk, Maersk AE-1, CMA CGM FAL1 \\
+TAWB & Europe $\to$ US East & NLRTM, DEHAM, GBFXT, BEFBR & USNYK, USSAV, USBAL, USORF & MSC Britannia, Maersk TA1, Hapag Lloyd TAE \\
+TPWB & US West $\to$ Asia & USLAX, USLGB, USSEA & SHA, NGB, SZX & (return legs of TPEB strings) \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\subsection{Demand-First Generation Algorithm}
+
+\begin{enumerate}
+  \item \textbf{Generate commodities.}
+    \begin{enumerate}[noitemsep]
+      \item Sample origin city from cities near the POLs of the configured trade lanes.
+      \item Sample destination city from cities near the PODs.
+      \item Sample $v_k \sim \text{Uniform}(v_{\min}, v_{\max})$,
+            $w_k \sim \text{Uniform}(w_{\min}, w_{\max})$.
+      \item Compute $n_k = \max(\ceil{v_k/76}, \ceil{w_k/26{,}500})$.
+      \item Sample $t_k^{\text{rdy}}$ uniformly over \texttt{[start\_date, start\_date + cargo\_ready\_spread\_days]}.
+    \end{enumerate}
+
+  \item \textbf{Compute minimum feasible time for each commodity.}
+    \begin{enumerate}[noitemsep]
+      \item For each (origin, POL) pair: compute pre-carriage transit $\mu_{o(k),j}^{\text{PC}}$.
+      \item Add CY buffer (4 days).
+      \item Add fastest ocean transit to any reachable POD.
+      \item Add port dwell.
+      \item Add fastest inland transit to destination.
+      \item $\text{min\_time}_k$ = minimum over all (origin $\to$ POL $\to$ POD $\to$ destination) paths.
+    \end{enumerate}
+
+  \item \textbf{Set deadlines.}
+    \begin{itemize}[noitemsep]
+      \item Normal commodities: $T_k^{\text{dead}} = t_k^{\text{rdy}} + \text{min\_time}_k
+            + \text{Uniform}(\text{deadline\_slack\_min}, \text{deadline\_slack\_max})$.
+      \item Infeasible commodities (fraction = \texttt{target\_infeasible\_fraction}):
+            $T_k^{\text{dead}} = t_k^{\text{rdy}} + 0.7 \times \text{min\_time}_k$ (impossible).
+    \end{itemize}
+
+  \item \textbf{Generate sailings (demand-driven).}
+    \begin{enumerate}[noitemsep]
+      \item For each (POL, POD, trade lane) pair, determine the cargo-ready date window
+            requiring coverage: $[t_k^{\text{rdy}}, t_k^{\text{rdy}} + \max\,\mu^{\text{PC}}]$ across all commodities.
+      \item Generate weekly sailings (one per string per week) covering this window.
+      \item Assign realistic carrier, service, and vessel names from the trade lane table.
+      \item Compute $\mu_{ij}^{\text{OC}}$ and $\sigma_{ij}^{\text{OC}}$ via Section~\ref{sec:transit}.
+      \item Set $\text{CYC}_{ij} = \text{ETD}_{ij} - 4\,\text{days}$.
+            \textit{Sync note: this 4-day buffer must match the value used in step 2b of the
+            minimum-feasible-time computation. Both occurrences must be updated together if
+            per-port CYC variation is introduced (P1 extension).}
+      \item \textbf{Calibrate per-sailing capacity to hit \texttt{load\_factor}:}
+            $\text{cap}_{ij}^{\text{TEU}} = \text{round}(\text{total TEU demand on this lane}) /
+            (\text{n\_sailings} \times \texttt{load\_factor})$.
+            \textit{[Note C3: Circular dependency --- $\text{cap}_{ij}^{\text{TEU}}$ depends on
+            total TEU demand, which depends on which sailings are feasible (step 4a/b), which
+            depends on schedule coverage. Resolve by computing demand in step 1 first (with
+            $n_k$ container counts), then setting cap. Do not re-run step 1 after setting cap.]}
+    \end{enumerate}
+
+  \item \textbf{Set allocation state.}
+    $\text{rem}(s, t) = \texttt{allocation\_per\_service\_month\_teu}
+    \times (1 - \texttt{initial\_utilization\_fraction})$.
+    \textit{Calibration: set
+    $\texttt{allocation\_per\_service\_month\_teu} \approx
+    \Bigl(\sum_{(i,j):\, s_{ij}=s,\, t_{ij}=t} \text{cap}_{ij}^{\text{TEU}}\Bigr)
+    \times \texttt{target\_alloc\_utilization\_fraction}$
+    so that the string allocation constraint (P.3) binds at the intended load level.}
+
+  \item \textbf{Pre-compute container mix.} For each (commodity, feasible sailing) pair, run
+    the mix algorithm (Section~\ref{sec:mix-algo}) to get $f_k^*$, $t_k^*$, $\text{cost}(k,ij)$,
+    $\text{slots}(k,ij)$.
+
+  \item \textbf{Run subgraph construction} (Section~\ref{sec:prefilter}).
+    Log infeasible commodities. Verify infeasible fraction is within 20\% of target;
+    adjust \texttt{deadline\_slack} if needed and re-run.
+
+  \item \textbf{Run decomposition} (Section~\ref{sec:decomp}). Log connected components and
+    their sizes. This verifies that TPEB/FEWB mixed instances decompose as expected.
+
+  \item \textbf{Serialize} to JSON with schema matching parameter tables above.
+    Include random seed and config for reproducibility.
+\end{enumerate}
+
+\subsection{Solver Concerns}
+\label{sec:solver}
+
+\begin{itemize}[noitemsep]
+  \item \textbf{Instance size:} At $|K|=50$, $\approx 72$ arcs, and $\approx 30$ feasible arcs per commodity, total binary variables $\approx 1{,}500$. Trivial for HiGHS.
+  \item \textbf{Symmetry:} Inject small random perturbations ($\pm 1\%$) to FEU rates to break
+        symmetry between near-identical sailings on the same lane.
+  \item \textbf{LP bound:} The string allocation constraint (P.3) is the primary source of LP bound weakness. For tight-capacity instances, the gap may require B\&B. HiGHS handles this well for MVP sizes.
+        \textit{[Note M4: The gap bound $\bigl(f_k^*\big|_{ij} + t_k^*\big|_{ij}\bigr) - n_k \leq 1$
+        in §4.5 Remark is proven by a cost argument: $2\rho > 1$ for all $\rho > 0.5$, so the
+        optimizer never replaces 1 FEU with 2 TEUs. The current remark text mentions ``three TEUs''
+        which is the wrong comparison unit --- the binding case is 2 TEUs vs 1 FEU. Rephrase in
+        a future edit.]}
+\end{itemize}
+
+%%--------------------------------------------------------------------
+\section{Deferred: P1 Extensions}
+\label{sec:deferred}
+%%--------------------------------------------------------------------
+
+\subsection{Commodity-Specific Customs Inspection Model (P1)}
+
+Dwell arc weight becomes a function of commodity attributes:
+\[
+  \mu_k^{\text{DW}}(p) = \mu_p^{\text{unload}} + t^{\text{no-exam}}
+    + p_k^{\text{exam}}(p) \cdot t^{\text{exam}}
+\]
+\[
+  p_k^{\text{exam}}(p) = \operatorname{clip}\!\left(
+    \lambda_p^{\text{base}} \cdot \eta_k^{\text{HS}} \cdot \eta_k^{\text{orig}} \cdot (1 - \delta_k^{\text{CTPAT}}),\; 0,\; 1
+  \right)
+\]
+
+\subsection{Time-Phased Capacity Release (P1)}
+
+Even with $\text{rem}(s,t)$ available, a forwarder may not want to commit all remaining
+capacity in one routing run — future urgent shipments may need it. This requires
+forecasting future demand and releasing capacity in tranches:
+\[
+  \text{open}(s,t,\ell) \leq \text{rem}(s,t)
+\]
+where $\ell$ is the routing run (batch) index and $\text{open}(s,t,\ell)$ is the capacity
+released for run $\ell$. Requires a demand forecast model. Deferred.
+
+\subsection{Probabilistic Delivery Constraint (P1)}
+
+Replace deterministic deadline feasibility with:
+\[
+  \Pr\!\left(\text{delivery time}_k \leq T_k^{\text{dead}}\right) \geq \alpha_k
+\]
+where $\alpha_k \in \{0.80, 0.90, 0.95\}$ maps to service level (Economy/Standard/Express).
+
+\subsection{Other P1 Items}
+
+TEU-only container option for heavy cargo; multi-objective Pareto frontier (cost vs.\ transit time vs.\ on-time probability); port storage cost in objective; carrier allocation caps as soft constraints with penalty; transshipment arcs; multi-HS-code commodity schema (real FCL bookings can consolidate multiple products with different HS codes --- MVP uses a single $\text{hs}_k$ field, which is harmless while the customs model is deferred; P1 should replace $\text{hs}_k$ with a list and derive inspection risk as the maximum risk tier across all codes in the shipment).
+
+%%--------------------------------------------------------------------
+\section{Open Items}
+%%--------------------------------------------------------------------
+
+\begin{enumerate}
+  \item \textbf{String allocation granularity:} Current model uses monthly periods for
+        allocation. Some carrier contracts use 13 four-week periods per year rather than
+        calendar months. Confirm with design partners before implementing.
+
+  \item \textbf{Multi-POL / transshipment strings:} Some strings have calls at multiple
+        Chinese ports (e.g., SHA $\to$ NGB $\to$ SZX before crossing). A booking on SHA$\to$USLAX
+        and NGB$\to$USLAX on the same sailing are not independent — they're on the same vessel.
+        The current model treats them as independent sailings, which may overstate available
+        capacity. Deferred to when transshipment arcs are added in P1.
+
+  \item \textbf{CYC compliance risk:} The subgraph construction uses mean transit times.
+        A pre-carriage arc with mean transit exactly at the CYC has $\approx 50\%$ rollover risk.
+        Flag this in the agent's output when the margin is $< 0.5$ days.
+
+  \item \textbf{Infeasibility report schema:} Define the JSON schema for the infeasibility
+        report before coding the pre-filter. Minimum fields: \texttt{commodity\_id, reason,
+        earliest\_achievable\_days, deadline\_shortfall\_days, nearest\_feasible\_deadline}.
+
+  \item \textbf{Generator: sailing schedule realism:} Real carrier schedules have port-specific
+        cutoff windows, vessel-rotation identifiers, and multi-port calls. The generator
+        should reproduce these from public schedule data, not fabricate them.
+
+  \item \textbf{BSA contract unit convention:} The model uses TEU slots internally for all
+        allocation quantities ($\text{alloc}(s,t)$, $\text{util}(s,t)$, $\text{rem}(s,t)$).
+        Real BSA contracts on TPEB are commonly quoted in FEU; other trade lanes may use TEU
+        or gross tonnage. Confirm with design partner: (a) are contracts quoted in FEU or TEU
+        on the primary TPEB lanes, and (b) is the $\times 2$ conversion
+        ($\text{alloc}_{\text{FEU}} \times 2 = \text{alloc in TEU slots}$) standard across
+        all contract types? See also the unit convention remark in
+        Section~\ref{sec:alloc-params}.
+
+  \item \textbf{Vessel capacity proxy (P.2):} The per-sailing cap $\text{cap}_{ij}^{\text{TEU}}
+        = \alpha \cdot \text{alloc}(s_{ij}, t_{ij})$ with $\alpha = 0.20$ is a placeholder.
+        The right estimate is the fraction of the vessel's actual TEU capacity reserved for
+        this forwarder on this string --- which requires carrier contract data or an AIS-based
+        slot utilization feed. Candidate approaches: (a) request utilization reports directly
+        from carriers in the BSA contract, (b) infer from AIS vessel identifiers and
+        known vessel TEU capacities (publicly available), (c) use $\alpha = 0.5$ as a
+        less conservative default once nominal carrier vessel sizes are known.
+        \textit{Until real data is available, $\alpha = 0.20$ keeps the constraint non-binding
+        while providing the structural guard against degenerate solutions.}
+\end{enumerate}
+
+\end{document}

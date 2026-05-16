@@ -1,0 +1,230 @@
+<mxGraphModel dx="1422" dy="762" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1600" pageHeight="900" math="0" shadow="0">
+  <root>
+    <mxCell id="0" />
+    <mxCell id="1" parent="0" />
+
+    <!-- TITLE -->
+    <mxCell id="title" value="Multi-Shipment Trucking Planning Graph — FTL / PTL / LTL with Shared Supply" style="text;html=1;strokeColor=none;fillColor=none;align=center;fontSize=13;fontStyle=1;" vertex="1" parent="1">
+      <mxGeometry x="50" y="8" width="1500" height="22" as="geometry" />
+    </mxCell>
+    <mxCell id="sub" value="S1: HOU → DAL (LTL natural) | S2: HOU → CHI (PTL natural) | S3: ATL → NYC (FTL only — LTL refused)        Three mode options per shipment. LTL routes through carrier service centers (SC). PTL/FTL bypass SCs (direct truck). Blue nodes = shared supply." style="text;html=1;strokeColor=none;fillColor=none;align=center;fontSize=9;fontStyle=2;fontColor=#555555;" vertex="1" parent="1">
+      <mxGeometry x="50" y="28" width="1500" height="28" as="geometry" />
+    </mxCell>
+
+    <!-- SECTION HEADERS -->
+    <mxCell id="h_origin" value="Origin shipper" style="text;html=1;strokeColor=none;fillColor=none;align=center;fontSize=9;fontStyle=2;fontColor=#888888;" vertex="1" parent="1">
+      <mxGeometry x="10" y="62" width="120" height="16" as="geometry" />
+    </mxCell>
+    <mxCell id="h_pu" value="Pickup" style="text;html=1;strokeColor=none;fillColor=none;align=center;fontSize=9;fontStyle=2;fontColor=#888888;" vertex="1" parent="1">
+      <mxGeometry x="125" y="62" width="100" height="16" as="geometry" />
+    </mxCell>
+    <mxCell id="h_ltl_o" value="LTL Origin SC (per carrier)" style="text;html=1;strokeColor=none;fillColor=none;align=center;fontSize=9;fontStyle=2;fontColor=#888888;" vertex="1" parent="1">
+      <mxGeometry x="220" y="62" width="180" height="16" as="geometry" />
+    </mxCell>
+    <mxCell id="h_lh" value="Linehaul (LTL: SC-to-SC | PTL/FTL: direct)" style="text;html=1;strokeColor=none;fillColor=none;align=center;fontSize=9;fontStyle=2;fontColor=#888888;" vertex="1" parent="1">
+      <mxGeometry x="420" y="62" width="430" height="16" as="geometry" />
+    </mxCell>
+    <mxCell id="h_ltl_d" value="LTL Destination SC (per carrier)" style="text;html=1;strokeColor=none;fillColor=none;align=center;fontSize=9;fontStyle=2;fontColor=#888888;" vertex="1" parent="1">
+      <mxGeometry x="860" y="62" width="200" height="16" as="geometry" />
+    </mxCell>
+    <mxCell id="h_del" value="Final delivery" style="text;html=1;strokeColor=none;fillColor=none;align=center;fontSize=9;fontStyle=2;fontColor=#888888;" vertex="1" parent="1">
+      <mxGeometry x="1075" y="62" width="100" height="16" as="geometry" />
+    </mxCell>
+    <mxCell id="h_dest" value="Consignee" style="text;html=1;strokeColor=none;fillColor=none;align=center;fontSize=9;fontStyle=2;fontColor=#888888;" vertex="1" parent="1">
+      <mxGeometry x="1175" y="62" width="120" height="16" as="geometry" />
+    </mxCell>
+
+    <!-- ===== ORIGIN SHIPPERS (with cargo profiles) ===== -->
+    <mxCell id="s3o" value="&lt;b&gt;S3&lt;/b&gt;&lt;br&gt;ATL&lt;br&gt;&lt;font style='font-size:8px'&gt;24 pallets&lt;br&gt;60 m³ / 18t&lt;br&gt;Class 70&lt;/font&gt;" style="ellipse;whiteSpace=wrap;html=1;fillColor=#F8CECC;strokeColor=#b85450;fontColor=#3d1512;fontSize=9;" vertex="1" parent="1">
+      <mxGeometry x="35" y="100" width="80" height="80" as="geometry" />
+    </mxCell>
+    <mxCell id="s2o" value="&lt;b&gt;S2&lt;/b&gt;&lt;br&gt;HOU&lt;br&gt;&lt;font style='font-size:8px'&gt;10 pallets&lt;br&gt;18 m³ / 8t&lt;br&gt;FAK 92.5&lt;/font&gt;" style="ellipse;whiteSpace=wrap;html=1;fillColor=#E1D5E7;strokeColor=#9673A6;fontColor=#1a0033;fontSize=9;" vertex="1" parent="1">
+      <mxGeometry x="35" y="300" width="80" height="80" as="geometry" />
+    </mxCell>
+    <mxCell id="s1o" value="&lt;b&gt;S1&lt;/b&gt;&lt;br&gt;HOU&lt;br&gt;&lt;font style='font-size:8px'&gt;4 pallets&lt;br&gt;2.5 m³ / 1.5t&lt;br&gt;Class 50&lt;/font&gt;" style="ellipse;whiteSpace=wrap;html=1;fillColor=#FFE6CC;strokeColor=#d6b656;fontColor=#3d2b00;fontSize=9;" vertex="1" parent="1">
+      <mxGeometry x="35" y="500" width="80" height="80" as="geometry" />
+    </mxCell>
+
+    <!-- ===== LTL ORIGIN SERVICE CENTERS (shared supply, blue) ===== -->
+    <mxCell id="od_hou" value="OD&#10;HOU-SC" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=10;fontStyle=1;verticalAlign=middle;align=center;" vertex="1" parent="1">
+      <mxGeometry x="240" y="390" width="80" height="55" as="geometry" />
+    </mxCell>
+    <mxCell id="fxf_hou" value="FXF&#10;HOU-SC" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=10;fontStyle=1;verticalAlign=middle;align=center;" vertex="1" parent="1">
+      <mxGeometry x="240" y="460" width="80" height="55" as="geometry" />
+    </mxCell>
+
+    <!-- ===== LTL DESTINATION SERVICE CENTERS ===== -->
+    <mxCell id="od_chi" value="OD&#10;CHI-SC" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=10;fontStyle=1;verticalAlign=middle;align=center;" vertex="1" parent="1">
+      <mxGeometry x="880" y="270" width="80" height="55" as="geometry" />
+    </mxCell>
+    <mxCell id="fxf_chi" value="FXF&#10;CHI-SC" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=10;fontStyle=1;verticalAlign=middle;align=center;" vertex="1" parent="1">
+      <mxGeometry x="880" y="335" width="80" height="55" as="geometry" />
+    </mxCell>
+    <mxCell id="od_dal" value="OD&#10;DAL-SC" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=10;fontStyle=1;verticalAlign=middle;align=center;" vertex="1" parent="1">
+      <mxGeometry x="880" y="480" width="80" height="55" as="geometry" />
+    </mxCell>
+    <mxCell id="fxf_dal" value="FXF&#10;DAL-SC" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=10;fontStyle=1;verticalAlign=middle;align=center;" vertex="1" parent="1">
+      <mxGeometry x="880" y="545" width="80" height="55" as="geometry" />
+    </mxCell>
+
+    <!-- ===== CONSIGNEES ===== -->
+    <mxCell id="nyc" value="&lt;b&gt;NYC&lt;/b&gt;&lt;br&gt;S3" style="ellipse;whiteSpace=wrap;html=1;fillColor=#F8CECC;strokeColor=#b85450;fontColor=#3d1512;fontSize=10;" vertex="1" parent="1">
+      <mxGeometry x="1180" y="120" width="65" height="65" as="geometry" />
+    </mxCell>
+    <mxCell id="chi" value="&lt;b&gt;CHI&lt;/b&gt;&lt;br&gt;S2" style="ellipse;whiteSpace=wrap;html=1;fillColor=#E1D5E7;strokeColor=#9673A6;fontColor=#1a0033;fontSize=10;" vertex="1" parent="1">
+      <mxGeometry x="1180" y="305" width="65" height="65" as="geometry" />
+    </mxCell>
+    <mxCell id="dal" value="&lt;b&gt;DAL&lt;/b&gt;&lt;br&gt;S1" style="ellipse;whiteSpace=wrap;html=1;fillColor=#FFE6CC;strokeColor=#d6b656;fontColor=#3d2b00;fontSize=10;" vertex="1" parent="1">
+      <mxGeometry x="1180" y="510" width="65" height="65" as="geometry" />
+    </mxCell>
+
+    <!-- ===== S3 LTL REFUSAL ANNOTATION ===== -->
+    <mxCell id="s3_refusal" value="✗ LTL REFUSED&#10;&#10;Linear ft: 40&#10;(cap 12 ft)&#10;&#10;P.6 hard refusal" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffd6d6;strokeColor=#cc0000;fontSize=8;fontStyle=1;fontColor=#990000;verticalAlign=middle;align=center;" vertex="1" parent="1">
+      <mxGeometry x="240" y="115" width="100" height="80" as="geometry" />
+    </mxCell>
+
+    <!-- ===== PICKUP ARCS (Shipper → LTL Origin SC) ===== -->
+    <!-- S1 → OD-HOU, FXF-HOU -->
+    <mxCell id="pu_s1_od" value="local TRK&#10;~0.4d" style="fontSize=8;html=1;strokeColor=#0066cc;" edge="1" source="s1o" target="od_hou" parent="1">
+      <mxGeometry relative="1" as="geometry" />
+    </mxCell>
+    <mxCell id="pu_s1_fxf" value="local TRK&#10;~0.4d" style="fontSize=8;html=1;strokeColor=#0066cc;" edge="1" source="s1o" target="fxf_hou" parent="1">
+      <mxGeometry relative="1" as="geometry" />
+    </mxCell>
+    <!-- S2 → OD-HOU, FXF-HOU (same SCs, shared supply!) -->
+    <mxCell id="pu_s2_od" value="local TRK&#10;~0.4d" style="fontSize=8;html=1;strokeColor=#0066cc;" edge="1" source="s2o" target="od_hou" parent="1">
+      <mxGeometry relative="1" as="geometry" />
+    </mxCell>
+    <mxCell id="pu_s2_fxf" value="local TRK&#10;~0.4d" style="fontSize=8;html=1;strokeColor=#0066cc;" edge="1" source="s2o" target="fxf_hou" parent="1">
+      <mxGeometry relative="1" as="geometry" />
+    </mxCell>
+
+    <!-- ===== LTL LINEHAUL (SC-to-SC per carrier) ===== -->
+    <!-- S1 LTL options: OD-HOU → OD-DAL, FXF-HOU → FXF-DAL -->
+    <mxCell id="lh_od_dal" value="OD linehaul&#10;HOU→DAL / 2d&#10;p_acc=0.95, ρ_re=1.05" style="fontSize=8;html=1;strokeColor=#0066cc;" edge="1" source="od_hou" target="od_dal" parent="1">
+      <mxGeometry relative="1" as="geometry" />
+    </mxCell>
+    <mxCell id="lh_fxf_dal" value="FXF linehaul&#10;HOU→DAL / 2d&#10;p_acc=0.93, ρ_re=1.07" style="fontSize=8;html=1;strokeColor=#0066cc;" edge="1" source="fxf_hou" target="fxf_dal" parent="1">
+      <mxGeometry relative="1" as="geometry" />
+    </mxCell>
+    <!-- S2 LTL options: OD-HOU → OD-CHI, FXF-HOU → FXF-CHI (CAPACITY LOAD on LTL — 16.7 lin ft) -->
+    <mxCell id="lh_od_chi" value="OD linehaul&#10;HOU→CHI / 3d&#10;&lt;font color='#cc0000'&gt;⚠ Capacity Load&lt;/font&gt;" style="fontSize=8;html=1;strokeColor=#cc0066;dashed=1;" edge="1" source="od_hou" target="od_chi" parent="1">
+      <mxGeometry relative="1" as="geometry" />
+    </mxCell>
+    <mxCell id="lh_fxf_chi" value="FXF linehaul&#10;HOU→CHI / 3d&#10;&lt;font color='#cc0000'&gt;⚠ Capacity Load&lt;/font&gt;" style="fontSize=8;html=1;strokeColor=#cc0066;dashed=1;" edge="1" source="fxf_hou" target="fxf_chi" parent="1">
+      <mxGeometry relative="1" as="geometry" />
+    </mxCell>
+
+    <!-- ===== LTL DELIVERY (Destination SC → Consignee) ===== -->
+    <mxCell id="del_od_dal_s1" value="local TRK&#10;~0.4d" style="fontSize=8;html=1;strokeColor=#0066cc;" edge="1" source="od_dal" target="dal" parent="1">
+      <mxGeometry relative="1" as="geometry" />
+    </mxCell>
+    <mxCell id="del_fxf_dal_s1" value="local TRK&#10;~0.4d" style="fontSize=8;html=1;strokeColor=#0066cc;" edge="1" source="fxf_dal" target="dal" parent="1">
+      <mxGeometry relative="1" as="geometry" />
+    </mxCell>
+    <mxCell id="del_od_chi_s2" value="local TRK&#10;~0.4d" style="fontSize=8;html=1;strokeColor=#0066cc;" edge="1" source="od_chi" target="chi" parent="1">
+      <mxGeometry relative="1" as="geometry" />
+    </mxCell>
+    <mxCell id="del_fxf_chi_s2" value="local TRK&#10;~0.4d" style="fontSize=8;html=1;strokeColor=#0066cc;" edge="1" source="fxf_chi" target="chi" parent="1">
+      <mxGeometry relative="1" as="geometry" />
+    </mxCell>
+
+    <!-- ===== PTL DIRECT ARCS (orange, bypass LTL network) ===== -->
+    <mxCell id="ptl_s1" value="PTL direct (Daylight)&#10;HOU→DAL / 1.5d / $1,200&#10;p_acc=0.85, ρ_re=1.15" style="fontSize=8;html=1;strokeColor=#ff9900;strokeWidth=2;" edge="1" source="s1o" target="dal" parent="1">
+      <mxGeometry relative="1" as="geometry" />
+      <mxCell id="ptl_s1_pt" style="" parent="1">
+        <mxGeometry relative="1" as="geometry">
+          <Array as="points">
+            <mxPoint x="600" y="650" />
+          </Array>
+        </mxGeometry>
+      </mxCell>
+    </mxCell>
+    <mxCell id="ptl_s2" value="PTL direct (Pilot Volume)&#10;HOU→CHI / 2.5d / $2,400&#10;p_acc=0.80, ρ_re=1.20" style="fontSize=8;html=1;strokeColor=#ff9900;strokeWidth=2;" edge="1" source="s2o" target="chi" parent="1">
+      <mxGeometry relative="1" as="geometry">
+        <Array as="points">
+          <mxPoint x="600" y="240" />
+        </Array>
+      </mxGeometry>
+    </mxCell>
+    <mxCell id="ptl_s3" value="PTL direct (R+L Volume)&#10;ATL→NYC / 3d / $3,200&#10;p_acc=0.75, ρ_re=1.20&#10;&lt;font color='#cc0000'&gt;⚠ at PTL weight cap&lt;/font&gt;" style="fontSize=8;html=1;strokeColor=#ff9900;strokeWidth=2;dashed=1;" edge="1" source="s3o" target="nyc" parent="1">
+      <mxGeometry relative="1" as="geometry" />
+    </mxCell>
+
+    <!-- ===== FTL DIRECT ARCS (green, contract solid / spot dashed) ===== -->
+    <mxCell id="ftl_s1_c" value="FTL contract (Schneider)&#10;HOU→DAL / 1d / $1,800&#10;p_acc=0.92, ρ_re=1.10" style="fontSize=8;html=1;strokeColor=#009933;strokeWidth=2;" edge="1" source="s1o" target="dal" parent="1">
+      <mxGeometry relative="1" as="geometry">
+        <Array as="points">
+          <mxPoint x="600" y="710" />
+        </Array>
+      </mxGeometry>
+    </mxCell>
+    <mxCell id="ftl_s2_c" value="FTL contract (Knight)&#10;HOU→CHI / 2d / $3,400&#10;p_acc=0.90, ρ_re=1.10" style="fontSize=8;html=1;strokeColor=#009933;strokeWidth=2;" edge="1" source="s2o" target="chi" parent="1">
+      <mxGeometry relative="1" as="geometry">
+        <Array as="points">
+          <mxPoint x="600" y="180" />
+        </Array>
+      </mxGeometry>
+    </mxCell>
+    <mxCell id="ftl_s2_spot" value="FTL spot (DAT)&#10;HOU→CHI / 2d / $3,100&#10;p_acc=0.55, ρ_re=1.25" style="fontSize=8;html=1;strokeColor=#009933;dashed=1;" edge="1" source="s2o" target="chi" parent="1">
+      <mxGeometry relative="1" as="geometry">
+        <Array as="points">
+          <mxPoint x="600" y="220" />
+        </Array>
+      </mxGeometry>
+    </mxCell>
+    <mxCell id="ftl_s3_c" value="FTL contract (Werner)&#10;ATL→NYC / 2.5d / $4,200&#10;p_acc=0.88, ρ_re=1.10" style="fontSize=8;html=1;strokeColor=#009933;strokeWidth=2;" edge="1" source="s3o" target="nyc" parent="1">
+      <mxGeometry relative="1" as="geometry" />
+    </mxCell>
+    <mxCell id="ftl_s3_spot" value="FTL spot (Truckstop)&#10;ATL→NYC / 2.5d / $3,800&#10;p_acc=0.50, ρ_re=1.25" style="fontSize=8;html=1;strokeColor=#009933;dashed=1;" edge="1" source="s3o" target="nyc" parent="1">
+      <mxGeometry relative="1" as="geometry">
+        <Array as="points">
+          <mxPoint x="600" y="80" />
+        </Array>
+      </mxGeometry>
+    </mxCell>
+
+    <!-- ===== MODE / PRICING SIDEBAR ===== -->
+    <mxCell id="modes_box" value="&lt;b&gt;Three Modes — Pricing Logic&lt;/b&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;fontSize=10;verticalAlign=top;align=left;fontStyle=1;" vertex="1" parent="1">
+      <mxGeometry x="1290" y="195" width="290" height="395" as="geometry" />
+    </mxCell>
+    <mxCell id="modes_text" value="&lt;b&gt;&lt;font color='#009933'&gt;FTL (green)&lt;/font&gt;&lt;/b&gt;  ≥ 10K kg / 26 m³&#10;     per-mile × distance + fuel + acc&#10;     direct on-demand (spot)&#10;     OR scheduled (contract, allocation cap)&#10;     equipment: 53′ or 48′ dry van&#10;     fill rate η = 0.85&#10;&#10;&lt;b&gt;&lt;font color='#ff9900'&gt;PTL / Volume LTL (orange)&lt;/font&gt;&lt;/b&gt;  4.5–25K kg&#10;     per-shipment + per-mile&#10;     no terminal handling&#10;     6–18 pallets sweet spot&#10;     direct on-demand&#10;&#10;&lt;b&gt;&lt;font color='#0066cc'&gt;LTL (blue)&lt;/font&gt;&lt;/b&gt;  &amp;lt; 4.5K kg&#10;     density-class × weight-break $/CWT&#10;     min charge floor + AMC&#10;     pre-computed per shipment per arc&#10;     FAK override per shipper contract&#10;     NMFC 2025 SDS (13 density classes)&#10;     hub-and-spoke OPAQUE — model only&#10;     (carrier, SC_O, SC_D) tuples&#10;&#10;&lt;b&gt;Expected cost (all modes)&lt;/b&gt;:&#10;     c_exp = c_base ×&#10;       [1 + (1 − p_acc)(ρ_re − 1)]&#10;&#10;&lt;b&gt;Carriers (illustrative)&lt;/b&gt;:&#10;     LTL: OD, FXF, XPO, Saia, Estes&#10;     FTL: Knight, Schneider, Werner, spot&#10;     PTL: Daylight, Pilot Vol, R+L Vol" style="text;html=1;fontSize=8;align=left;verticalAlign=top;" vertex="1" parent="1">
+      <mxGeometry x="1300" y="215" width="275" height="370" as="geometry" />
+    </mxCell>
+
+    <!-- ===== HARD REFUSAL SIDEBAR ===== -->
+    <mxCell id="refuse_box" value="&lt;b&gt;LTL Hard Refusal Rules (P.6, P.7)&lt;/b&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffd6d6;strokeColor=#cc0000;fontSize=10;verticalAlign=top;align=left;fontStyle=1;" vertex="1" parent="1">
+      <mxGeometry x="970" y="120" width="200" height="120" as="geometry" />
+    </mxCell>
+    <mxCell id="refuse_text" value="LTL arc removed from A_k if:&#10;&#10;  • Linear ft > 12 (Capacity Load)&#10;  • Linear ft > 20 (refusal)&#10;  • Piece length > 8–16 ft&#10;  • Piece weight > 2,500 lb&#10;  • Total weight > 20–25K lb&#10;&#10;Why S3 ineligible: 40 lin ft &gt; 20" style="text;html=1;fontSize=8;align=left;verticalAlign=top;" vertex="1" parent="1">
+      <mxGeometry x="980" y="142" width="180" height="95" as="geometry" />
+    </mxCell>
+
+    <!-- ===== LEGEND ===== -->
+    <mxCell id="leg_box" value="" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#aaaaaa;" vertex="1" parent="1">
+      <mxGeometry x="35" y="620" width="1240" height="245" as="geometry" />
+    </mxCell>
+    <mxCell id="leg_shipments" value="&lt;b&gt;Shipments:&lt;/b&gt;  &lt;font color='#b85450'&gt;● S3: ATL → NYC (24 pallets, 60 m³, 18t, Class 70)&lt;/font&gt;   &lt;font color='#9673A6'&gt;● S2: HOU → CHI (10 pallets, 18 m³, 8t, FAK 92.5)&lt;/font&gt;   &lt;font color='#d6b656'&gt;● S1: HOU → DAL (4 pallets, 2.5 m³, 1.5t, Class 50)&lt;/font&gt;" style="text;html=1;fontSize=8;align=left;verticalAlign=middle;" vertex="1" parent="1">
+      <mxGeometry x="45" y="628" width="1220" height="16" as="geometry" />
+    </mxCell>
+    <mxCell id="leg_arcs" value="&lt;b&gt;Arc colors:&lt;/b&gt;  &lt;font color='#0066cc'&gt;Blue&lt;/font&gt; = LTL (pickup → SC → linehaul → SC → delivery)   &lt;font color='#cc0066'&gt;Pink dashed&lt;/font&gt; = LTL Capacity Load (cap rate; usually pushed to PTL)   &lt;font color='#ff9900'&gt;Orange&lt;/font&gt; = PTL direct (no terminals)   &lt;font color='#009933'&gt;Green solid&lt;/font&gt; = FTL contract   &lt;font color='#009933'&gt;Green dashed&lt;/font&gt; = FTL spot" style="text;html=1;fontSize=8;align=left;verticalAlign=middle;" vertex="1" parent="1">
+      <mxGeometry x="45" y="648" width="1220" height="16" as="geometry" />
+    </mxCell>
+    <mxCell id="leg_shared" value="&lt;b&gt;Shared supply (blue nodes):&lt;/b&gt;  OD-HOU SC and FXF-HOU SC each serve both S1 and S2 (same origin city, different destinations). LTL carrier internal hub-and-spoke is opaque — model uses only (carrier, origin SC, destination SC) tuples per critique. Powell-Sheffi load planning is the carrier's internal problem; as forwarder we tender and the carrier routes." style="text;html=1;fontSize=8;align=left;verticalAlign=middle;" vertex="1" parent="1">
+      <mxGeometry x="45" y="668" width="1220" height="32" as="geometry" />
+    </mxCell>
+    <mxCell id="leg_optimal" value="&lt;b&gt;Optimal mode by shipment (cost-driven, with hard refusal):&lt;/b&gt;  S1 → LTL (Class 50 dense, ~$200 effective) | S2 → PTL or FTL contract (10 pallets too bulky for LTL — Capacity Load triggers) | S3 → FTL contract (LTL refused by linear-foot rule)" style="text;html=1;fontSize=8;align=left;verticalAlign=middle;" vertex="1" parent="1">
+      <mxGeometry x="45" y="702" width="1220" height="32" as="geometry" />
+    </mxCell>
+    <mxCell id="leg_pacc" value="&lt;b&gt;Tender acceptance (p_acc, ρ_re):&lt;/b&gt;  shown per arc. Expected cost includes re-tender markup: c_exp = c_base × [1 + (1−p_acc)(ρ_re−1)]. Example: FTL spot S3 ATL→NYC with p_acc=0.50, ρ_re=1.25 → c_exp = $3,800 × 1.125 = $4,275 (vs. nominal $3,800; vs. FTL contract $4,200 effective $4,242). Spot looks cheaper nominally but expected cost is comparable due to rejection risk." style="text;html=1;fontSize=8;align=left;verticalAlign=middle;fontColor=#0066cc;" vertex="1" parent="1">
+      <mxGeometry x="45" y="736" width="1220" height="48" as="geometry" />
+    </mxCell>
+    <mxCell id="leg_constraints" value="&lt;b&gt;Constraints enforced:&lt;/b&gt;  Volume capacity (P.2, η=0.85) | Weight capacity (P.3) | LTL hard refusal (P.6, P.7) | LTL pickup cutoff (P.8) | Day-bucket time propagation (P.9) | MABD delivery window (P.10) | Carrier-lane service flags (P.11) | Contract FTL allocation cap (P.12) | Container-chassis equipment compat (P.14) | Slot lex-order symmetry breaking (P.15)" style="text;html=1;fontSize=8;align=left;verticalAlign=middle;fontColor=#990000;" vertex="1" parent="1">
+      <mxGeometry x="45" y="786" width="1220" height="48" as="geometry" />
+    </mxCell>
+    <mxCell id="leg_modes_choice" value="&lt;b&gt;Multi-mode within one batch:&lt;/b&gt;  Optimizer can put S1, S2, S3 on three different modes simultaneously. Mode choice per shipment is independent (unless contract FTL allocation forces sharing). Total cost minimized across the batch." style="text;html=1;fontSize=8;align=left;verticalAlign=middle;" vertex="1" parent="1">
+      <mxGeometry x="45" y="836" width="1220" height="24" as="geometry" />
+    </mxCell>
+
+  </root>
+</mxGraphModel>

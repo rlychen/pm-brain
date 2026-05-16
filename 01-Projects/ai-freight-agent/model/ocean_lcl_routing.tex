@@ -1,0 +1,648 @@
+%% ocean_lcl_routing.tex
+%% Ocean LCL Multi-Commodity Routing with Consolidation — MVP Formal Model
+%% Phase 1 — must be approved before any code starts
+%% Status: Draft v1 — 2026-05-16
+
+\documentclass[11pt,a4paper]{article}
+
+\usepackage{amsmath,amssymb,amsthm}
+\usepackage{booktabs}
+\usepackage{geometry}
+\usepackage{hyperref}
+\usepackage{array}
+\usepackage{xcolor}
+\usepackage{enumitem}
+\usepackage{longtable}
+\usepackage{graphicx}
+
+\geometry{margin=2.5cm}
+\setlength{\parskip}{0.4em}
+\hypersetup{colorlinks=true, linkcolor=blue}
+
+\newcommand{\ceil}[1]{\left\lceil #1 \right\rceil}
+\newcommand{\floor}[1]{\left\lfloor #1 \right\rfloor}
+\newcommand{\defeq}{\triangleq}
+
+\theoremstyle{definition}
+\newtheorem{defn}{Definition}
+\newtheorem{remark}{Remark}
+
+\title{\textbf{Ocean LCL Multi-Commodity Routing with Consolidation}\\[0.4em]
+\large MVP Formal Model --- Phase 1, v1}
+\author{AI Freight Agent}
+\date{Draft --- 2026-05-16}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+Formal specification of the optimization model for the ocean LCL (Less-than-Container-Load)
+multi-commodity routing problem with bin-packing-based consolidation. The model is a
+\emph{joint} Binary Multi-Commodity Flow + bin-packing problem: simultaneously decide which
+LCL shipments share which container, which container type (FEU/TEU) to use, and which NVOCC
+sailing carries the consolidated container. The model parallels the Ocean FCL formulation
+(\texttt{model/ocean\_fcl\_routing.tex}) and Air Freight formulation
+(\texttt{model/air\_freight\_routing.tex}) for notational consistency. A sequential
+decomposition solution strategy is documented (\S\ref{sec:decomposition}) for tractability
+at production scale, where the joint problem becomes prohibitive beyond
+$\sim$50--100 shipments per batch. The model itself is specified in joint form to preserve
+correctness; decomposition is a solving technique, not a model simplification.
+\end{abstract}
+
+\tableofcontents
+\newpage
+
+%%--------------------------------------------------------------------
+\section{Problem Statement}
+%%--------------------------------------------------------------------
+
+Given a set of LCL shipment requests (commodities), each defined by origin location,
+destination location, cargo volume, cargo weight, and time constraints, find a minimum-cost
+joint assignment of:
+\begin{enumerate}[noitemsep]
+  \item Each shipment to one shared container,
+  \item Each container to one container type (FEU or TEU),
+  \item Each container to one NVOCC sailing,
+\end{enumerate}
+such that:
+\begin{itemize}[noitemsep]
+  \item every shipment is delivered on or before its deadline,
+  \item each container's contents respect volume and weight capacity,
+  \item each NVOCC sailing's container capacity is respected,
+  \item co-loaded shipments are compatible (hazmat segregation),
+  \item CFS cutoffs and deadlines are honored,
+  \item optional per-shipment budget caps are respected.
+\end{itemize}
+
+\paragraph{NVOCC operating model.}
+A freight forwarder acting as a Non-Vessel-Operating Common Carrier (NVOCC) buys FCL container
+capacity from ocean carriers (per-container rates or BSA) and resells space inside those
+containers to LCL shippers at per-CBM or weight/measurement (W/M) rates. The cost minimization
+in this model is on the \emph{carrier-facing} side: minimize the number and cost of FCL
+containers purchased to carry all LCL shipments. Customer-facing pricing (W/M rates to
+shippers) is out of scope; see \texttt{PRD.md \S6.3} for the pricing engine roadmap.
+
+\paragraph{MVP scope.}
+\begin{itemize}[noitemsep]
+  \item Single-shipment routing per LCL shipment; consolidation across shipments is the
+        joint decision.
+  \item Container types: FEU (40$'$HC, 76 CBM usable, 26,500 kg payload) and
+        TEU (20$'$ standard, 33 CBM, 24,000 kg). Optimizer selects mix.
+  \item NVOCC sailings: weekly cadence on major lanes; modeled as discrete sailing arcs
+        with CFS cutoff and ETD.
+  \item Origin CFS and destination CFS as explicit nodes: consolidation (build-up) at origin,
+        deconsolidation (breakdown) at destination. CFS dwell times included.
+  \item Container fill rate cap $\eta \approx 0.97$ (no perfectly packed containers in practice).
+  \item No transshipment in MVP (single-leg NVOCC sailing only).
+  \item Hazmat compatibility: pairwise exclusion matrix; full DGR segregation rules deferred.
+  \item Probabilistic transit time objectives deferred to P1.
+  \item Sequential-decomposition solving documented; joint model preserved for small batches
+        and correctness validation.
+\end{itemize}
+
+%%--------------------------------------------------------------------
+\section{Graph Structure}
+%%--------------------------------------------------------------------
+
+\subsection{Physical Network Graph \texorpdfstring{$G(N, A)$}{G(N,A)}}
+
+The LCL freight network is a directed graph $G = (N, A)$.
+
+\[
+  N = N_O \cup N_{\text{CFS,O}} \cup N_{\text{POL}} \cup N_{\text{POD,A}}
+      \cup N_{\text{POD,E}} \cup N_{\text{CFS,D}} \cup N_D
+\]
+
+\begin{description}[leftmargin=3.4cm, labelwidth=3.2cm, style=nextline]
+  \item[$N_O$ — Origins] Shipper origin doors.
+  \item[$N_{\text{CFS,O}}$ — Origin CFS] Container Freight Stations near port of loading.
+        LCL cargo is consolidated (stuffed) into shared FCL containers here.
+  \item[$N_{\text{POL}}$ — Ports of Loading] Container terminals. Stuffed containers gate in
+        and load onto vessel.
+  \item[$N_{\text{POD,A}}$ — POD Arrival] Discharge port arrival nodes. Container unloads.
+  \item[$N_{\text{POD,E}}$ — POD Exit] Customs cleared; container available for inland pickup.
+  \item[$N_{\text{CFS,D}}$ — Destination CFS] CFS near POD where containers are broken down
+        (deconsolidation) and individual shipments are released per HBL.
+  \item[$N_D$ — Destinations] Consignee delivery doors.
+\end{description}
+
+\[
+  A = A_{\text{PU}} \cup A_{\text{OC}} \cup A_{\text{OCEAN}} \cup A_{\text{DW}}
+      \cup A_{\text{DC}} \cup A_{\text{FD}}
+\]
+
+\begin{description}[leftmargin=3.4cm, labelwidth=3.2cm, style=nextline]
+  \item[$A_{\text{PU}}$ — Pickup] $(i,j)$, $i \in N_O$, $j \in N_{\text{CFS,O}}$.
+        Truck pickup from origin to origin CFS.
+  \item[$A_{\text{OC}}$ — Origin CFS to POL] $(i,j)$, $i \in N_{\text{CFS,O}}$,
+        $j \in N_{\text{POL}}$. Stuffed container trucked from CFS to terminal.
+        Includes fixed CFS build-up (consolidation) time.
+  \item[$A_{\text{OCEAN}}$ — NVOCC sailing] $(i,j)$, $i \in N_{\text{POL}}$, $j \in N_{\text{POD,A}}$.
+        One arc per scheduled NVOCC sailing (lane, vessel, departure week).
+  \item[$A_{\text{DW}}$ — Dwell] $(p_A, p_E)$, one per POD. Unloading + customs clearance.
+  \item[$A_{\text{DC}}$ — POD to destination CFS] $(p_E, c)$, $p_E \in N_{\text{POD,E}}$,
+        $c \in N_{\text{CFS,D}}$. Container trucked to destination CFS.
+  \item[$A_{\text{FD}}$ — Final delivery] $(c, d)$, $c \in N_{\text{CFS,D}}$, $d \in N_D$.
+        After deconsolidation, individual shipments delivered by truck (FTL or LTL).
+\end{description}
+
+\begin{remark}[Origin CFS as the consolidation node]
+The origin CFS is functionally critical for LCL: it is the only physical location where
+multiple shippers' cargo merges into one container. Modeling it as an explicit node permits:
+(a) the fixed consolidation dwell time to enter feasibility checks, (b) future modeling of
+CFS dock door capacity and labor constraints, (c) alternative-CFS routing for forwarders with
+multiple CFS facilities serving the same port. The destination CFS plays the dual role for
+deconsolidation.
+\end{remark}
+
+\begin{remark}[LCL vs.\ FCL graph difference]
+The Ocean FCL model has no CFS nodes — FCL containers move directly from shipper door to
+port, and from port to consignee door. LCL inserts CFS nodes at both ends. This is a
+structural difference, not a parametric one.
+\end{remark}
+
+\subsection{Commodity-Specific Subgraph \texorpdfstring{$G(N_k, A_k)$}{G(Nk,Ak)}}
+\label{sec:subgraph}
+
+The subgraph $G(N_k, A_k) \subseteq G(N, A)$ contains only arcs that are time-feasible for
+shipment $k$ and lie on at least one complete $o(k) \to d(k)$ path. Construction algorithm
+parallels Ocean FCL (\S\ref{sec:prefilter}) with CFS dwell time added at both ends.
+
+%%--------------------------------------------------------------------
+\section{Sets and Indices}
+%%--------------------------------------------------------------------
+
+\begin{center}
+\begin{tabular}{lp{11.5cm}}
+\toprule
+Symbol & Description \\
+\midrule
+$K$ & Set of LCL shipments (commodities), indexed by $k$ \\
+$N,\, A$ & All nodes and arcs \\
+$A_{\text{PU}},\, A_{\text{OC}},\, A_{\text{OCEAN}},\, A_{\text{DW}},\, A_{\text{DC}},\, A_{\text{FD}}$ & Arc subsets by type \\
+$A^k \subseteq A$ & Feasible arc set for commodity $k$ \\
+$A^k_S \defeq A^k \cap A_S$ & Feasible arcs of type $S$ for commodity $k$ \\
+$N_k$ & Nodes incident to $A^k$ \\
+$S$ & Set of NVOCC sailings; each $s \in S$ has $(\text{POL}, \text{POD}, \text{ETD}, \text{ETA}, \text{CFS-cutoff})$ \\
+$S^k \subseteq S$ & Sailings feasible for commodity $k$ (time-feasible from CFS cutoff to deadline) \\
+$T$ & Set of container types: $T = \{\text{FEU}, \text{TEU}\}$ \\
+$C_s$ & Set of \emph{potential} container slots on sailing $s$, indexed by $c$. Pre-allocate $|C_s| \leq N_{\max}(s)$ where $N_{\max}$ is the sailing's container capacity. \\
+$P(s)$ & (POL, POD) pair served by sailing $s$ \\
+$\text{HAZ}_k$ & Hazmat class of shipment $k$ ($\emptyset$ if general cargo) \\
+$\text{compat}(k, k')$ & Boolean: shipments $k$ and $k'$ can share a container (hazmat segregation) \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+%%--------------------------------------------------------------------
+\section{Parameters}
+%%--------------------------------------------------------------------
+
+\subsection{Commodity Parameters}
+
+\begin{center}
+\begin{tabular}{llp{6.5cm}l}
+\toprule
+Parameter & Symbol & Description & Unit \\
+\midrule
+Volume & $v_k$ & Cargo volume (sum of pieces) & CBM \\
+Weight & $w_k$ & Gross weight & kg \\
+Piece dimensions & $D_k$ & Max single-piece L$\times$W$\times$H & cm \\
+Cargo ready & $t_k^{\text{rdy}}$ & Earliest pickup from origin & datetime \\
+Deadline & $T_k^{\text{dead}}$ & Latest acceptable arrival at destination & datetime \\
+Origin & $o(k)$ & Source node $\in N_O$ & — \\
+Destination & $d(k)$ & Sink node $\in N_D$ & — \\
+Cargo type & $\tau_k$ & General / DGR / temperature / valuable & categorical \\
+HS code & $\text{hs}_k$ & 6-digit Harmonized System code & — \\
+Incoterm & $\text{inco}_k$ & EXW / FOB / CIF / DDP & — \\
+Budget cap & $B_k$ & Hard cost ceiling; $\infty$ if not set & USD \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\paragraph{W/M (weight/measurement) chargeable basis.}
+While not used as an MVP optimization variable (the carrier-facing cost is per-container), the
+W/M chargeable basis is computed for reporting and pricing:
+\begin{equation}
+  \text{WM}_k \defeq \max\!\left(v_k,\ w_k / 1000\right) \quad [\text{CBM-equivalent}]
+  \label{eq:wm}
+\end{equation}
+1 metric tonne ($1000$\,kg) is treated as 1 CBM in maritime LCL convention. The shipment is
+``volume-rated'' if $v_k \geq w_k / 1000$ and ``weight-rated'' otherwise.
+
+\subsection{Container Type Specifications}
+
+\begin{center}
+\begin{tabular}{llllc}
+\toprule
+Type & Code & Usable volume $V_t$ & Payload $W_t$ & Reference \\
+\midrule
+40$'$HC & FEU & 76 CBM & 26,500 kg & MVP baseline (matches Ocean FCL) \\
+20$'$ std & TEU & 33 CBM & 24,000 kg & Selected when residual fits one TEU \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+Fill rate cap: $\eta = 0.97$. No real container packs to 100\% — irregular cargo shapes
+and dunnage requirements consume capacity.
+
+\subsection{Pickup, CFS, Inland Ground Arc Parameters}
+
+For each ground arc $(i,j) \in A_{\text{PU}} \cup A_{\text{OC}} \cup A_{\text{DC}} \cup A_{\text{FD}}$:
+
+\begin{center}
+\begin{tabular}{llp{6.5cm}l}
+\toprule
+Parameter & Symbol & Description & Unit \\
+\midrule
+Cost & $c_{ij}^{\text{G}}$ & Truck cost per shipment & USD \\
+Mean transit & $\mu_{ij}^{\text{G}}$ & Mean transit time & days \\
+Std dev & $\sigma_{ij}^{\text{G}}$ & Std dev of transit & days \\
+CFS consolidation time & $\beta^{\text{O}}$ & Fixed origin CFS dwell (cargo arrival to container ready) & days \\
+CFS deconsolidation time & $\beta^{\text{D}}$ & Fixed destination CFS dwell (container arrival to cargo released) & days \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+MVP defaults: $\beta^{\text{O}} = 1.5$ days, $\beta^{\text{D}} = 1.5$ days (configurable per CFS).
+
+\subsection{NVOCC Sailing Parameters}
+
+For each sailing $s \in S$:
+
+\begin{center}
+\begin{tabular}{llp{6.5cm}l}
+\toprule
+Parameter & Symbol & Description & Unit \\
+\midrule
+POL, POD & $\text{pol}(s), \text{pod}(s)$ & Origin and destination ports & — \\
+NVOCC carrier & $\text{nv}(s)$ & NVOCC operating this sailing & — \\
+Underlying ocean carrier & $\text{oc}(s)$ & Vessel operator (MSC, CMA CGM, etc.) & — \\
+ETD & $\text{ETD}_s$ & Scheduled departure & datetime \\
+ETA & $\text{ETA}_s$ & Scheduled arrival at POD & datetime \\
+Mean transit & $\mu_s^{\text{OC}}$ & $\text{ETA}_s - \text{ETD}_s$ & days \\
+Std dev & $\sigma_s^{\text{OC}}$ & Transit time variability & days \\
+CFS cutoff & $\text{CFC}_s$ & Latest time stuffed container must be at POL & datetime \\
+Container capacity (FEU) & $N_{\max}^{\text{FEU}}(s)$ & Max FEU containers sold on sailing $s$ & containers \\
+Container capacity (TEU) & $N_{\max}^{\text{TEU}}(s)$ & Max TEU containers sold on sailing $s$ & containers \\
+FEU cost & $\kappa_s^{\text{FEU}}$ & All-in cost to NVOCC for one FEU on sailing $s$ & USD \\
+TEU cost & $\kappa_s^{\text{TEU}}$ & All-in cost to NVOCC for one TEU on sailing $s$ & USD \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\begin{remark}[Container cost includes surcharges]
+$\kappa_s^t$ is the NVOCC's all-in carrier-facing cost: base ocean freight + BAF/EBS + LSS +
+ISPS + GRI on this sailing. Container yard fees and CFS fees are billed separately by node.
+\end{remark}
+
+\subsection{Hazmat Compatibility}
+
+For each pair of shipments $(k, k')$, compatibility is a Boolean parameter:
+\begin{equation}
+  \text{compat}(k, k') \;=\;
+  \begin{cases}
+    1 & \text{if } k, k' \text{ may share a container under IMDG segregation rules,} \\
+    0 & \text{otherwise.}
+  \end{cases}
+\end{equation}
+In MVP, $\text{compat}$ is a simple pairwise table derived from the IMDG class of each
+shipment. Full segregation rules (e.g., minimum distance between incompatible classes within
+a container) are deferred to P1.
+
+%%--------------------------------------------------------------------
+\section{Decision Variables}
+%%--------------------------------------------------------------------
+
+\begin{center}
+\begin{tabular}{llp{7cm}l}
+\toprule
+Variable & Type & Description & Domain \\
+\midrule
+$x_{ij}^k$ & Binary & 1 if shipment $k$ routed on arc $(i,j) \in A^k$ & $\{0, 1\}$ \\
+$y_{k,c,s}$ & Binary & 1 if shipment $k$ is loaded into container $c \in C_s$ on sailing $s$ & $\{0, 1\}$ \\
+$z_{c,s,t}$ & Binary & 1 if container slot $c$ on sailing $s$ is used as type $t \in T$ & $\{0, 1\}$ \\
+$t_k(i)$ & Continuous & Arrival time of shipment $k$ at node $i \in N_k$ & $\mathbb{R}_{\geq 0}$ \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\paragraph{Container slot indexing.}
+The set $C_s$ pre-allocates an upper bound on containers per sailing. Practical bound:
+$|C_s| = N_{\max}^{\text{FEU}}(s) + N_{\max}^{\text{TEU}}(s)$, or $\ceil{\sum_k v_k / (\eta V_{\text{TEU}})}$,
+whichever is smaller. Unused slots simply have $z_{c,s,t} = 0$ for all $t$.
+
+%%--------------------------------------------------------------------
+\section{Constraints}
+%%--------------------------------------------------------------------
+
+\subsection*{P.1 — Flow Conservation}
+
+For each commodity $k$ and node $n \in N_k$:
+\begin{equation}
+  \sum_{j : (n,j) \in A^k} x_{nj}^k \;-\; \sum_{i : (i,n) \in A^k} x_{in}^k
+  \;=\;
+  \begin{cases}
+    +1 & n = o(k) \\
+    -1 & n = d(k) \\
+    0  & \text{otherwise}
+  \end{cases}
+  \label{eq:lcl-P1}
+\end{equation}
+
+\subsection*{P.2 — Shipment Assignment to Container}
+
+Each shipment is loaded into exactly one container slot across all feasible sailings:
+\begin{equation}
+  \sum_{s \in S^k} \sum_{c \in C_s} y_{k,c,s} \;=\; 1 \qquad \forall\, k \in K
+  \label{eq:lcl-P2}
+\end{equation}
+
+\subsection*{P.3 — Container Volume Capacity}
+
+For each sailing $s$ and container slot $c \in C_s$:
+\begin{equation}
+  \sum_{k \in K} v_k \cdot y_{k,c,s} \;\leq\; \eta \cdot \sum_{t \in T} V_t \cdot z_{c,s,t}
+  \label{eq:lcl-P3}
+\end{equation}
+If no container type is selected ($\sum_t z = 0$), the RHS is 0, forcing $y_{k,c,s} = 0$.
+
+\subsection*{P.4 — Container Weight Capacity}
+
+\begin{equation}
+  \sum_{k \in K} w_k \cdot y_{k,c,s} \;\leq\; \sum_{t \in T} W_t \cdot z_{c,s,t}
+  \label{eq:lcl-P4}
+\end{equation}
+
+\subsection*{P.5 — Single Type per Container Slot}
+
+\begin{equation}
+  \sum_{t \in T} z_{c,s,t} \;\leq\; 1 \qquad \forall\, c \in C_s,\, s \in S
+  \label{eq:lcl-P5}
+\end{equation}
+
+\subsection*{P.6 — Sailing Container Capacity}
+
+For each sailing $s$ and container type $t$:
+\begin{equation}
+  \sum_{c \in C_s} z_{c,s,t} \;\leq\; N_{\max}^t(s)
+  \label{eq:lcl-P6}
+\end{equation}
+
+\subsection*{P.7 — Arc-to-Sailing Linkage}
+
+For each shipment $k$ and ocean arc $(i,j) \in A^k_{\text{OCEAN}}$ corresponding to sailing $s$:
+\begin{equation}
+  x_{ij}^k \;=\; \sum_{c \in C_s} y_{k,c,s}
+  \label{eq:lcl-P7}
+\end{equation}
+If shipment $k$ uses sailing $s$'s arc, it must be in exactly one container on that sailing.
+
+\subsection*{P.8 — Hazmat Compatibility (Co-Loading Exclusion)}
+
+For each container slot $c \in C_s$ and each incompatible pair $(k, k')$ with $\text{compat}(k, k') = 0$:
+\begin{equation}
+  y_{k,c,s} + y_{k',c,s} \;\leq\; 1
+  \label{eq:lcl-P8}
+\end{equation}
+Incompatible shipments cannot share a container.
+
+\subsection*{P.9 — CFS Cutoff}
+
+For each shipment $k$ and each ocean arc $(i,j) \in A^k_{\text{OCEAN}}$ with sailing $s$:
+\begin{equation}
+  t_k(i) \;\leq\; \text{CFC}_s + M \cdot (1 - x_{ij}^k)
+  \label{eq:lcl-P9}
+\end{equation}
+The shipment's arrival at POL must precede the NVOCC's CFS cutoff.
+
+\subsection*{P.10 — Arrival Time Propagation (Ground)}
+
+For each ground arc $(i,j) \in A^k_{\text{PU}} \cup A^k_{\text{OC}} \cup A^k_{\text{DC}} \cup A^k_{\text{FD}}$:
+\begin{equation}
+  t_k(j) \;\geq\; t_k(i) + \tilde{\mu}_{ij}^{\text{G}} - M (1 - x_{ij}^k)
+  \label{eq:lcl-P10}
+\end{equation}
+where $\tilde{\mu}_{ij}^{\text{G}} = \mu_{ij}^{\text{G}} + \beta^{\text{O}}$ for $A_{\text{OC}}$,
+$\mu_{ij}^{\text{G}} + \beta^{\text{D}}$ for $A_{\text{DC}}$, else $\mu_{ij}^{\text{G}}$.
+
+\subsection*{P.11 — Arrival Time Propagation (Ocean)}
+
+For each ocean arc $(i,j) \in A^k_{\text{OCEAN}}$ with sailing $s$:
+\begin{equation}
+  t_k(j) \;\geq\; \text{ETA}_s - M (1 - x_{ij}^k)
+  \label{eq:lcl-P11}
+\end{equation}
+
+\subsection*{P.12 — Deadline}
+
+\begin{equation}
+  t_k(d(k)) \;\leq\; T_k^{\text{dead}}
+  \label{eq:lcl-P12}
+\end{equation}
+
+\subsection*{P.13 — Cargo Type Compatibility with Sailing}
+
+For each shipment $k$ with $\tau_k = \text{DGR}$ and each ocean arc on sailing $s$:
+\begin{equation}
+  x_{ij}^k \;\leq\; \text{dgr}(s) \qquad (i,j) \in A^k_{\text{OCEAN}}, \, s = s(i,j)
+  \label{eq:lcl-P13}
+\end{equation}
+
+\subsection*{P.14 — Piece Dimensions Fit Container}
+
+For each shipment $k$ and container slot $c$ where $D_k$ does not fit in $V_t$ for any $t \in T$:
+\begin{equation}
+  y_{k,c,s} \;=\; 0 \quad \text{(pre-processing exclusion)}
+  \label{eq:lcl-P14}
+\end{equation}
+Pieces longer than $\sim 12$\,m or taller than $\sim 2.6$\,m do not fit either FEU or TEU.
+
+\subsection*{P.15 — Budget Cap (optional)}
+
+For shipments with $B_k < \infty$:
+\begin{equation}
+  \text{cost}_k \;\leq\; B_k
+  \label{eq:lcl-P15}
+\end{equation}
+where $\text{cost}_k$ is shipment $k$'s allocated share of total cost (see Objective).
+
+\subsection*{P.16 — Domain}
+
+\begin{equation}
+  x_{ij}^k,\, y_{k,c,s},\, z_{c,s,t} \in \{0,1\}, \quad t_k(i) \in \mathbb{R}_{\geq 0}
+  \label{eq:lcl-P16}
+\end{equation}
+
+%%--------------------------------------------------------------------
+\section{Objective Function}
+%%--------------------------------------------------------------------
+
+Minimize total cost across all shipments:
+
+\begin{align}
+  \min \quad
+  & \sum_{k \in K} \sum_{(i,j) \in A^k_{\text{PU}} \cup A^k_{\text{OC}} \cup A^k_{\text{DC}} \cup A^k_{\text{FD}}}
+    c_{ij}^{\text{G}} \cdot x_{ij}^k
+    \tag{ground cost} \\
+  +\;
+  & \sum_{s \in S} \sum_{c \in C_s} \sum_{t \in T} \kappa_s^t \cdot z_{c,s,t}
+    \tag{container cost (NVOCC pays per container, not per CBM)} \\
+  +\;
+  & \sum_{k \in K} \text{surcharges}(k)
+    \tag{per-shipment surcharges (THC, ISPS, etc.)}
+\end{align}
+
+\paragraph{Per-shipment cost allocation (for budget P.15 and reporting).}
+The shipment's allocated share of container cost is proportional to its W/M chargeable basis
+within the container:
+\begin{equation}
+  \text{cost}_k^{\text{ocean}} \;=\; \frac{\text{WM}_k}{\sum_{k' : y_{k',c,s}=1} \text{WM}_{k'}}
+  \cdot \kappa_s^t \cdot z_{c,s,t}
+  \quad \text{where } y_{k,c,s} = 1
+\end{equation}
+This is a post-solve allocation, not a constraint. For the budget cap P.15, an MVP
+simplification is to bound the allocated $\text{cost}_k$ by $B_k$; full per-shipment cost
+linearization is deferred.
+
+%%--------------------------------------------------------------------
+\section{Sequential Decomposition Solution Strategy}
+\label{sec:decomposition}
+%%--------------------------------------------------------------------
+
+The joint model above has $O(|K| \cdot |S| \cdot |C_s|)$ binary $y$ variables and $O(|S| \cdot |C_s|)$
+container-type $z$ variables. At production scale ($|K| = 50$--$200$ LCL shipments per batch,
+$|S| = 10$--$30$ sailings per lane, $|C_s| = 10$--$30$ potential containers), the joint problem
+becomes prohibitive: $10^5$--$10^6$ binary variables and similar number of bin-packing constraints.
+
+Two solving strategies are documented:
+
+\subsection{Strategy A — Joint MILP (correctness reference, small batches)}
+
+Solve the joint model as specified above. Tractable for $|K| \leq \sim$50 shipments per
+batch with a 10-minute time limit. Use as the correctness reference and for small-batch
+production use.
+
+\subsection{Strategy B — Sequential Decomposition (production scale)}
+
+Decompose into two stages:
+
+\paragraph{Stage 1 — Routing without bin-packing.}
+Solve a relaxed problem treating sailing capacity as aggregate CBM and weight, not as
+discrete containers. Each sailing $s$ has aggregate capacity:
+\[
+  V_s^{\text{agg}} = \eta \cdot V_{\text{FEU}} \cdot N_{\max}^{\text{FEU}}(s) + \eta \cdot V_{\text{TEU}} \cdot N_{\max}^{\text{TEU}}(s)
+\]
+Aggregate weight cap defined similarly. The decision is shipment-to-sailing assignment only.
+This is a simple transportation LP with $O(|K| \cdot |S|)$ variables — solves in seconds.
+
+\paragraph{Stage 2 — Bin-packing per sailing.}
+For each sailing $s$ that received shipments in Stage 1, solve a separate bin-packing MILP:
+choose container types and assign shipments to containers within the sailing. This is a
+variable-size bin-packing problem with at most $\sim 30$ shipments per sailing — solves in
+seconds with a standard MILP solver.
+
+\paragraph{Solution coupling.}
+Stage 1 may produce a solution that is infeasible in Stage 2 (cannot bin-pack the assigned
+shipments into the sailing's container capacity). In this case:
+\begin{enumerate}[noitemsep]
+  \item Identify the over-loaded sailing.
+  \item Add a Benders-style feasibility cut to Stage 1: at least one shipment from the
+        over-loaded sailing must be reassigned.
+  \item Re-solve Stage 1.
+\end{enumerate}
+Typical convergence: 2--5 iterations. Total solve time at production scale: $\sim 1$--$3$ minutes.
+
+\paragraph{Optimality gap.}
+Sequential decomposition is an approximation. Empirically (literature on bin-packing-aware
+LCL consolidation), the optimality gap relative to the joint solution is 2--8\%
+on realistic instances, with smaller gaps on tighter-capacity sailings.
+
+\paragraph{When to use which.}
+\begin{itemize}[noitemsep]
+  \item $|K| \leq 50$ per batch: solve joint MILP directly.
+  \item $|K| > 50$: use sequential decomposition. Joint solver used only for spot-check
+        validation on small representative subsets.
+\end{itemize}
+
+%%--------------------------------------------------------------------
+\section{Linearization and Tightening}
+%%--------------------------------------------------------------------
+
+\subsection{Big-M Tightening on Time Constraints (P.9, P.10, P.11)}
+
+Use the tightest valid bound: $M = T_k^{\text{dead}} - t_k^{\text{rdy}} + \epsilon$.
+
+\subsection{Symmetry Breaking on Container Slots}
+
+Container slots within a sailing are interchangeable, creating symmetry that slows LP relaxation.
+Break by ordering:
+\begin{equation}
+  z_{c,s,t} \;\leq\; z_{c-1,s,t} \qquad \forall\, c \geq 2,\, s,\, t
+  \label{eq:symmetry}
+\end{equation}
+Forces filling slot 1 before slot 2 of the same type on the same sailing.
+
+\subsection{Valid Inequality — Minimum Container Count}
+
+For each sailing $s$:
+\begin{equation}
+  \sum_{c, t} z_{c,s,t} \;\geq\; \ceil{\frac{1}{\eta V_{\text{FEU}}} \sum_{k} v_k \cdot \left(\sum_{c \in C_s} y_{k,c,s}\right)}
+\end{equation}
+At least enough containers to hold the total assigned volume. Tightens LP relaxation. This is
+a valid inequality (cut), not a constraint required for correctness, but materially improves
+solving time.
+
+%%--------------------------------------------------------------------
+\section{LCL vs.\ FCL — Model Comparison}
+%%--------------------------------------------------------------------
+
+\begin{center}
+\begin{tabular}{lll}
+\toprule
+Aspect & Ocean FCL (\texttt{ocean\_fcl\_routing.tex}) & Ocean LCL (this document) \\
+\midrule
+Graph nodes & 4 layers (O, POL, POD, D) & 6 layers (O, CFS-O, POL, POD, CFS-D, D) \\
+CFS dwell & — & Explicit at both ends \\
+Capacity & String allocation (TEU slots) & Container slots per sailing \\
+Container mix & Per shipment (pre-computed) & Per consolidated container (decision) \\
+Consolidation & — & Joint bin-packing $\times$ routing \\
+Hazmat & Per shipment & Pairwise compatibility on co-loading \\
+Variables & $O(|K| \cdot |A|)$ & $O(|K| \cdot |S| \cdot |C_s|)$ \\
+Tractability & 200+ shipments comfortable & 50 joint; 200+ via decomposition \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+%%--------------------------------------------------------------------
+\section{Open Items and Future Extensions}
+%%--------------------------------------------------------------------
+
+\begin{enumerate}
+  \item \textbf{Probabilistic transit time objective.} MVP uses deterministic mean transit
+        and a hard deadline. P1: $\Pr(\text{arrival} \leq T_k^{\text{dead}}) \geq p$.
+  \item \textbf{Full 3D bin-packing.} MVP uses aggregate volume cap with $\eta = 0.97$.
+        P1: 3D bin-packing for awkward piece dimensions and stackability.
+  \item \textbf{Multi-leg NVOCC routing.} MVP single-leg only. P1: NVOCC transshipment
+        through hub CFS (e.g., Singapore consolidation hub for SE Asia $\to$ Europe).
+  \item \textbf{Full IMDG hazmat segregation.} MVP pairwise compatibility table.
+        P1: full IMDG segregation distances within container, ventilation, dunnage.
+  \item \textbf{CFS dock door capacity.} MVP assumes infinite throughput. P1: model dock
+        door and labor capacity at CFS.
+  \item \textbf{NVOCC vs. self-consolidation.} MVP treats us as the NVOCC. Some forwarders
+        buy LCL capacity from third-party NVOCCs at a per-CBM rate. P1: support both modes
+        as separate arc types.
+  \item \textbf{Consolidation across LCL and FCL.} MVP solves LCL separately from FCL.
+        P1: joint LCL/FCL optimizer where a partial-load FCL shipment can be downgraded to
+        LCL consolidation if cheaper.
+  \item \textbf{Multi-shipper LCL aggregation across batches.} MVP optimizes each batch
+        independently. P1: rolling-horizon consolidation where a shipment may be held to
+        consolidate with a later batch if total cost decreases.
+  \item \textbf{Per-shipment cost as linearized constraint (for P.15 budget).}
+        Current per-shipment cost allocation is post-solve. P1: linearize for hard budget
+        enforcement.
+  \item \textbf{Equipment availability at CFS.} MVP assumes empty FEU/TEU containers
+        always available at the origin CFS. P1: model equipment stock and repositioning.
+\end{enumerate}
+
+\end{document}

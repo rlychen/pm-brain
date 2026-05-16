@@ -1,0 +1,226 @@
+<mxGraphModel dx="1422" dy="762" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1500" pageHeight="780" math="0" shadow="0">
+  <root>
+    <mxCell id="0" />
+    <mxCell id="1" parent="0" />
+
+    <!-- TITLE -->
+    <mxCell id="title" value="Multi-Shipment LCL Planning Graph — Consolidated Containers on Shared Sailings" style="text;html=1;strokeColor=none;fillColor=none;align=center;fontSize=13;fontStyle=1;" vertex="1" parent="1">
+      <mxGeometry x="50" y="8" width="1400" height="22" as="geometry" />
+    </mxCell>
+    <mxCell id="sub" value="S1: HSZ → DAL   |   S2: KHH → CHI   |   S3: TPE → NYC        Each shipment is &lt;b&gt;loaded into a shared container&lt;/b&gt; at origin CFS, deconsolidated at destination CFS.  Joint decision: shipment-to-container × container-to-sailing.  Blue nodes = shared supply." style="text;html=1;strokeColor=none;fillColor=none;align=center;fontSize=9;fontStyle=2;fontColor=#555555;" vertex="1" parent="1">
+      <mxGeometry x="50" y="28" width="1400" height="28" as="geometry" />
+    </mxCell>
+
+    <!-- SECTION HEADERS -->
+    <mxCell id="h_pickup" value="Pickup" style="text;html=1;strokeColor=none;fillColor=none;align=center;fontSize=9;fontStyle=2;fontColor=#888888;" vertex="1" parent="1">
+      <mxGeometry x="15" y="62" width="110" height="16" as="geometry" />
+    </mxCell>
+    <mxCell id="h_ocfs" value="Origin CFS / Consolidation (build-up)" style="text;html=1;strokeColor=none;fillColor=none;align=center;fontSize=9;fontStyle=2;fontColor=#888888;" vertex="1" parent="1">
+      <mxGeometry x="125" y="62" width="220" height="16" as="geometry" />
+    </mxCell>
+    <mxCell id="h_pol" value="Port of Loading" style="text;html=1;strokeColor=none;fillColor=none;align=center;fontSize=9;fontStyle=2;fontColor=#888888;" vertex="1" parent="1">
+      <mxGeometry x="370" y="62" width="120" height="16" as="geometry" />
+    </mxCell>
+    <mxCell id="h_ocean" value="NVOCC Ocean Sailing  —  each arc = one weekly consolidation" style="text;html=1;strokeColor=none;fillColor=none;align=center;fontSize=9;fontStyle=2;fontColor=#888888;" vertex="1" parent="1">
+      <mxGeometry x="510" y="62" width="380" height="16" as="geometry" />
+    </mxCell>
+    <mxCell id="h_pod" value="Port of Discharge" style="text;html=1;strokeColor=none;fillColor=none;align=center;fontSize=9;fontStyle=2;fontColor=#888888;" vertex="1" parent="1">
+      <mxGeometry x="900" y="62" width="120" height="16" as="geometry" />
+    </mxCell>
+    <mxCell id="h_dcfs" value="Dest CFS / Deconsolidation (breakdown)" style="text;html=1;strokeColor=none;fillColor=none;align=center;fontSize=9;fontStyle=2;fontColor=#888888;" vertex="1" parent="1">
+      <mxGeometry x="1025" y="62" width="220" height="16" as="geometry" />
+    </mxCell>
+    <mxCell id="h_final" value="Final delivery" style="text;html=1;strokeColor=none;fillColor=none;align=center;fontSize=9;fontStyle=2;fontColor=#888888;" vertex="1" parent="1">
+      <mxGeometry x="1245" y="62" width="120" height="16" as="geometry" />
+    </mxCell>
+
+    <!-- ===== ORIGIN SHIPPERS ===== -->
+    <mxCell id="s3o" value="&lt;b&gt;S3&lt;/b&gt;&lt;br&gt;TPE&lt;br&gt;&lt;font style='font-size:8px'&gt;3 CBM, 1.2t&lt;/font&gt;" style="ellipse;whiteSpace=wrap;html=1;fillColor=#F8CECC;strokeColor=#b85450;fontColor=#3d1512;fontSize=9;" vertex="1" parent="1">
+      <mxGeometry x="35" y="130" width="65" height="65" as="geometry" />
+    </mxCell>
+    <mxCell id="s2o" value="&lt;b&gt;S2&lt;/b&gt;&lt;br&gt;KHH&lt;br&gt;&lt;font style='font-size:8px'&gt;12 CBM, 4t&lt;/font&gt;" style="ellipse;whiteSpace=wrap;html=1;fillColor=#E1D5E7;strokeColor=#9673A6;fontColor=#1a0033;fontSize=9;" vertex="1" parent="1">
+      <mxGeometry x="35" y="305" width="65" height="65" as="geometry" />
+    </mxCell>
+    <mxCell id="s1o" value="&lt;b&gt;S1&lt;/b&gt;&lt;br&gt;HSZ&lt;br&gt;&lt;font style='font-size:8px'&gt;8 CBM, 2.5t&lt;/font&gt;" style="ellipse;whiteSpace=wrap;html=1;fillColor=#FFE6CC;strokeColor=#d6b656;fontColor=#3d2b00;fontSize=9;" vertex="1" parent="1">
+      <mxGeometry x="35" y="480" width="65" height="65" as="geometry" />
+    </mxCell>
+
+    <!-- ===== ORIGIN CFS (forwarder/NVOCC consolidation warehouse) ===== -->
+    <mxCell id="kel_cfs" value="KEL&#10;CFS" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=10;fontStyle=1;verticalAlign=middle;align=center;" vertex="1" parent="1">
+      <mxGeometry x="160" y="200" width="80" height="60" as="geometry" />
+    </mxCell>
+    <mxCell id="khh_cfs" value="KHH&#10;CFS" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=10;fontStyle=1;verticalAlign=middle;align=center;" vertex="1" parent="1">
+      <mxGeometry x="160" y="415" width="80" height="60" as="geometry" />
+    </mxCell>
+
+    <!-- ===== POL (Port of Loading) ===== -->
+    <mxCell id="kel" value="KEL" style="ellipse;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=11;fontStyle=1;" vertex="1" parent="1">
+      <mxGeometry x="385" y="205" width="65" height="55" as="geometry" />
+    </mxCell>
+    <mxCell id="khh" value="KHH" style="ellipse;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=11;fontStyle=1;" vertex="1" parent="1">
+      <mxGeometry x="385" y="420" width="65" height="55" as="geometry" />
+    </mxCell>
+
+    <!-- ===== NVOCC SAILING ANNOTATIONS (visual: shows consolidated containers per sailing) ===== -->
+    <mxCell id="sailing_a" value="Sailing A&#10;KEL → LAX&#10;CFC: Mon&#10;ETD: Wed" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;fontSize=8;verticalAlign=middle;align=center;fontStyle=1;" vertex="1" parent="1">
+      <mxGeometry x="555" y="155" width="105" height="60" as="geometry" />
+    </mxCell>
+    <mxCell id="sailing_b" value="Sailing B&#10;KEL → NYC&#10;CFC: Tue&#10;ETD: Thu" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;fontSize=8;verticalAlign=middle;align=center;fontStyle=1;" vertex="1" parent="1">
+      <mxGeometry x="555" y="265" width="105" height="60" as="geometry" />
+    </mxCell>
+    <mxCell id="sailing_c" value="Sailing C&#10;KHH → LAX&#10;CFC: Wed&#10;ETD: Fri" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;fontSize=8;verticalAlign=middle;align=center;fontStyle=1;" vertex="1" parent="1">
+      <mxGeometry x="555" y="375" width="105" height="60" as="geometry" />
+    </mxCell>
+    <mxCell id="sailing_d" value="Sailing D&#10;KHH → NYC&#10;CFC: Wed&#10;ETD: Sat" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;fontSize=8;verticalAlign=middle;align=center;fontStyle=1;" vertex="1" parent="1">
+      <mxGeometry x="555" y="465" width="105" height="60" as="geometry" />
+    </mxCell>
+
+    <!-- ===== POD (Port of Discharge) ===== -->
+    <mxCell id="lax" value="LAX" style="ellipse;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=11;fontStyle=1;" vertex="1" parent="1">
+      <mxGeometry x="915" y="135" width="65" height="55" as="geometry" />
+    </mxCell>
+    <mxCell id="nyc_pod" value="NYC&lt;br&gt;(pod)" style="ellipse;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=10;fontStyle=1;" vertex="1" parent="1">
+      <mxGeometry x="915" y="290" width="65" height="55" as="geometry" />
+    </mxCell>
+    <mxCell id="lax2" value="LAX&lt;br&gt;(alt)" style="ellipse;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=10;fontStyle=1;" vertex="1" parent="1">
+      <mxGeometry x="915" y="455" width="65" height="55" as="geometry" />
+    </mxCell>
+
+    <!-- ===== DESTINATION CFS ===== -->
+    <mxCell id="lax_cfs" value="LAX&#10;CFS" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=10;fontStyle=1;verticalAlign=middle;align=center;" vertex="1" parent="1">
+      <mxGeometry x="1050" y="135" width="80" height="60" as="geometry" />
+    </mxCell>
+    <mxCell id="nyc_cfs" value="NYC&#10;CFS" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=10;fontStyle=1;verticalAlign=middle;align=center;" vertex="1" parent="1">
+      <mxGeometry x="1050" y="290" width="80" height="60" as="geometry" />
+    </mxCell>
+    <mxCell id="chi_cfs" value="CHI&#10;CFS" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=10;fontStyle=1;verticalAlign=middle;align=center;" vertex="1" parent="1">
+      <mxGeometry x="1050" y="455" width="80" height="60" as="geometry" />
+    </mxCell>
+
+    <!-- ===== CONSIGNEES ===== -->
+    <mxCell id="nyc" value="&lt;b&gt;NYC&lt;/b&gt;&lt;br&gt;S3" style="ellipse;whiteSpace=wrap;html=1;fillColor=#F8CECC;strokeColor=#b85450;fontColor=#3d1512;fontSize=10;" vertex="1" parent="1">
+      <mxGeometry x="1250" y="130" width="65" height="65" as="geometry" />
+    </mxCell>
+    <mxCell id="chi" value="&lt;b&gt;CHI&lt;/b&gt;&lt;br&gt;S2" style="ellipse;whiteSpace=wrap;html=1;fillColor=#E1D5E7;strokeColor=#9673A6;fontColor=#1a0033;fontSize=10;" vertex="1" parent="1">
+      <mxGeometry x="1250" y="305" width="65" height="65" as="geometry" />
+    </mxCell>
+    <mxCell id="dal" value="&lt;b&gt;DAL&lt;/b&gt;&lt;br&gt;S1" style="ellipse;whiteSpace=wrap;html=1;fillColor=#FFE6CC;strokeColor=#d6b656;fontColor=#3d2b00;fontSize=10;" vertex="1" parent="1">
+      <mxGeometry x="1250" y="480" width="65" height="65" as="geometry" />
+    </mxCell>
+
+    <!-- ===== PICKUP ARCS ===== -->
+    <mxCell id="pu_s3_kel" value="~0.3d" style="fontSize=8;html=1;" edge="1" source="s3o" target="kel_cfs" parent="1">
+      <mxGeometry relative="1" as="geometry" />
+    </mxCell>
+    <mxCell id="pu_s2_khh" value="~0.3d" style="fontSize=8;html=1;" edge="1" source="s2o" target="khh_cfs" parent="1">
+      <mxGeometry relative="1" as="geometry" />
+    </mxCell>
+    <mxCell id="pu_s2_kel" value="~1d" style="fontSize=8;html=1;dashed=1;" edge="1" source="s2o" target="kel_cfs" parent="1">
+      <mxGeometry relative="1" as="geometry" />
+    </mxCell>
+    <mxCell id="pu_s1_kel" value="~0.4d" style="fontSize=8;html=1;" edge="1" source="s1o" target="kel_cfs" parent="1">
+      <mxGeometry relative="1" as="geometry" />
+    </mxCell>
+
+    <!-- ===== CFS → POL (stuffed container truck) ===== -->
+    <mxCell id="cfs_kel" value="stuffed container&#10;+ β° build-up&#10;~0.2d + 1.5d" style="fontSize=8;html=1;strokeWidth=2;" edge="1" source="kel_cfs" target="kel" parent="1">
+      <mxGeometry relative="1" as="geometry" />
+    </mxCell>
+    <mxCell id="cfs_khh" value="stuffed container&#10;+ β° build-up&#10;~0.2d + 1.5d" style="fontSize=8;html=1;strokeWidth=2;" edge="1" source="khh_cfs" target="khh" parent="1">
+      <mxGeometry relative="1" as="geometry" />
+    </mxCell>
+
+    <!-- ===== POL → SAILING ANNOTATIONS ===== -->
+    <mxCell id="kel_sailA" value="" style="fontSize=8;html=1;strokeColor=#0066cc;" edge="1" source="kel" target="sailing_a" parent="1">
+      <mxGeometry relative="1" as="geometry" />
+    </mxCell>
+    <mxCell id="kel_sailB" value="" style="fontSize=8;html=1;strokeColor=#0066cc;" edge="1" source="kel" target="sailing_b" parent="1">
+      <mxGeometry relative="1" as="geometry" />
+    </mxCell>
+    <mxCell id="khh_sailC" value="" style="fontSize=8;html=1;strokeColor=#0066cc;" edge="1" source="khh" target="sailing_c" parent="1">
+      <mxGeometry relative="1" as="geometry" />
+    </mxCell>
+    <mxCell id="khh_sailD" value="" style="fontSize=8;html=1;strokeColor=#0066cc;" edge="1" source="khh" target="sailing_d" parent="1">
+      <mxGeometry relative="1" as="geometry" />
+    </mxCell>
+
+    <!-- ===== SAILING → POD ===== -->
+    <mxCell id="sailA_lax" value="MSC/14d" style="fontSize=8;html=1;strokeColor=#0066cc;" edge="1" source="sailing_a" target="lax" parent="1">
+      <mxGeometry relative="1" as="geometry" />
+    </mxCell>
+    <mxCell id="sailB_nyc" value="CMG/26d" style="fontSize=8;html=1;strokeColor=#0066cc;" edge="1" source="sailing_b" target="nyc_pod" parent="1">
+      <mxGeometry relative="1" as="geometry" />
+    </mxCell>
+    <mxCell id="sailC_lax" value="EVG/13d" style="fontSize=8;html=1;strokeColor=#0066cc;" edge="1" source="sailing_c" target="lax2" parent="1">
+      <mxGeometry relative="1" as="geometry" />
+    </mxCell>
+    <mxCell id="sailD_nyc" value="ONE/27d" style="fontSize=8;html=1;strokeColor=#0066cc;" edge="1" source="sailing_d" target="nyc_pod" parent="1">
+      <mxGeometry relative="1" as="geometry" />
+    </mxCell>
+
+    <!-- ===== POD → DEST CFS (full container truck, +β breakdown) ===== -->
+    <mxCell id="lax_lcfs" value="full container&#10;+ β° breakdown&#10;~0.5d + 1.5d" style="fontSize=8;html=1;strokeWidth=2;" edge="1" source="lax" target="lax_cfs" parent="1">
+      <mxGeometry relative="1" as="geometry" />
+    </mxCell>
+    <mxCell id="nyc_ncfs" value="full container&#10;+ β° breakdown&#10;~0.5d + 1.5d" style="fontSize=8;html=1;strokeWidth=2;" edge="1" source="nyc_pod" target="nyc_cfs" parent="1">
+      <mxGeometry relative="1" as="geometry" />
+    </mxCell>
+    <mxCell id="lax2_lcfs" value="full container&#10;~0.5d" style="fontSize=8;html=1;" edge="1" source="lax2" target="lax_cfs" parent="1">
+      <mxGeometry relative="1" as="geometry" />
+    </mxCell>
+    <!-- LAX → inland CHI (rail+CFS for LCL that needs inland LCL breakdown) -->
+    <mxCell id="lax2_ccfs" value="rail + dray&#10;+ inland CFS breakdown&#10;~3d" style="fontSize=8;html=1;dashed=1;" edge="1" source="lax2" target="chi_cfs" parent="1">
+      <mxGeometry relative="1" as="geometry" />
+    </mxCell>
+    <mxCell id="lax_ccfs" value="rail + dray&#10;~3d" style="fontSize=8;html=1;dashed=1;" edge="1" source="lax" target="chi_cfs" parent="1">
+      <mxGeometry relative="1" as="geometry" />
+    </mxCell>
+
+    <!-- ===== DEST CFS → CONSIGNEE (LTL truck after deconsolidation) ===== -->
+    <mxCell id="ncfs_nyc" value="LTL/0.3d" style="fontSize=8;html=1;" edge="1" source="nyc_cfs" target="nyc" parent="1">
+      <mxGeometry relative="1" as="geometry" />
+    </mxCell>
+    <mxCell id="ccfs_chi" value="LTL/0.3d" style="fontSize=8;html=1;" edge="1" source="chi_cfs" target="chi" parent="1">
+      <mxGeometry relative="1" as="geometry" />
+    </mxCell>
+    <mxCell id="lcfs_dal" value="LTL/2d" style="fontSize=8;html=1;" edge="1" source="lax_cfs" target="dal" parent="1">
+      <mxGeometry relative="1" as="geometry" />
+    </mxCell>
+    <!-- LAX-CFS to CHI directly: rare for LCL but possible -->
+    <mxCell id="lcfs_chi" value="LTL/3d" style="fontSize=8;html=1;dashed=1;" edge="1" source="lax_cfs" target="chi" parent="1">
+      <mxGeometry relative="1" as="geometry" />
+    </mxCell>
+
+    <!-- ===== CONSOLIDATION SIDEBAR ===== -->
+    <mxCell id="consol_box" value="&lt;b&gt;Joint Consolidation Decision&lt;/b&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;fontSize=10;verticalAlign=top;align=left;fontStyle=1;" vertex="1" parent="1">
+      <mxGeometry x="1340" y="200" width="150" height="320" as="geometry" />
+    </mxCell>
+    <mxCell id="consol_text" value="&lt;b&gt;Two coupled decisions&lt;/b&gt;:&#10;&#10;1.  Shipment → Container&#10;     y_{k,c,s} ∈ {0,1}&#10;&#10;2.  Container → Sailing+Type&#10;     z_{c,s,t} ∈ {0,1}&#10;&#10;&lt;b&gt;Constraints:&lt;/b&gt;&#10;• Σ v_k·y ≤ η·V_t·z&#10;     (volume)&#10;• Σ w_k·y ≤ W_t·z&#10;     (weight)&#10;• y_k + y_k' ≤ 1&#10;     (hazmat)&#10;&#10;&lt;b&gt;Container types&lt;/b&gt;:&#10;FEU  76 m³ / 26.5t&#10;TEU  33 m³ / 24.0t&#10;Fill rate η = 0.97" style="text;html=1;fontSize=8;align=left;verticalAlign=top;fontFamily=monospace;" vertex="1" parent="1">
+      <mxGeometry x="1350" y="220" width="140" height="295" as="geometry" />
+    </mxCell>
+
+    <!-- ===== LEGEND ===== -->
+    <mxCell id="leg_box" value="" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#aaaaaa;" vertex="1" parent="1">
+      <mxGeometry x="35" y="575" width="1290" height="170" as="geometry" />
+    </mxCell>
+    <mxCell id="leg_shipments" value="&lt;b&gt;Shipments:&lt;/b&gt;  &lt;font color='#b85450'&gt;● S3: TPE → NYC (3 CBM, 1.2t)&lt;/font&gt;   &lt;font color='#9673A6'&gt;● S2: KHH → CHI (12 CBM, 4t)&lt;/font&gt;   &lt;font color='#d6b656'&gt;● S1: HSZ → DAL (8 CBM, 2.5t)&lt;/font&gt;        Sample: S1+S2+S3 = 23 CBM, 7.7t → fits in one FEU (76 m³, 26.5t)" style="text;html=1;fontSize=8;align=left;verticalAlign=middle;" vertex="1" parent="1">
+      <mxGeometry x="45" y="582" width="1270" height="16" as="geometry" />
+    </mxCell>
+    <mxCell id="leg_consol" value="&lt;b&gt;Consolidation example:&lt;/b&gt;  All 3 shipments routed to &lt;b&gt;KEL-CFS&lt;/b&gt;, stuffed into one FEU on &lt;b&gt;Sailing B (KEL→NYC)&lt;/b&gt;, deconsolidated at &lt;b&gt;NYC-CFS&lt;/b&gt;.  After breakdown: S3→NYC LTL, S2→CHI LTL (or trucked via inland CFS), S1→DAL LTL.  Joint y/z decisions assign each shipment to one container, each container to one sailing." style="text;html=1;fontSize=8;align=left;verticalAlign=middle;" vertex="1" parent="1">
+      <mxGeometry x="45" y="602" width="1270" height="32" as="geometry" />
+    </mxCell>
+    <mxCell id="leg_nodes" value="&lt;b&gt;Nodes:&lt;/b&gt;  Blue = shared supply (CFS, port).  &lt;b&gt;CFS&lt;/b&gt; (Container Freight Station) — at origin: consolidation (build-up); at destination: deconsolidation (breakdown). Fixed dwell β ≈ 1.5d each side." style="text;html=1;fontSize=8;align=left;verticalAlign=middle;" vertex="1" parent="1">
+      <mxGeometry x="45" y="638" width="1270" height="16" as="geometry" />
+    </mxCell>
+    <mxCell id="leg_arcs" value="&lt;b&gt;Arcs:&lt;/b&gt;  Solid = primary path   Dashed = alternative   &lt;b&gt;Bold&lt;/b&gt; = container-level move (stuffed at origin / full at destination).  &lt;b&gt;Sailing labels:&lt;/b&gt;  carrier/transit (MSC=MSC, CMG=CMA CGM, EVG=Evergreen, ONE=Ocean Network Express)." style="text;html=1;fontSize=8;align=left;verticalAlign=middle;" vertex="1" parent="1">
+      <mxGeometry x="45" y="658" width="1270" height="16" as="geometry" />
+    </mxCell>
+    <mxCell id="leg_rates" value="&lt;b&gt;Cost model:&lt;/b&gt;  NVOCC pays carrier per-container κ_s^t (FEU or TEU on sailing s) regardless of fill. Cargo charged W/M = max(CBM, kg/1000). LCL profitable when Σ shipments approach container capacity. Optimizer minimizes Σ container costs + ground arcs + surcharges." style="text;html=1;fontSize=8;align=left;fontColor=#b85450;" vertex="1" parent="1">
+      <mxGeometry x="45" y="678" width="1270" height="32" as="geometry" />
+    </mxCell>
+    <mxCell id="leg_decomp" value="&lt;b&gt;Solver strategy:&lt;/b&gt;  Joint MILP for |K| ≤ 50; sequential decomposition (Stage 1: routing with aggregate CBM/kg capacity → Stage 2: bin-packing per sailing → Benders feasibility cuts) for larger batches. Empirical optimality gap 2–8%." style="text;html=1;fontSize=8;align=left;fontColor=#0066cc;" vertex="1" parent="1">
+      <mxGeometry x="45" y="715" width="1270" height="24" as="geometry" />
+    </mxCell>
+
+  </root>
+</mxGraphModel>

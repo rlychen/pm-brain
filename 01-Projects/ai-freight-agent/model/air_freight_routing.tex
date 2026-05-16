@@ -1,0 +1,893 @@
+%% air_freight_routing.tex
+%% Air Freight Multi-Commodity Routing — MVP Formal Model
+%% Phase 1 — must be approved before any code starts
+%% Status: Draft v1 — 2026-05-16
+
+\documentclass[11pt,a4paper]{article}
+
+\usepackage{amsmath,amssymb,amsthm}
+\usepackage{booktabs}
+\usepackage{geometry}
+\usepackage{hyperref}
+\usepackage{array}
+\usepackage{xcolor}
+\usepackage{enumitem}
+\usepackage{longtable}
+\usepackage{graphicx}
+
+\geometry{margin=2.5cm}
+\setlength{\parskip}{0.4em}
+\hypersetup{colorlinks=true, linkcolor=blue}
+
+\newcommand{\ceil}[1]{\left\lceil #1 \right\rceil}
+\newcommand{\floor}[1]{\left\lfloor #1 \right\rfloor}
+\newcommand{\defeq}{\triangleq}
+
+\theoremstyle{definition}
+\newtheorem{defn}{Definition}
+\newtheorem{remark}{Remark}
+
+\title{\textbf{Air Freight Multi-Commodity Routing}\\[0.4em]
+\large MVP Formal Model --- Phase 1, v1}
+\author{AI Freight Agent}
+\date{Draft --- 2026-05-16}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+Formal specification of the optimization model for the air freight multi-commodity routing
+problem. The model is a Binary Multi-Commodity Flow problem on a commodity-specific subgraph
+of the air freight network (see \texttt{docs/air\_freight\_multi\_shipment\_graph.drawio}
+and \texttt{docs/air\_freight\_shipment\_subgraph.drawio}). Scope: single-shipment routing
+across multiple flight legs (direct and multi-hop) with two air capacity layers — contracted
+ULD allocation (Block Space Agreements) and spot rate-card pricing. Probabilistic transit
+time objectives, through-ULD as a decision variable, period-level utilization commitments,
+and full bin-packing inside ULDs are deferred. The model parallels the Ocean FCL formulation
+(\texttt{model/ocean\_fcl\_routing.tex}) for notational consistency.
+\end{abstract}
+
+\tableofcontents
+\newpage
+
+%%--------------------------------------------------------------------
+\section{Problem Statement}
+%%--------------------------------------------------------------------
+
+Given a set of air shipment requests (commodities), each defined by origin location, destination
+location, cargo volume, chargeable weight, and time constraints, find a minimum-cost assignment
+of commodities to paths through the multimodal air freight network such that:
+\begin{itemize}[noitemsep]
+  \item every commodity is delivered on or before its deadline,
+  \item no flight leg exceeds its ULD physical capacity (volume and weight per ULD),
+  \item no Block Space Agreement (BSA) exceeds its contracted per-flight ULD allocation,
+  \item period-level allocation caps are respected,
+  \item cargo cutoff times are honored,
+  \item hub minimum connect times are honored, including the through-ULD vs.\ re-ULD distinction, and
+  \item optional per-commodity budget caps are respected.
+\end{itemize}
+
+\paragraph{MVP scope.}
+\begin{itemize}[noitemsep]
+  \item Single-shipment routing; each shipment routes independently subject to shared supply.
+  \item Each scheduled flight leg is one arc. Multi-stop flights (same flight number, intermediate
+        stops) are decomposed into multiple arcs for transit time visibility.
+  \item ULD types: LD3, LD7, PMC pallet, AKE. Optimizer selects ULD type per shipment per flight.
+  \item Two air supply layers per flight: (a) contracted ULD allocation under one or more BSAs;
+        (b) spot rate-card at IATA weight breaks.
+  \item Pivot weight (take-or-pay minimum) modeled on hard BSA contracts.
+  \item Through-ULD vs.\ re-ULD at hub modeled via pre-computed compatibility parameter
+        $\psi$, with rehandling cost and MCT differentiated. Explicit decision variable for
+        through-ULD selection deferred to P1.
+  \item Period-level minimum utilization commitments (hard BSA take-or-pay across period)
+        are computed by a separate upstream model and surfaced as fixed per-run targets.
+        This MILP does not solve them jointly.
+  \item Objective: minimize total air + ground freight cost subject to deterministic
+        time-window feasibility. Probabilistic on-time delivery objective deferred to P1.
+  \item Hazmat / perishable / valuable cargo type segregation: model parameter, not a hard MVP
+        constraint (recorded for future restriction logic).
+\end{itemize}
+
+%%--------------------------------------------------------------------
+\section{Graph Structure}
+%%--------------------------------------------------------------------
+
+\subsection{Physical Network Graph \texorpdfstring{$G(N, A)$}{G(N,A)}}
+
+The air freight network is a directed graph $G = (N, A)$.
+
+\[
+  N = N_O \cup N_{\text{CFS,O}} \cup N_{\text{AP,O}} \cup N_{\text{AP,H}} \cup N_{\text{AP,D}} \cup N_{\text{CFS,D}} \cup N_D
+\]
+
+\begin{description}[leftmargin=3.4cm, labelwidth=3.2cm, style=nextline]
+  \item[$N_O$ — Origins] One per shipper origin door (e.g., factory, warehouse). Commodity source nodes.
+  \item[$N_{\text{CFS,O}}$ — Origin CFS] Container Freight Stations near origin airports
+        (e.g., TPE-CFS, KHH-CFS). ULD build-up location. Airline-owned empty ULDs are
+        delivered here; cargo from one or more shipments is stuffed into a ULD; built ULD
+        is trucked to the airline cargo terminal.
+  \item[$N_{\text{AP,O}}$ — Origin airports] Airline cargo terminals at departure airports
+        (e.g., TPE, KHH). Built ULDs are received here for loading onto aircraft.
+  \item[$N_{\text{AP,H}}$ — Hub airports] Intermediate airports on multi-hop routes
+        (e.g., HKG, NRT, ANC). Through-cargo handling or re-ULDing occurs here.
+  \item[$N_{\text{AP,D}}$ — Destination airports] Airline cargo terminals at arrival airports
+        (e.g., JFK, ORD, LAX). ULDs are unloaded here.
+  \item[$N_{\text{CFS,D}}$ — Destination CFS] CFS near destination airport for ULD breakdown.
+        Trucked from airline cargo terminal; ULDs broken down; individual consignments
+        released for final delivery.
+  \item[$N_D$ — Destinations] One per consignee delivery door. Commodity sink nodes.
+\end{description}
+
+\[
+  A = A_{\text{PU}} \cup A_{\text{OC}} \cup A_{\text{AIR}} \cup A_{\text{DC}} \cup A_{\text{FD}}
+\]
+
+\begin{description}[leftmargin=3.4cm, labelwidth=3.2cm, style=nextline]
+  \item[$A_{\text{PU}}$ — Pickup] $(i,j)$, $i \in N_O$, $j \in N_{\text{CFS,O}}$.
+        Truck pickup from origin door to origin CFS.
+  \item[$A_{\text{OC}}$ — Origin CFS to origin airport] $(i,j)$, $i \in N_{\text{CFS,O}}$,
+        $j \in N_{\text{AP,O}}$. Built ULDs trucked from CFS to airline cargo terminal.
+        Includes fixed CFS build-up time as part of effective arc duration.
+  \item[$A_{\text{AIR}}$ — Flight legs] $(i,j)$, $i, j \in N_{\text{AP,O}} \cup N_{\text{AP,H}}
+        \cup N_{\text{AP,D}}$. One arc per scheduled flight leg (specific carrier, flight
+        number, departure date, origin airport, destination airport).
+        A multi-stop flight (e.g., $f$: TPE$\to$ANC$\to$JFK) decomposes into two air arcs
+        sharing the same flight number metadata.
+  \item[$A_{\text{DC}}$ — Destination airport to destination CFS] $(i,j)$, $i \in N_{\text{AP,D}}$,
+        $j \in N_{\text{CFS,D}}$. Trucked from airline cargo terminal to CFS.
+        Includes fixed CFS breakdown time.
+  \item[$A_{\text{FD}}$ — Final delivery] $(i,j)$, $i \in N_{\text{CFS,D}}$, $j \in N_D$.
+        Trucked from destination CFS to consignee door.
+\end{description}
+
+\begin{remark}[Origin and destination CFS as explicit nodes]
+Unlike ocean (where the POL terminal is one node), air introduces a mandatory CFS step at
+origin (ULD build-up) and destination (ULD breakdown). Modeling CFS as an explicit node
+permits: (a) the fixed CFS dwell time to enter feasibility checks, (b) future modeling of
+CFS dock capacity, ULD availability at CFS, and (c) alternative-CFS routing (e.g., a
+Kaohsiung shipment trucked to TPE-CFS for consolidation).
+\end{remark}
+
+\begin{remark}[Flight legs vs.\ flight numbers]
+A real-world flight number (e.g., 5Y9123 TPE$\to$ANC$\to$JFK) operates one aircraft sortie
+with an intermediate stop. We model this as \emph{two arcs} in $A_{\text{AIR}}$ — $(\text{TPE},
+\text{ANC})$ and $(\text{ANC}, \text{JFK})$ — both tagged with the same flight number. This
+preserves transit time visibility at each leg and provides the structural hook for per-leg
+ULD allocation accounting. The fact that the ULD physically stays on the aircraft across the
+intermediate stop is captured by the through-ULD compatibility parameter $\psi$
+(Section~\ref{sec:through-uld}).
+\end{remark}
+
+\paragraph{Figure reference.}
+See the rendered network diagrams: \texttt{docs/air\_freight\_multi\_shipment\_graph.drawio}
+(multi-shipment view, supply sharing) and \texttt{docs/air\_freight\_shipment\_subgraph.drawio}
+(single-shipment subgraph $G(N_k, A_k)$ for S3 TPE$\to$NYC). Render the .drawio sources to PDF
+via drawio export before final approval.
+
+\subsection{Commodity-Specific Subgraph \texorpdfstring{$G(N_k, A_k)$}{G(Nk,Ak)}}
+\label{sec:subgraph}
+
+The MILP for commodity $k$ operates on a subgraph $G(N_k, A_k) \subseteq G(N, A)$ containing
+only arcs that (i) are time-feasible for commodity $k$, (ii) lie on at least one complete
+path from $o(k)$ to $d(k)$, and (iii) are compatible with the commodity's cargo type and
+ULD constraints (e.g., hazmat-restricted flights excluded for non-DGR-certified carriers).
+See Section~\ref{sec:prefilter} for the construction algorithm.
+
+%%--------------------------------------------------------------------
+\section{Sets and Indices}
+%%--------------------------------------------------------------------
+
+\begin{center}
+\begin{tabular}{lp{11.5cm}}
+\toprule
+Symbol & Description \\
+\midrule
+$K$ & Set of commodities (shipments), indexed by $k$ \\
+$N,\, A$ & All nodes and arcs \\
+$A_{\text{PU}},\, A_{\text{OC}},\, A_{\text{AIR}},\, A_{\text{DC}},\, A_{\text{FD}}$ & Arc subsets by type \\
+$A^k \subseteq A$ & Feasible arc set for commodity $k$ (Section~\ref{sec:prefilter}) \\
+$A^k_S \defeq A^k \cap A_S$ & Feasible arcs of type $S$ for commodity $k$ \\
+$N_k$ & Nodes incident to $A^k$ \\
+$F$ & Set of scheduled flight legs, indexed by $f$. Each flight is one arc in $A_{\text{AIR}}$. \\
+$F^k \subseteq F$ & Flights corresponding to arcs in $A^k_{\text{AIR}}$ \\
+$f(i,j)$ & Mapping: air arc $(i,j) \in A_{\text{AIR}}$ to its flight $f \in F$ \\
+$U$ & Set of ULD types: $U = \{\text{LD3, LD7, PMC, AKE}\}$ \\
+$U_f \subseteq U$ & ULD types available on flight $f$ (depends on aircraft type) \\
+$C$ & Set of ULD allocation contracts (BSAs), indexed by $c$ \\
+$C_f \subseteq C$ & Contracts that allocate ULDs on flight $f$ \\
+$T$ & Set of allocation time periods (e.g., monthly), indexed by $t$ \\
+$\tau_k(i)$ & Earliest arrival time of commodity $k$ at node $i$ \\
+$\text{Hub}(j)$ & Set of consecutive air-arc pairs at hub node $j \in N_{\text{AP,H}}$ for shipment $k$: $\{((i,j), (j,\ell)) : (i,j), (j,\ell) \in A^k_{\text{AIR}}\}$ \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+%%--------------------------------------------------------------------
+\section{Parameters}
+%%--------------------------------------------------------------------
+
+\subsection{Commodity Parameters}
+
+\begin{center}
+\begin{tabular}{llp{6.5cm}l}
+\toprule
+Parameter & Symbol & Description & Unit \\
+\midrule
+Volume & $v_k$ & Cargo volume (sum of all pieces) & CBM \\
+Actual weight & $w_k$ & Gross weight & kg \\
+Chargeable weight & $cw_k$ & $\max(w_k,\, v_k \cdot 167)$ & kg \\
+Piece dimensions & $D_k$ & Max single-piece L$\times$W$\times$H (for ULD fit check) & cm \\
+Cargo ready & $t_k^{\text{rdy}}$ & Earliest pickup time from origin door & datetime \\
+Deadline & $T_k^{\text{dead}}$ & Latest acceptable arrival at destination & datetime \\
+Origin & $o(k)$ & Source node $\in N_O$ & — \\
+Destination & $d(k)$ & Sink node $\in N_D$ & — \\
+Cargo type & $\tau_k$ & General / DGR / PER / VAL / HEA & categorical \\
+HS code & $\text{hs}_k$ & 6-digit Harmonized System code & — \\
+Incoterm & $\text{inco}_k$ & EXW / FCA / CIF / DDP & — \\
+Budget cap & $B_k$ & Hard cost ceiling; $\infty$ if not set & USD \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\paragraph{Chargeable weight.}
+\begin{equation}
+  cw_k \defeq \max\!\left(w_k,\ v_k \cdot 167\right)
+  \label{eq:chargeable}
+\end{equation}
+IATA standard: $1\,\text{m}^3 = 167\,\text{kg}$ volumetric equivalent. Dense cargo (machinery,
+electronics) rated on $w_k$; bulky-light cargo (furniture, packaging) rated on volumetric.
+
+\subsection{Ground Arc Parameters (Pickup, CFS, Final Delivery)}
+
+For each ground arc $(i,j) \in A_{\text{PU}} \cup A_{\text{OC}} \cup A_{\text{DC}} \cup A_{\text{FD}}$:
+
+\begin{center}
+\begin{tabular}{llp{6.5cm}l}
+\toprule
+Parameter & Symbol & Description & Unit \\
+\midrule
+Cost & $c_{ij}^{\text{G}}$ & Truck cost per shipment & USD \\
+Mean transit & $\mu_{ij}^{\text{G}}$ & Mean transit time & days \\
+Std dev & $\sigma_{ij}^{\text{G}}$ & Std dev of transit & days \\
+CFS build-up time & $\beta^{\text{O}}$ & Fixed origin CFS dwell (ULD build-up). Configurable. & hours \\
+CFS breakdown time & $\beta^{\text{D}}$ & Fixed destination CFS dwell (ULD breakdown). Configurable. & hours \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+The effective transit time on the CFS$\to$airport arc $(i,j) \in A_{\text{OC}}$ includes the
+CFS build-up: $\tilde{\mu}_{ij}^{\text{OC}} = \mu_{ij}^{\text{OC}} + \beta^{\text{O}}$. Likewise for
+$A_{\text{DC}}$ with $\beta^{\text{D}}$.
+
+\subsection{Flight (Air Arc) Parameters}
+\label{sec:flight-params}
+
+For each flight $f \in F$ (equivalently, each $(i,j) \in A_{\text{AIR}}$):
+
+\begin{center}
+\begin{tabular}{llp{7cm}l}
+\toprule
+Parameter & Symbol & Description & Unit \\
+\midrule
+Carrier & $\text{carrier}(f)$ & IATA carrier code (CI, BR, CX, JL, NH, 5Y, ...) & — \\
+Flight number & $\text{fno}(f)$ & Flight number; multiple legs may share a number & — \\
+Aircraft type & $\text{ac}(f)$ & 777F, 747-8F, A330F, 777-300ER, A350-900, ... & — \\
+ETD & $\text{ETD}_f$ & Scheduled departure datetime & datetime \\
+ETA & $\text{ETA}_f$ & Scheduled arrival datetime & datetime \\
+Block time & $\mu_f^{\text{AIR}}$ & $\text{ETA}_f - \text{ETD}_f$ & hours \\
+Std dev & $\sigma_f^{\text{AIR}}$ & Std dev of actual block time & hours \\
+Cargo cutoff & $\text{CGC}_f$ & Latest time ULDs must be tendered to airline cargo terminal & datetime \\
+DGR certified & $\text{dgr}(f)$ & Accepts dangerous goods? & boolean \\
+Cold chain & $\text{per}(f)$ & Maintains $\leq 8^\circ$C? & boolean \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\subsection{ULD Specifications}
+\label{sec:uld-spec}
+
+\begin{center}
+\begin{tabular}{lllll}
+\toprule
+ULD type & Code & Volume & Payload & Aircraft compatibility \\
+\midrule
+LD3       & AKE/AVE & 4.5 m\textsuperscript{3} & 1{,}587 kg & Wide-body belly + freighter \\
+LD7       & ALE/AAY & 11.1 m\textsuperscript{3} & 4{,}626 kg & Wide-body belly + freighter \\
+PMC pallet & PMC/PAG & 7.5 m\textsuperscript{3} & 6{,}804 kg & Freighter main deck \\
+AKE small  & AKE     & 4.5 m\textsuperscript{3} & 1{,}497 kg & Wide-body belly \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+For each $u \in U$:
+\begin{center}
+\begin{tabular}{llp{6.5cm}l}
+\toprule
+Parameter & Symbol & Description & Unit \\
+\midrule
+Volume capacity & $V_u$ & ULD usable volume (Table above) & CBM \\
+Weight capacity & $W_u$ & ULD payload limit & kg \\
+Fill rate cap & $\eta$ & Max fraction of CBM usable in practice (default $0.97$) & — \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+For each flight $f$ and ULD type $u \in U_f$:
+\begin{center}
+\begin{tabular}{llp{6.5cm}l}
+\toprule
+Parameter & Symbol & Description & Unit \\
+\midrule
+Aircraft ULD positions & $P_{f,u}$ & Number of $u$-type ULD positions on $\text{ac}(f)$ & — \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+$P_{f,u}$ is an upper bound on physical positions for ULD type $u$ on the aircraft. It is
+independent of the forwarder's contracted allocation.
+
+\subsection{Contracted ULD Allocation (Block Space Agreement) Parameters}
+\label{sec:bsa-params}
+
+A Block Space Agreement (BSA) reserves a fixed allocation of ULD positions per flight at a
+contracted rate. For each contract $c \in C$:
+
+\begin{center}
+\begin{tabular}{llp{6.5cm}l}
+\toprule
+Parameter & Symbol & Description & Unit \\
+\midrule
+Flights covered & $F_c \subseteq F$ & Set of scheduled flights covered by contract $c$ & — \\
+Per-flight allocation & $\text{alloc}(c, f, u)$ & ULD count of type $u$ allocated on flight $f$ under contract $c$ & ULDs \\
+Period allocation & $\text{alloc}(c, u, t)$ & Total ULDs of type $u$ allocated in period $t$ under contract $c$ & ULDs \\
+Period utilization & $\text{util}(c, u, t)$ & Already-booked ULDs in period $t$ at solve time & ULDs \\
+Remaining (period) & $\text{rem}(c, u, t)$ & $\text{alloc}(c,u,t) - \text{util}(c,u,t)$ & ULDs \\
+Min utilization (period) & $\underline{M}_{c,u,t}$ & Hard BSA minimum: external upstream model output. Default $0$ for soft BSA. & ULDs \\
+Pivot weight & $\pi_{c,u}$ & Minimum chargeable weight per ULD per flight under $c$ & kg/ULD \\
+Contract rate & $r_c$ & Contracted price & USD/kg chargeable \\
+Hard vs.\ soft & $\text{hard}_c$ & Boolean: hard BSA (take-or-pay) or soft (cancellable) & — \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\begin{remark}[Period commitments are upstream]
+$\underline{M}_{c,u,t}$ is computed by a separate upstream model that allocates how much of
+each hard BSA's monthly take-or-pay commitment should be met by each routing run within the
+period. The routing MILP takes $\underline{M}_{c,u,t}$ as a fixed input per run. The MILP
+does \emph{not} simultaneously optimize period-level commitment allocation; that is a
+higher-level decision.
+\end{remark}
+
+\begin{remark}[Pivot weight semantics]
+The pivot $\pi_{c,u}$ is the minimum chargeable weight per ULD per flight regardless of actual
+cargo loaded. If a forwarder claims one LD3 with pivot $1{,}000\,\text{kg}$ on a flight but
+loads only $400\,\text{kg}$ of cargo, the forwarder pays for $1{,}000\,\text{kg} \cdot r_c$.
+This is the take-or-pay floor on hard BSAs.
+\end{remark}
+
+\subsection{Spot Rate-Card Parameters}
+\label{sec:spot-params}
+
+For each flight $f$, the airline offers spot rate-card pricing with IATA weight breaks:
+
+\begin{center}
+\begin{tabular}{llp{6.5cm}l}
+\toprule
+Parameter & Symbol & Description & Unit \\
+\midrule
+Break tiers & $B = \{N, 45, 100, 300, 500, 1000\}$ & IATA standard break points (kg) & kg \\
+Tier rate & $r^{\text{sp}}_{f,b}$ & Rate per kg in tier $b$ on flight $f$ & USD/kg \\
+Tier minimum & $b_{\min}$ & $N$ tier: minimum charge floor & USD \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\paragraph{Spot rate cost per shipment.}
+For shipment $k$ tendered on flight $f$ at the spot rate, the cost is the minimum across
+applicable tiers:
+\begin{equation}
+  \text{cost}^{\text{spot}}(k, f) \defeq \min_{b \in B}\, r^{\text{sp}}_{f,b} \cdot \max(cw_k,\, b)
+  \label{eq:spot-cost}
+\end{equation}
+
+Since $cw_k$ is a parameter (known at planning time), $\text{cost}^{\text{spot}}(k, f)$ is
+pre-computable. The IATA rule that ``charging at the next tier with a lower rate may yield a
+lower total cost'' is captured automatically by the min.
+
+\subsection{Surcharge Parameters}
+
+Per shipment per flight, the surcharge stack adds:
+\begin{center}
+\begin{tabular}{llp{6.5cm}l}
+\toprule
+Parameter & Symbol & Description & Unit \\
+\midrule
+Fuel surcharge & $\text{FSC}_f$ & USD/kg, monthly refresh & USD/kg \\
+Security surcharge & $\text{SSC}_f$ & USD/kg & USD/kg \\
+Origin THC & $\text{THC}_f^O$ & Per shipment, origin terminal handling & USD \\
+Destination THC & $\text{THC}_f^D$ & Per shipment, destination terminal handling & USD \\
+AMS fee (US imports) & $\text{AMS}_f$ & Per shipment & USD \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\subsection{Hub Connection Parameters (Through-ULD vs.\ Re-ULDing)}
+\label{sec:through-uld}
+
+For each pair of consecutive air arcs $(f, g)$ at hub $j$ — meaning $f$ ends at $j$ and $g$
+starts at $j$ — and each ULD type $u$:
+
+\begin{center}
+\begin{tabular}{llp{7cm}l}
+\toprule
+Parameter & Symbol & Description & Unit \\
+\midrule
+Through-ULD compatible & $\psi_{f,g,u}$ & 1 if a ULD of type $u$ can transit hub $j$ without being broken down (same aircraft for through-flights; or same airline through-cargo agreement) & boolean \\
+MCT (through) & $\text{MCT}_{f,g}^{\text{thru}}$ & Min connect time when through-ULD is used (technical-stop turnaround or hub through-cargo time) & hours \\
+MCT (re-ULD) & $\text{MCT}_{f,g}^{\text{reULD}}$ & Min connect time when ULD must be broken down and rebuilt at hub & hours \\
+Rehandling cost & $\rho_{f,g,u}^{\text{reULD}}$ & Cost per ULD to break down at hub and rebuild for onward flight & USD/ULD \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\begin{defn}[Re-ULDing]
+\emph{Re-ULDing} is the operation of breaking down a built ULD at an intermediate (hub)
+airport and stuffing its cargo into a different ULD for the onward flight. It occurs when:
+\begin{enumerate}[noitemsep,label=(\alph*)]
+  \item the two consecutive flights are operated by \emph{different airlines} (interline
+        routing) — each airline owns a distinct ULD pool and ULDs cannot transfer;
+  \item the two flights require \emph{different ULD types} (e.g., LD3 on a passenger belly
+        leg and PMC main-deck pallet on a freighter leg);
+  \item the hub lacks through-cargo facilities for this ULD type (rare at major hubs).
+\end{enumerate}
+Re-ULDing is operationally expensive: it adds $\sim 4$--$8$ hours of dwell time
+(breakdown + storage + rebuild), incurs $\sim$\$150--\$500 in handling fees per ULD, and
+introduces cargo damage risk. When $\psi_{f,g,u} = 1$, the ULD physically stays intact
+across the hub — either remaining on the same aircraft (through-flight technical stop) or
+moving as a complete unit between aircraft at hub through-cargo facilities.
+\end{defn}
+
+\paragraph{MVP simplification.}
+In MVP, $\psi_{f,g,u}$ is a \emph{pre-computed parameter}, not a decision variable. For each
+consecutive arc pair at a hub:
+\begin{itemize}[noitemsep]
+  \item If $\text{carrier}(f) = \text{carrier}(g)$ \emph{and} $\text{fno}(f) = \text{fno}(g)$
+        (through-flight, same aircraft, intermediate stop): $\psi_{f,g,u} = 1$ for all $u \in U_f \cap U_g$.
+  \item If $\text{carrier}(f) = \text{carrier}(g)$ \emph{and} the hub has a through-cargo
+        agreement for type $u$: $\psi_{f,g,u} = 1$.
+  \item Otherwise (interline or incompatible ULD type): $\psi_{f,g,u} = 0$, re-ULDing required.
+\end{itemize}
+The MILP uses $\psi$ to select the applicable MCT and rehandling cost on each used arc pair.
+The choice between ``use through-ULD'' and ``re-ULD anyway'' is not a free decision in MVP;
+through-ULD is used whenever $\psi = 1$. P1 extension: promote $\psi$ to a decision variable
+to allow forwarder-elected re-ULDing (e.g., for re-sorting cargo destined to different
+onward routes at the hub).
+
+%%--------------------------------------------------------------------
+\section{Commodity-Specific Subgraph Construction}
+\label{sec:prefilter}
+%%--------------------------------------------------------------------
+
+Before the MILP is built, we construct $G(N_k, A_k)$ for each commodity $k$. The subgraph
+contains only arcs that are time-feasible, cargo-type-compatible, and reachable on a complete
+$o(k) \to d(k)$ path.
+
+\paragraph{Construction algorithm.}
+\begin{enumerate}
+  \item \textbf{Pickup pass.} For each origin CFS $j \in N_{\text{CFS,O}}$, compute earliest
+        CFS arrival:
+        \[
+          \tau_k(j) \defeq t_k^{\text{rdy}} + \mu_{o(k),j}^{\text{PU}}
+        \]
+        Arc $(o(k), j) \in A_{\text{PU}}$ is candidate iff there exists a downstream feasible path.
+
+  \item \textbf{Origin CFS pass.} For each CFS-to-airport arc $(j, a) \in A_{\text{OC}}$ where
+        $j \in N_{\text{CFS,O}}$ and $a \in N_{\text{AP,O}}$, compute earliest airport arrival:
+        \[
+          \tau_k(a) \defeq \tau_k(j) + \mu_{j,a}^{\text{OC}} + \beta^{\text{O}}
+        \]
+
+  \item \textbf{Flight reachability pass.} For each flight $f \in F$ (arc $(a, b) \in A_{\text{AIR}}$):
+        $f$ is candidate for $k$ iff
+        \begin{align*}
+          &\tau_k(a) \leq \text{CGC}_f \quad &\text{(can make the cargo cutoff)}\\
+          &\text{ETD}_f + \mu_f^{\text{AIR}} \leq T_k^{\text{dead}} - \text{(downstream legs)} \quad &\text{(deadline reachable)}\\
+          &\tau_k = \text{General} \text{ or } \text{dgr}(f) = 1 \text{ if } \tau_k = \text{DGR}  \quad &\text{(cargo-type compatibility)}\\
+          &\exists\, u \in U_f : D_k \text{ fits } u  \quad &\text{(physical fit in some ULD)}
+        \end{align*}
+
+  \item \textbf{Hub transitions pass.} For each pair of consecutive air arcs $(f, g)$ at hub $h$:
+        compute $\tau_k(g_{\text{start}}) = \text{ETA}_f + \text{MCT}_{f,g}^{*}$
+        where $\text{MCT}^*$ uses $\text{MCT}^{\text{thru}}$ if $\psi_{f,g,u} = 1$ for some
+        $u \in U_f \cap U_g$, else $\text{MCT}^{\text{reULD}}$.
+
+  \item \textbf{Destination CFS \& delivery pass.} For each destination airport $b \in N_{\text{AP,D}}$
+        reachable: include arc $(b, c) \in A_{\text{DC}}$ where $c \in N_{\text{CFS,D}}$, then
+        $(c, d(k)) \in A_{\text{FD}}$.
+
+  \item \textbf{Reachability sweep.} Forward BFS from $o(k)$ and backward BFS from $d(k)$.
+        Retain only arcs on paths reachable from both ends.
+\end{enumerate}
+
+%%--------------------------------------------------------------------
+\section{Decision Variables}
+%%--------------------------------------------------------------------
+
+\begin{center}
+\begin{tabular}{llp{7cm}l}
+\toprule
+Variable & Type & Description & Domain \\
+\midrule
+$x_{ij}^k$ & Binary & 1 if shipment $k$ routed on arc $(i,j) \in A^k$ & $\{0, 1\}$ \\
+$y_{f,u,k}^c$ & Binary & 1 if shipment $k$ uses one ULD of type $u$ on flight $f$ under contract $c$ & $\{0, 1\}$ \\
+$z_{f,u}^c$ & Integer & Number of ULDs of type $u$ claimed on flight $f$ under contract $c$ & $\mathbb{Z}_{\geq 0}$ \\
+$b_{f,k}$ & Binary & 1 if shipment $k$ tendered to flight $f$ at spot rate (not via contract) & $\{0, 1\}$ \\
+$C_{f,u,c}$ & Continuous & Effective chargeable weight billed for contract $c$, flight $f$, ULD type $u$ (max of actual and pivot) & $\mathbb{R}_{\geq 0}$ \\
+$t_k(i)$ & Continuous & Arrival time of shipment $k$ at node $i \in N_k$ & $\mathbb{R}_{\geq 0}$ \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+%%--------------------------------------------------------------------
+\section{Constraints}
+%%--------------------------------------------------------------------
+
+\subsection*{P.1 — Flow Conservation}
+
+For each commodity $k$ and each node $n \in N_k$:
+\begin{equation}
+  \sum_{j : (n,j) \in A^k} x_{nj}^k \;-\; \sum_{i : (i,n) \in A^k} x_{in}^k
+  \;=\;
+  \begin{cases}
+    +1 & \text{if } n = o(k) \\
+    -1 & \text{if } n = d(k) \\
+    0  & \text{otherwise}
+  \end{cases}
+  \label{eq:P1}
+\end{equation}
+
+\subsection*{P.2 — ULD Volume Capacity (per flight, per ULD type, per contract)}
+
+For each flight $f \in F$, each ULD type $u \in U_f$, each contract $c \in C_f$:
+\begin{equation}
+  \sum_{k \in K} v_k \cdot y_{f,u,k}^c \;\leq\; \eta \cdot V_u \cdot z_{f,u}^c
+  \label{eq:P2}
+\end{equation}
+Total volume loaded into contract-$c$ ULDs of type $u$ on flight $f$ cannot exceed the fill-rate-capped
+capacity of the claimed ULDs.
+
+\subsection*{P.3 — ULD Weight Capacity}
+
+For each $f, u, c$ as above:
+\begin{equation}
+  \sum_{k \in K} cw_k \cdot y_{f,u,k}^c \;\leq\; W_u \cdot z_{f,u}^c
+  \label{eq:P3}
+\end{equation}
+
+\subsection*{P.4 — Per-Flight Contract Allocation Cap}
+
+For each flight $f \in F$, ULD type $u$, contract $c \in C_f$:
+\begin{equation}
+  z_{f,u}^c \;\leq\; \text{alloc}(c, f, u)
+  \label{eq:P4}
+\end{equation}
+Forwarder cannot claim more ULDs of type $u$ on flight $f$ than the contract allocates.
+
+\subsection*{P.5 — Aircraft Physical Position Cap (across all contracts)}
+
+For each flight $f \in F$, ULD type $u \in U_f$:
+\begin{equation}
+  \sum_{c \in C_f} z_{f,u}^c \;\leq\; P_{f,u}
+  \label{eq:P5}
+\end{equation}
+Total ULDs of type $u$ across all contracts cannot exceed the aircraft's physical positions.
+
+\subsection*{P.6 — Period Contract Allocation Cap}
+
+For each contract $c$, ULD type $u$, period $t$:
+\begin{equation}
+  \sum_{f \in F_c \,\cap\, t} z_{f,u}^c \;\leq\; \text{rem}(c, u, t)
+  \label{eq:P6}
+\end{equation}
+Cumulative ULDs claimed in period $t$ under contract $c$ cannot exceed the period's remaining
+allocation (after prior bookings).
+
+\subsection*{P.7 — Period Minimum Utilization (hard BSA take-or-pay)}
+
+For each contract $c$ with $\text{hard}_c = 1$, ULD type $u$, period $t$:
+\begin{equation}
+  \sum_{f \in F_c \,\cap\, t} z_{f,u}^c \;\geq\; \underline{M}_{c,u,t}
+  \label{eq:P7}
+\end{equation}
+$\underline{M}_{c,u,t}$ is the per-run minimum allocation passed in from the upstream
+period-commitment model. For soft BSAs, $\underline{M}_{c,u,t} = 0$.
+
+\subsection*{P.8 — Arc-to-ULD Linkage}
+
+For each shipment $k$, flight $f$ with $(i,j) = f^{-1}$ in $A^k_{\text{AIR}}$:
+\begin{equation}
+  x_{ij}^k \;=\; \sum_{c \in C_f} \sum_{u \in U_f} y_{f,u,k}^c \;+\; b_{f,k}
+  \label{eq:P8}
+\end{equation}
+If shipment $k$ uses arc $(i,j)$, it is loaded via exactly one contract ULD or the spot rate.
+
+\subsection*{P.9 — Spot vs.\ Contract Exclusivity (per shipment per flight)}
+
+Implicit in P.8: at most one of $\{y_{f,u,k}^c\}_{c,u} \cup \{b_{f,k}\}$ equals 1 when $x_{ij}^k = 1$.
+Formally:
+\begin{equation}
+  \sum_{c \in C_f} \sum_{u \in U_f} y_{f,u,k}^c \;+\; b_{f,k} \;\leq\; 1
+  \label{eq:P9}
+\end{equation}
+
+\subsection*{P.10 — Effective Chargeable Weight (pivot weight linearization)}
+
+For each contract $c$, flight $f$, ULD type $u$ — linearizes $\max(\text{actual}, \pi \cdot z)$:
+\begin{align}
+  C_{f,u,c} \;&\geq\; \sum_{k \in K} cw_k \cdot y_{f,u,k}^c &&\text{(at least the actual loaded weight)} \label{eq:P10a} \\
+  C_{f,u,c} \;&\geq\; \pi_{c,u} \cdot z_{f,u}^c &&\text{(at least the pivot floor)} \label{eq:P10b}
+\end{align}
+Since $C_{f,u,c}$ is minimized in the objective (it multiplies the rate $r_c$), at optimum
+$C_{f,u,c} = \max(\sum_k cw_k \cdot y, \pi_{c,u} \cdot z)$ as required. See Section~\ref{sec:linearization} for the linearization argument.
+
+\subsection*{P.11 — Cargo Cutoff}
+
+For each shipment $k$ and each air arc $(i,j) \in A^k_{\text{AIR}}$ with $f = f(i,j)$:
+\begin{equation}
+  t_k(i) \;\leq\; \text{CGC}_f + M(1 - x_{ij}^k)
+  \label{eq:P11}
+\end{equation}
+where $M$ is a big-M constant (use a tight bound, e.g., max planning horizon).
+
+\subsection*{P.12 — Arrival Time Propagation (ground arcs)}
+
+For each shipment $k$ and each ground arc $(i,j) \in A^k_{\text{PU}} \cup A^k_{\text{OC}} \cup A^k_{\text{DC}} \cup A^k_{\text{FD}}$:
+\begin{equation}
+  t_k(j) \;\geq\; t_k(i) + \tilde{\mu}_{ij}^{\text{G}} - M(1 - x_{ij}^k)
+  \label{eq:P12}
+\end{equation}
+where $\tilde{\mu}_{ij}^{\text{G}} = \mu_{ij}^{\text{G}} + \beta^{\text{O}}$ for $A_{\text{OC}}$,
+$\mu_{ij}^{\text{G}} + \beta^{\text{D}}$ for $A_{\text{DC}}$, else $\mu_{ij}^{\text{G}}$.
+
+\subsection*{P.13 — Arrival Time Propagation (air arcs)}
+
+For each shipment $k$ and each air arc $(i,j) \in A^k_{\text{AIR}}$ with $f = f(i,j)$:
+\begin{equation}
+  t_k(j) \;\geq\; \text{ETA}_f - M(1 - x_{ij}^k)
+  \label{eq:P13}
+\end{equation}
+
+\subsection*{P.14 — Hub Minimum Connect Time}
+
+For each shipment $k$ and each pair of consecutive air arcs $(f, g)$ at hub $h$ with both
+$x_{(\cdot,h)}^k = 1$ and $x_{(h,\cdot)}^k = 1$:
+\begin{equation}
+  t_k(g_{\text{start}}) \;\geq\; \text{ETA}_f \;+\; \text{MCT}_{f,g}^*
+  \;-\; M(2 - x_{f}^k - x_{g}^k)
+  \label{eq:P14}
+\end{equation}
+where $\text{MCT}_{f,g}^* = \text{MCT}_{f,g}^{\text{thru}}$ if $\psi_{f,g,u} = 1$ for the
+ULD type $u$ used by $k$ on both arcs, otherwise $\text{MCT}_{f,g}^{\text{reULD}}$.
+
+\subsection*{P.15 — Deadline}
+
+For each shipment $k$:
+\begin{equation}
+  t_k(d(k)) \;\leq\; T_k^{\text{dead}}
+  \label{eq:P15}
+\end{equation}
+
+\subsection*{P.16 — Cargo Type Compatibility}
+
+For each shipment $k$ with $\tau_k = \text{DGR}$ and each air arc $(i,j) \in A^k_{\text{AIR}}$:
+\begin{equation}
+  x_{ij}^k \;\leq\; \text{dgr}(f(i,j))
+  \label{eq:P16}
+\end{equation}
+Analogous constraints for perishable, valuable, heavy cargo.
+
+\subsection*{P.17 — ULD Physical Fit}
+
+For each shipment $k$ and each $(f, u, c)$ combination where $D_k$ does not fit ULD type $u$:
+\begin{equation}
+  y_{f,u,k}^c \;=\; 0
+  \label{eq:P17}
+\end{equation}
+This is a pre-processing exclusion, not a runtime constraint — fit is determined from
+$D_k$ vs.\ ULD contour at subgraph construction. Bin-packing of multiple shipments inside
+a single ULD is approximated by the volume constraint P.2; full 3D bin-packing is deferred.
+
+\subsection*{P.18 — Budget Cap (optional)}
+
+For each shipment $k$ with $B_k < \infty$:
+\begin{equation}
+  \text{cost}_k \;\leq\; B_k
+  \label{eq:P18}
+\end{equation}
+where $\text{cost}_k$ is the per-shipment cost contribution from the objective.
+
+\subsection*{P.19 — Domain}
+
+\begin{equation}
+  x_{ij}^k, y_{f,u,k}^c, b_{f,k} \in \{0,1\}, \quad
+  z_{f,u}^c \in \mathbb{Z}_{\geq 0}, \quad
+  C_{f,u,c}, t_k(i) \in \mathbb{R}_{\geq 0}
+  \label{eq:P19}
+\end{equation}
+
+%%--------------------------------------------------------------------
+\section{Objective Function}
+%%--------------------------------------------------------------------
+
+Minimize total cost across all shipments:
+
+\begin{align}
+  \min \quad
+  & \sum_{k \in K} \sum_{(i,j) \in A^k_{\text{PU}} \cup A^k_{\text{OC}} \cup A^k_{\text{DC}} \cup A^k_{\text{FD}}} c_{ij}^{\text{G}} \cdot x_{ij}^k
+    \tag{ground cost} \\
+  +\;
+  & \sum_{c \in C} \sum_{f \in F_c} \sum_{u \in U_f} r_c \cdot C_{f,u,c}
+    \tag{contracted ULD cost incl.\ pivot floor} \\
+  +\;
+  & \sum_{k \in K} \sum_{f \in F^k} \text{cost}^{\text{spot}}(k, f) \cdot b_{f,k}
+    \tag{spot rate cost} \\
+  +\;
+  & \sum_{k \in K} \sum_{f \in F^k} \bigl(\text{FSC}_f + \text{SSC}_f\bigr) \cdot cw_k \cdot \mathbb{1}[k \text{ on } f]
+    \;+\; \text{(THC, AMS — per shipment per arc)}
+    \tag{surcharges} \\
+  +\;
+  & \sum_{k \in K} \sum_{(f,g) \in \text{Hub}(k)} \sum_{u} \rho_{f,g,u}^{\text{reULD}} \cdot (1 - \psi_{f,g,u}) \cdot y_{f,u,k}^c \cdot y_{g,u,k}^{c'}
+    \tag{rehandling cost when re-ULDing}
+\end{align}
+
+The rehandling cost term is bilinear ($y \cdot y$); linearize by introducing an auxiliary
+binary variable per consecutive air-arc pair per shipment per ULD type that equals the
+product (Section~\ref{sec:linearization}).
+
+\paragraph{Indicator $\mathbb{1}[k \text{ on } f]$.}
+Equals $1$ if shipment $k$ uses flight $f$; can be substituted as $\sum_{c,u} y_{f,u,k}^c + b_{f,k}$.
+
+%%--------------------------------------------------------------------
+\section{Linearization Details}
+\label{sec:linearization}
+%%--------------------------------------------------------------------
+
+\subsection{Pivot Weight Linearization (P.10)}
+
+The native cost expression per (contract, flight, ULD type) is:
+\[
+  \text{cost}_{f,u,c} = r_c \cdot \max\!\Bigl(\sum_k cw_k \cdot y_{f,u,k}^c,\ \pi_{c,u} \cdot z_{f,u}^c\Bigr)
+\]
+The $\max$ operator is non-linear. Introduce auxiliary variable $C_{f,u,c} \in \mathbb{R}_{\geq 0}$
+with two linear inequality constraints (P.10a, P.10b). Replace the cost term with $r_c \cdot C_{f,u,c}$
+in the objective. \textbf{Why this works:} the objective minimizes the weighted sum that includes
+$r_c \cdot C_{f,u,c}$, so the optimizer pushes $C_{f,u,c}$ down to the largest binding
+constraint, i.e., the maximum of the two right-hand sides. Adds one continuous variable and
+two inequality constraints per (contract, flight, ULD type) triple.
+
+\subsection{Bilinear Rehandling Cost Linearization}
+
+The rehandling cost term contains $y_{f,u,k}^c \cdot y_{g,u,k}^{c'}$ (product of two binaries).
+Standard McCormick linearization: introduce auxiliary binary $\zeta_{f,g,u,k} \in \{0,1\}$
+representing the product, with three constraints:
+\begin{align}
+  \zeta_{f,g,u,k} \;&\leq\; y_{f,u,k}^c \\
+  \zeta_{f,g,u,k} \;&\leq\; y_{g,u,k}^{c'} \\
+  \zeta_{f,g,u,k} \;&\geq\; y_{f,u,k}^c + y_{g,u,k}^{c'} - 1
+\end{align}
+Since $\zeta$ appears with positive coefficient in the objective (rehandling cost), the
+optimizer drives $\zeta$ down to 0 unless both $y$ values force it to 1 — exactly the
+desired AND semantics. Adds one binary variable and three inequalities per consecutive
+arc pair per ULD type per shipment.
+
+\subsection{Big-M Tightening}
+
+The big-M constants in P.11, P.12, P.13, P.14 can be replaced with the tightest valid
+bound: e.g., the maximum possible time span across the planning horizon. Loose big-M values
+weaken the LP relaxation and slow solving. Practical tightening: use $M = T_k^{\text{dead}} - t_k^{\text{rdy}} + \epsilon$
+on time-related constraints.
+
+\subsection{Spot Rate Per-Shipment Pre-Computation}
+
+The IATA weight-break rule (\S\ref{sec:spot-params}) is a $\min$ over tiers of piecewise
+linear cost. Since shipment chargeable weight $cw_k$ is a parameter, $\text{cost}^{\text{spot}}(k, f)$
+is fully pre-computed before the MILP is built. No linearization needed at solve time.
+
+%%--------------------------------------------------------------------
+\section{Re-ULDing — Operational Mechanics}
+\label{sec:reulding}
+%%--------------------------------------------------------------------
+
+This section motivates and defines re-ULDing in operational detail, which is the basis for
+the through-ULD compatibility parameter $\psi$ and the rehandling cost $\rho^{\text{reULD}}$.
+
+\paragraph{What re-ULDing is.}
+At an intermediate (hub) airport on a multi-hop route, a built ULD arriving on flight $f$
+may need to be \emph{broken down} — i.e., physically dismantled, with cargo removed
+piece-by-piece — and \emph{rebuilt} into a different ULD for the onward flight $g$. The
+specific sequence:
+\begin{enumerate}[noitemsep]
+  \item ULD arrives on inbound flight $f$ at the hub.
+  \item Ground handler unloads ULD from aircraft into the hub cargo terminal.
+  \item ULD is moved to the breakdown area.
+  \item Cargo is removed from the ULD; each AWB's pieces are extracted and tagged.
+  \item Cargo is held in the hub warehouse pending the onward flight $g$.
+  \item For onward flight $g$: an empty ULD from carrier($g$)'s pool is delivered to build-up.
+  \item Cargo is restuffed into the new ULD, secured with netting, weighed.
+  \item Built ULD is moved to the aircraft loading area and loaded onto $g$.
+\end{enumerate}
+
+\paragraph{When re-ULDing is required ($\psi = 0$).}
+\begin{itemize}[noitemsep]
+  \item \textbf{Interline (different carriers):} carrier($f$) $\neq$ carrier($g$). Each
+        airline maintains its own ULD pool; ULDs cannot transfer between pools. Cargo must
+        leave airline $f$'s ULD and enter airline $g$'s ULD.
+  \item \textbf{ULD type change:} if the inbound aircraft uses LD3s (wide-body belly) and
+        the outbound aircraft uses PMC main-deck pallets (freighter), the ULD type itself
+        must change. Cargo is re-stuffed into the new ULD type.
+  \item \textbf{Hub lacks through-cargo facility for type $u$:} rare at major hubs (HKG,
+        FRA, NRT all have through-cargo handling) but possible at smaller airports.
+  \item \textbf{Forwarder elects re-ULD:} e.g., to re-sort cargo destined to different
+        onward flights into different ULDs. Not modeled in MVP (deferred).
+\end{itemize}
+
+\paragraph{When through-ULD applies ($\psi = 1$).}
+\begin{itemize}[noitemsep]
+  \item \textbf{Through-flight technical stop:} same flight number, same aircraft. The ULD
+        stays in its aircraft position throughout the intermediate stop. The hub processing
+        is limited to refueling and crew change. Example: 5Y9123 TPE$\to$ANC$\to$JFK, ULD
+        loaded at TPE stays on the aircraft through ANC and continues to JFK.
+  \item \textbf{Same-airline through-cargo at hub:} carrier($f$) = carrier($g$), the airline
+        has a through-cargo agreement at the hub, and the ULD type is compatible with both
+        aircraft. ULD is unloaded from $f$, moved as a complete unit through the hub
+        through-cargo facility, and loaded onto $g$. Common at major hubs for same-airline
+        connections (e.g., Cathay TPE$\to$HKG$\to$JFK on CX564 + CX880).
+\end{itemize}
+
+\paragraph{Cost and time impact.}
+\begin{itemize}[noitemsep]
+  \item Through-ULD MCT: $\text{MCT}^{\text{thru}}$ typically $1.5$--$4$ hours depending on
+        hub and aircraft turnaround.
+  \item Re-ULD MCT: $\text{MCT}^{\text{reULD}}$ typically $6$--$12$ hours including
+        breakdown, hub storage, and rebuild for onward flight.
+  \item Rehandling cost: $\rho^{\text{reULD}}$ typically \$150--\$500 per ULD, depending on
+        cargo characteristics and hub labor rates.
+  \item Cargo risk: re-ULDing introduces handling-induced damage and piece-loss risk;
+        valuable / fragile cargo prefers through-ULD where possible (modeled implicitly via
+        the cost differential).
+\end{itemize}
+
+%%--------------------------------------------------------------------
+\section{Open Items and Future Extensions}
+\label{sec:deferred}
+%%--------------------------------------------------------------------
+
+\begin{enumerate}
+  \item \textbf{Period-level commitment optimization (P.7).} MVP takes $\underline{M}_{c,u,t}$
+        from a separate upstream model. Future: joint optimization of period commitment
+        allocation across the rolling horizon.
+  \item \textbf{Through-ULD as decision variable.} MVP makes $\psi$ a pre-computed
+        parameter. P1: promote to decision variable, allowing forwarder-elected re-ULDing
+        at compatible hubs for cargo re-sorting.
+  \item \textbf{Probabilistic transit time objective.} MVP uses deterministic mean transit
+        and a hard deadline. P1: extend to $\Pr(\text{arrival} \leq T_k^{\text{dead}}) \geq p$.
+  \item \textbf{Full 3D bin-packing within ULD.} MVP uses aggregate volume constraint (P.2)
+        with $\eta = 0.97$ as a fill-rate proxy. P1: 3D bin-packing model for shipments
+        with awkward piece dimensions.
+  \item \textbf{ULD availability at CFS.} MVP assumes empty ULDs are always delivered to CFS
+        before cargo cutoff. P1: model ULD pool availability as a constraint.
+  \item \textbf{CFS dock door capacity.} MVP assumes infinite CFS throughput. P1: model dock
+        door and labor capacity as a CFS-level constraint.
+  \item \textbf{Cargo type segregation within ULD.} MVP allows any compatible commodities
+        to share a ULD. P1: hazmat compatibility matrix, perishable temperature segregation.
+  \item \textbf{Multiple ULD types per shipment.} MVP forces a shipment to one ULD type per
+        flight. P1: allow splitting across LD3 + LD7 if economically preferred.
+  \item \textbf{Carrier alliance slot sharing.} MVP treats each contract independently.
+        P1: model SkyTeam / Star Alliance / oneworld slot exchanges where ULD positions on
+        partner carriers can substitute.
+  \item \textbf{Spot capacity availability uncertainty.} MVP treats spot rate as always
+        available. Real spot capacity has day-of-departure availability risk. P1: model
+        spot capacity as a stochastic constraint or with explicit booking rejection events.
+\end{enumerate}
+
+\end{document}

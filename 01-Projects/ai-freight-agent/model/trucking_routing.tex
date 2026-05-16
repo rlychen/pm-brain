@@ -1,0 +1,854 @@
+%% trucking_routing.tex
+%% Trucking Multi-Mode Routing (FTL / PTL / LTL) — MVP Formal Model
+%% Phase 1 — must be approved before any code starts
+%% Status: Draft v1 — 2026-05-16
+%%
+%% Adversarial critique applied before LaTeX:
+%%   - PTL as third mode (Volume LTL)
+%%   - LTL hard refusal constraints (linear-foot, piece dimensions, total weight)
+%%   - (Carrier, origin SC, destination SC) tuples instead of hub-routing
+%%   - Contract FTL allocation cap (parallel to ocean string allocation)
+%%   - MABD / delivery appointment window
+%%   - Tender acceptance probability parameter and expected cost
+%%   - FAK class override
+%%   - Carrier-lane service availability matrix
+%%   - Chassis day rate, per diem, demurrage, pier pass costs
+%%   - Time discretization to days; symmetry-breaking lex order on slot c
+
+\documentclass[11pt,a4paper]{article}
+
+\usepackage{amsmath,amssymb,amsthm}
+\usepackage{booktabs}
+\usepackage{geometry}
+\usepackage{hyperref}
+\usepackage{array}
+\usepackage{xcolor}
+\usepackage{enumitem}
+\usepackage{longtable}
+\usepackage{graphicx}
+
+\geometry{margin=2.5cm}
+\setlength{\parskip}{0.4em}
+\hypersetup{colorlinks=true, linkcolor=blue}
+
+\newcommand{\ceil}[1]{\left\lceil #1 \right\rceil}
+\newcommand{\floor}[1]{\left\lfloor #1 \right\rfloor}
+\newcommand{\defeq}{\triangleq}
+
+\theoremstyle{definition}
+\newtheorem{defn}{Definition}
+\newtheorem{remark}{Remark}
+
+\title{\textbf{Trucking Multi-Mode Routing (FTL / PTL / LTL)}\\[0.4em]
+\large MVP Formal Model --- Phase 1, v1}
+\author{AI Freight Agent}
+\date{Draft --- 2026-05-16}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+Formal specification of the optimization model for the multi-mode trucking routing problem,
+covering three distinct service tiers: Full Truckload (FTL), Partial Truckload (PTL, also
+called Volume LTL), and Less-than-Truckload (LTL). The model is a Binary Multi-Commodity
+Flow problem on a commodity-specific subgraph, with FTL/PTL bin-packing-style consolidation,
+LTL per-shipment pre-computed cost reflecting density-based class and weight-break tiered
+pricing, and hard tender-refusal constraints. The model parallels Ocean FCL
+(\texttt{model/ocean\_fcl\_routing.tex}), Ocean LCL (\texttt{model/ocean\_lcl\_routing.tex}),
+and Air Freight (\texttt{model/air\_freight\_routing.tex}) for notational consistency, with
+significant additions reflecting the realities of US-domestic trucking: tender acceptance
+probability, contract vs.\ spot capacity, dock appointment / MABD windows, and carrier-lane
+service availability. The design was refined after an adversarial critique focused on
+modeling realism (\S\ref{sec:critique}).
+\end{abstract}
+
+\tableofcontents
+\newpage
+
+%%--------------------------------------------------------------------
+\section{Problem Statement}
+%%--------------------------------------------------------------------
+
+Given a set of trucking shipment requests (commodities), each defined by origin location,
+destination location, volume, weight, piece dimensions, cargo type, and time constraints,
+find a minimum-expected-cost assignment of commodities to trucking arcs across three service
+modes such that:
+\begin{itemize}[noitemsep]
+  \item every commodity is delivered within its delivery appointment window
+        (Must-Arrive-By-Date / MABD),
+  \item each FTL or PTL truck respects volume and weight capacity,
+  \item LTL hard refusal rules are honored (linear-foot caps, piece dimensions, weight ceiling),
+  \item LTL pickup cutoffs and carrier-published transit times are respected,
+  \item contract FTL lane allocations are not exceeded,
+  \item carrier-lane service availability (residential, liftgate, limited access) is respected,
+  \item shipper-specific FAK class overrides apply where contracted,
+  \item expected cost includes tender acceptance probability and re-tender markup, and
+  \item optional per-commodity budget caps are respected.
+\end{itemize}
+
+\paragraph{Three trucking modes — distinct pricing and operational regimes.}
+
+\begin{center}
+\begin{tabular}{lp{12cm}}
+\toprule
+Mode & Description \\
+\midrule
+\textbf{FTL} & Full Truckload. One shipper's freight (or one consolidated group) fills a hired truck; direct origin-to-destination move. Per-mile pricing. Typical $\geq 10{,}000$\,kg or $\geq 26\,\text{m}^3$. \\
+\textbf{PTL} & Partial Truckload / Volume LTL. The 10{,}000--25{,}000\,kg or 6--18 pallet band where freight is too large for traditional LTL but doesn't fill a truck. Direct move with no terminal handling; per-shipment pricing. \\
+\textbf{LTL} & Less-than-Truckload. Carrier consolidates multiple shippers' freight through service-center network. Pickup, linehaul (possibly multi-hop within carrier network), delivery. Density-based class + weight-break tier pricing. \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\paragraph{Forwarder vs.\ carrier perspective.}
+This model is the freight forwarder's optimization, not the LTL carrier's. The forwarder
+\emph{tenders} a shipment to a carrier; the carrier then routes it through their internal
+network. The forwarder does \emph{not} decide which breakbulk hubs a carrier uses internally.
+Consequently, the LTL network here is modeled as a directed bipartite graph of
+$(\text{carrier}, \text{origin service center}, \text{destination service center})$ tuples
+with published transit times and rates --- no intermediate hub nodes. This is a key
+correction to the textbook hub-routing approach (Powell \& Sheffi 1983), which describes the
+\emph{carrier's} load-planning problem.
+
+\paragraph{MVP scope.}
+\begin{itemize}[noitemsep]
+  \item US-domestic trucking. Cross-border (Mexico/Canada) deferred to P1.
+  \item FTL: 53$'$ dry van baseline; 48$'$ as alternative equipment type.
+  \item PTL: per-shipment pricing model (no equipment-type decision at MVP).
+  \item LTL: density-based class (NMFC 2025 SDS) with FAK override; weight-break tier pricing
+        with deficit-weight rule; minimum charge floor.
+  \item Tender acceptance probability per (carrier, lane, day) as parameter; expected cost
+        reported (see \S\ref{sec:tender}).
+  \item Time discretization to days (LTL/FTL scheduling does not require hour-level precision).
+  \item Container-to-chassis: one ocean container per chassis per truck (hard).
+  \item Probabilistic transit time, driver Hours of Service, backhaul optimization, dedicated
+        lanes, reefer/hazmat/oversize, pool distribution explicitly deferred.
+\end{itemize}
+
+%%--------------------------------------------------------------------
+\section{Graph Structure}
+%%--------------------------------------------------------------------
+
+\subsection{Physical Network Graph \texorpdfstring{$G(N, A)$}{G(N,A)}}
+
+\[
+  N = N_O \cup N_{\text{SC,O}} \cup N_{\text{SC,D}} \cup N_D
+\]
+
+\begin{description}[leftmargin=3.4cm, labelwidth=3.2cm, style=nextline]
+  \item[$N_O$ — Origins] Shipper doors (or POL/POD/CFS upstream from another mode).
+  \item[$N_{\text{SC,O}}$ — LTL origin service centers] Per-carrier origin service center
+        serving the shipper's ZIP. One node per (carrier, origin SC) tuple.
+  \item[$N_{\text{SC,D}}$ — LTL destination service centers] Per-carrier destination service
+        center serving the consignee's ZIP.
+  \item[$N_D$ — Destinations] Consignee doors (or POL/POD/CFS downstream to another mode).
+\end{description}
+
+\begin{remark}[No intermediate hub nodes]
+Modern freight-forwarder routing does not select breakbulk hubs inside a carrier's network.
+The carrier's internal hub-and-spoke is opaque to the forwarder; published transit times and
+rates already embed it. LTL arcs are therefore direct origin-SC $\to$ destination-SC
+edges, with carrier-published transit time. This is the principal departure from the
+Powell-Sheffi LTL load-planning literature (which addresses the carrier's internal problem).
+\end{remark}
+
+\[
+  A = A_{\text{PU}} \cup A_{\text{LH-FTL}} \cup A_{\text{LH-PTL}} \cup A_{\text{LH-LTL}} \cup A_{\text{FD}}
+\]
+
+\begin{description}[leftmargin=3.4cm, labelwidth=3.2cm, style=nextline]
+  \item[$A_{\text{PU}}$ — Pickup] Origin door $\to$ LTL origin SC (truck pickup leg of LTL service).
+        For FTL/PTL, pickup is bundled into the linehaul arc (no separate pickup node).
+  \item[$A_{\text{LH-FTL}}$ — FTL linehaul] Direct origin region $\to$ destination region.
+        One arc per (carrier, lane, equipment, contract/spot type).
+  \item[$A_{\text{LH-PTL}}$ — PTL linehaul] Direct origin region $\to$ destination region.
+        Per-shipment pricing, no terminal handling. One arc per (carrier, lane).
+  \item[$A_{\text{LH-LTL}}$ — LTL linehaul] $(SC_O, SC_D)$ pairs within a carrier's network.
+        Carrier-published transit time.
+  \item[$A_{\text{FD}}$ — Final delivery] LTL destination SC $\to$ consignee door.
+        For FTL/PTL, delivery is bundled into the linehaul arc.
+\end{description}
+
+\subsection{Commodity-Specific Subgraph \texorpdfstring{$G(N_k, A_k)$}{G(Nk,Ak)}}
+
+Same construction principle as other modes. Arcs in $A_k$ must be time-feasible, satisfy LTL
+hard refusal rules (P.6, P.7), and pass carrier-lane service-availability checks (P.12).
+
+%%--------------------------------------------------------------------
+\section{Sets and Indices}
+%%--------------------------------------------------------------------
+
+\begin{center}
+\begin{tabular}{lp{11.5cm}}
+\toprule
+Symbol & Description \\
+\midrule
+$K$ & Set of shipments (commodities), indexed by $k$ \\
+$N,\, A$ & All nodes and arcs \\
+$A^k \subseteq A$ & Feasible arcs for shipment $k$ \\
+$A^k_M \defeq A^k \cap A_M$ & Feasible arcs of mode $M \in \{\text{PU, LH-FTL, LH-PTL, LH-LTL, FD}\}$ \\
+$\mathcal{M}$ & Trucking modes $= \{\text{FTL, PTL, LTL}\}$ \\
+$\mathcal{C}$ & Set of trucking carriers (FedEx Freight, Old Dominion, XPO, Saia, Estes, R+L, ABF, Knight-Swift, etc.) \\
+$\mathcal{E}$ & Equipment types $= \{53', 48'\text{ dry van}\}$ (FTL/PTL); LTL uses carrier-internal equipment, opaque to model \\
+$\mathcal{T}$ & Time periods indexed by $\tau$. MVP: \textbf{day buckets} ($\tau \in \{0, 1, 2, \ldots, T_{\max}\}$, days). \\
+$Z$ & Set of contract FTL lane allocations $z \in Z$; each has (carrier, lane, period) tuple \\
+$N_k$ & Nodes incident to $A^k$ \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+%%--------------------------------------------------------------------
+\section{Parameters}
+%%--------------------------------------------------------------------
+
+\subsection{Commodity Parameters}
+
+\begin{center}
+\begin{tabular}{llp{6.5cm}l}
+\toprule
+Parameter & Symbol & Description & Unit \\
+\midrule
+Volume & $v_k$ & Cargo volume & m\textsuperscript{3} \\
+Weight & $w_k$ & Gross weight & kg \\
+Density & $\delta_k$ & $w_k / v_k$ (computed) & kg/m\textsuperscript{3} \\
+Pallet count & $p_k$ & Standard pallets (48$\times$40 in) & — \\
+Linear feet & $\ell_k$ & Linear feet of trailer occupied if loaded LTL & ft \\
+Max piece length & $L_k^{\max}$ & Longest single piece dimension & ft \\
+Max piece weight & $W_k^{\max}$ & Heaviest single piece (HU) weight & kg \\
+Cargo ready & $t_k^{\text{rdy}}$ & Earliest pickup date & day index $\tau$ \\
+Delivery window start & $T_k^{\text{open}}$ & Earliest acceptable delivery (MABD lower bound) & day index $\tau$ \\
+Delivery window end & $T_k^{\text{close}}$ & Latest acceptable delivery (MABD upper bound / deadline) & day index $\tau$ \\
+Origin & $o(k)$ & $\in N_O$ & — \\
+Destination & $d(k)$ & $\in N_D$ & — \\
+Cargo type & $\tau_k$ & General / DGR / temp / oversize / valuable & categorical \\
+NMFC class & $\text{class}_k^{\text{NMFC}}$ & Density-derived NMFC class (50--500) per 2025 SDS & — \\
+FAK class override & $\text{class}_k^{\text{FAK}}$ & Shipper-contract-collapsed class (if applicable) & — \\
+Service flags & $\text{flags}_k$ & Liftgate / inside / residential / limited access required & set \\
+Budget cap & $B_k$ & Hard cost ceiling; $\infty$ if not set & USD \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\paragraph{Linear feet estimation.}
+\begin{equation}
+  \ell_k \defeq \ceil{\frac{p_k}{2}} \cdot \frac{40\text{ in}}{12\text{ in/ft}}
+        \approx 3.33 \cdot \ceil{p_k / 2}\text{ ft}
+  \label{eq:linear-feet}
+\end{equation}
+assuming pallets loaded two-wide in a 102$''$ trailer. Used in P.6 (linear-foot rule).
+
+\subsection{Equipment Parameters (FTL/PTL)}
+
+\begin{center}
+\begin{tabular}{lllll}
+\toprule
+Equipment $e$ & Internal volume $V_e$ & Max payload $W_e$ & Max linear ft $L_e$ & Pallet capacity \\
+\midrule
+53$'$ dry van & 96 m\textsuperscript{3} & 19,500 kg & 53 ft & 26 std \\
+48$'$ dry van & 84 m\textsuperscript{3} & 19,500 kg & 48 ft & 24 std \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+Fill rate cap $\eta = 0.85$ for road consolidation (lower than ocean/air due to dunnage,
+pallet jack access lanes, and weight distribution constraints).
+
+\subsection{Pickup, Final Delivery (Ground) Arc Parameters}
+
+For each ground arc $(i,j) \in A_{\text{PU}} \cup A_{\text{FD}}$:
+\begin{center}
+\begin{tabular}{llp{6cm}l}
+\toprule
+Parameter & Symbol & Description & Unit \\
+\midrule
+Cost & $c_{ij}^{\text{G}}$ & Per-shipment local trucking cost & USD \\
+Transit & $\mu_{ij}^{\text{G}}$ & Days (typically 0--1) & days \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\subsection{FTL Linehaul Arc Parameters}
+\label{sec:ftl-params}
+
+For each $(i,j) \in A_{\text{LH-FTL}}$ on (carrier, lane, equipment, contract-type):
+\begin{center}
+\begin{tabular}{llp{6cm}l}
+\toprule
+Parameter & Symbol & Description & Unit \\
+\midrule
+Carrier & $\text{car}(i,j)$ & Carrier ID & — \\
+Equipment & $e(i,j)$ & 53$'$ or 48$'$ dry van & — \\
+Contract type & $\text{ct}(i,j)$ & Contract or spot & — \\
+Distance & $\text{dist}_{ij}$ & Lane distance & miles \\
+Base rate & $r_{ij}^{\text{FTL}}$ & Per-mile rate & USD/mi \\
+Fuel surcharge & $\text{fsc}_{ij}$ & Pct of linehaul, refreshed weekly & — \\
+Transit time & $\mu_{ij}^{\text{FTL}}$ & Mean transit days & days \\
+Tender accept prob & $p_{ij}^{\text{acc}}$ & Probability tender accepted at quoted rate (\S\ref{sec:tender}) & — \\
+Re-tender premium & $\rho_{ij}^{\text{re}}$ & Multiplier on base if rejected (typ. 1.15--1.25) & — \\
+Contract allocation & $\text{alloc}_{ij}(\tau)$ & Trucks reserved on contract lane in week $\tau$ (if $\text{ct} = $ contract) & trucks \\
+Service flags supported & $\text{flagsAvail}_{ij}$ & Which service flags available on this arc & set \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\subsection{PTL Linehaul Arc Parameters}
+
+For each $(i,j) \in A_{\text{LH-PTL}}$:
+\begin{center}
+\begin{tabular}{llp{6cm}l}
+\toprule
+Parameter & Symbol & Description & Unit \\
+\midrule
+Carrier & $\text{car}(i,j)$ & PTL specialist (typically a different carrier from LTL or FTL) & — \\
+Base rate & $r_{ij}^{\text{PTL}}$ & Per-shipment + per-mile or pallet-based & USD \\
+Min charge & $\text{min}_{ij}^{\text{PTL}}$ & Minimum per-shipment charge & USD \\
+Max payload & $W^{\text{PTL,max}}_{ij}$ & PTL upper weight limit ($\sim$25{,}000 kg typ.) & kg \\
+Min payload & $W^{\text{PTL,min}}_{ij}$ & PTL lower threshold ($\sim$4{,}500 kg or $\sim$6 pallets) & kg \\
+Transit time & $\mu_{ij}^{\text{PTL}}$ & 1--3 days direct & days \\
+Tender accept prob & $p_{ij}^{\text{acc}}$ & As FTL & — \\
+Re-tender premium & $\rho_{ij}^{\text{re}}$ & As FTL & — \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\subsection{LTL Linehaul Arc Parameters}
+\label{sec:ltl-params}
+
+For each $(i,j) \in A_{\text{LH-LTL}}$ where $i \in N_{\text{SC,O}}$, $j \in N_{\text{SC,D}}$:
+\begin{center}
+\begin{tabular}{llp{6cm}l}
+\toprule
+Parameter & Symbol & Description & Unit \\
+\midrule
+Carrier & $\text{car}(i,j)$ & LTL carrier ID & — \\
+Pickup cutoff & $\text{CGC}_{ij}(\tau)$ & Pickup cutoff for day $\tau$ (hours-of-day collapsed to day cutoff) & day \\
+Transit time & $\mu_{ij}^{\text{LTL}}$ & Carrier-published days, origin SC to dest SC (embeds internal hub-and-spoke) & days \\
+Rate table & $R_{ij}(\text{class}, b)$ & USD/CWT for each (class, weight-break $b$) combination & USD/CWT \\
+Min charge & $\text{min}_{ij}^{\text{LTL}}$ & Minimum per-shipment charge & USD \\
+Absolute min charge & $\text{AMC}_{ij}$ & Higher floor for specific cases (long-haul, oversized) & USD \\
+Fuel surcharge & $\text{fsc}_{ij}$ & Pct of linehaul, weekly refresh & — \\
+Max linear feet & $L_{ij}^{\text{LTL,max}}$ & Capacity-load trigger; default 12 ft & ft \\
+Max piece length & $L_{ij}^{\text{LTL,piece,max}}$ & Single-piece length refusal threshold (carrier-specific, 8--16 ft) & ft \\
+Max piece weight & $W_{ij}^{\text{LTL,piece,max}}$ & Single-piece weight refusal threshold ($\sim$2{,}500 lb) & kg \\
+Max shipment weight & $W_{ij}^{\text{LTL,max}}$ & Total shipment refusal threshold ($\sim$20{,}000--25{,}000 lb) & kg \\
+Tender accept prob & $p_{ij}^{\text{acc}}$ & High for LTL (contract): $\sim$0.95+ & — \\
+Re-tender premium & $\rho_{ij}^{\text{re}}$ & Modest for LTL (1.05--1.10) & — \\
+Service flags supported & $\text{flagsAvail}_{ij}$ & Per-arc service availability flags & set \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\paragraph{LTL Weight Break Tiers (NMFTA standard).}
+
+\begin{center}
+\begin{tabular}{lll}
+\toprule
+Tier code & Breakpoint $b$ & Weight range (lbs) \\
+\midrule
+L5C  & 0     & 0--499 \\
+M5C  & 500   & 500--999 \\
+M1M  & 1{,}000 & 1{,}000--1{,}999 \\
+M2M  & 2{,}000 & 2{,}000--4{,}999 \\
+M5M  & 5{,}000 & 5{,}000--9{,}999 \\
+M10M & 10{,}000 & 10{,}000--19{,}999 \\
+M20M & 20{,}000 & 20{,}000--29{,}999 \\
+M30M & 30{,}000 & 30{,}000--39{,}999 \\
+M40M & 40{,}000 & 40{,}000+ \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+$\$/\text{CWT}$ decreases monotonically through tiers (typical 7.79--9.20\% drop per tier;
+cumulative $\sim$38.66\% from L5C to M10M).
+
+\subsection{Accessorial \& Surcharge Parameters}
+
+\begin{center}
+\begin{tabular}{lp{8cm}l}
+\toprule
+Charge & Description & Typical \\
+\midrule
+Liftgate & Tail-lift required at pickup or delivery & \$75--150 \\
+Residential delivery & Non-commercial address & \$75--100 \\
+Inside delivery & Beyond loading dock & \$100--300 \\
+Limited access & Schools, military, construction sites & \$75--150 \\
+Reconsignment & Destination changed in transit & \$85--200 \\
+Notification & Appointment phone-call & \$25 \\
+Detention & Driver waiting beyond free time (typ.\ 2h) & \$50--75/h \\
+Layover & Driver overnight delay & \$250--450/day \\
+Stop-off & Extra pickup or delivery stop & \$50--150 \\
+TONU & Truck Ordered Not Used (cancelled pickup) & \$150--250 \\
+Chassis day rate & After free time at consignee (drayage) & \$25--40/day \\
+Per diem & Ocean container free time exceeded at consignee & \$75--150/day \\
+Demurrage & Ocean container free time exceeded at terminal & \$100--300/day \\
+Pier pass & LA/LB only & \$35--75 \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\subsection{Tender Acceptance Cost Adjustment}
+\label{sec:tender}
+
+\paragraph{Assumption.}
+Tender acceptance is modeled as a deterministic per-arc cost adjustment in MVP. Given a base
+rate, the optimizer sees an \emph{expected cost} that captures both the probability of
+acceptance at the quoted rate and the markup if re-tendered after rejection. The probabilistic
+model is:
+\begin{equation}
+  c_{ij}^{\text{exp}}(k) \;=\; p_{ij}^{\text{acc}} \cdot c_{ij}^{\text{base}}(k)
+                            \;+\; (1 - p_{ij}^{\text{acc}}) \cdot \rho_{ij}^{\text{re}} \cdot c_{ij}^{\text{base}}(k)
+  \label{eq:tender-expected}
+\end{equation}
+Equivalently:
+\begin{equation}
+  c_{ij}^{\text{exp}}(k) \;=\; c_{ij}^{\text{base}}(k) \cdot \bigl[1 + (1 - p_{ij}^{\text{acc}})\,(\rho_{ij}^{\text{re}} - 1)\bigr]
+\end{equation}
+
+\textbf{Interpretation:} If the tender is accepted at the quoted base rate
+(prob $p_{ij}^{\text{acc}}$), the forwarder pays $c_{ij}^{\text{base}}$. If rejected
+(prob $1 - p_{ij}^{\text{acc}}$), the forwarder re-tenders at a premium
+$\rho_{ij}^{\text{re}}$ on the base rate (typical 1.15--1.25 for FTL spot,
+1.05--1.10 for LTL contract). The expected cost combines these.
+
+\textbf{Worked example.} FTL spot lane with $p_{ij}^{\text{acc}} = 0.60$,
+$\rho_{ij}^{\text{re}} = 1.20$, $c_{ij}^{\text{base}} = \$1{,}500$:
+\[
+  c_{ij}^{\text{exp}} \;=\; 1500 \cdot [1 + 0.40 \cdot 0.20] \;=\; 1500 \cdot 1.08 \;=\; \$1{,}620
+\]
+The optimizer compares routes using $c_{ij}^{\text{exp}}$; the operations team sees both the
+nominal quote $c_{ij}^{\text{base}}$ and the expected outcome $c_{ij}^{\text{exp}}$ in the
+recommendation surface. Without this adjustment, the system systematically under-quotes by
+15--25\% relative to actuals --- this was identified as the most critical correction in the
+adversarial critique (\S\ref{sec:critique}).
+
+\textbf{Deferred to P1:} explicit modeling of the re-tender process as a stochastic
+event with re-routing, multi-attempt cost accumulation, and integration with rolling-horizon
+re-planning. The MVP deterministic adjustment is a first-order approximation.
+
+\subsection{Pre-Computed LTL Cost Per Shipment Per Arc}
+\label{sec:ltl-precomp}
+
+For each shipment $k$ and LTL arc $(i,j) \in A^k_{\text{LH-LTL}}$, the cost is pre-computed:
+
+\begin{equation}
+  c_{ij}^{\text{LTL,base}}(k) \;=\; \max\!\left(
+    \max(\text{AMC}_{ij}, \text{min}_{ij}^{\text{LTL}}),\;
+    \min_{b \in B} \frac{\max(w_k^{\text{lb}},\, b) \cdot R_{ij}(\text{class}_k^{*},\, b)}{100}
+  \right) \cdot (1 + \text{fsc}_{ij})
+  \label{eq:ltl-base-cost}
+\end{equation}
+
+where:
+\begin{itemize}[noitemsep]
+  \item $w_k^{\text{lb}} = w_k \cdot 2.205$ (kg $\to$ lb conversion)
+  \item $\text{class}_k^{*} = \text{class}_k^{\text{FAK}}$ if applicable, else $\text{class}_k^{\text{NMFC}}$
+  \item The inner $\min$ over tiers implements the \textbf{deficit weight rule}: pay at the lowest-cost tier even if it requires bumping chargeable weight to that tier's breakpoint
+  \item The outer $\max$ applies the minimum charge floor and absolute minimum charge (whichever is higher)
+\end{itemize}
+
+The expected cost after tender adjustment:
+\begin{equation}
+  c_{ij}^{\text{LTL,exp}}(k) \;=\; c_{ij}^{\text{LTL,base}}(k) \cdot \bigl[1 + (1 - p_{ij}^{\text{acc}})(\rho_{ij}^{\text{re}} - 1)\bigr]
+\end{equation}
+
+Both $c_{ij}^{\text{LTL,base}}$ and $c_{ij}^{\text{LTL,exp}}$ are parameters in the MILP --- not
+runtime decision variables, since $w_k$ and $\text{class}_k$ are inputs.
+
+\paragraph{FAK class semantics.}
+Shipper-carrier contracts often collapse multiple NMFC classes into a single FAK class for
+billing simplicity. Example: "FAK 92.5 for classes 60--200, FAK 175 for 250--400."
+For shipment $k$ under such an agreement, $\text{class}_k^{\text{FAK}}$ overrides
+$\text{class}_k^{\text{NMFC}}$ in the rate lookup. Without FAK support, the model would
+mis-quote LTL costs for the majority of mid-market shippers.
+
+%%--------------------------------------------------------------------
+\section{Decision Variables}
+%%--------------------------------------------------------------------
+
+\begin{center}
+\begin{tabular}{llp{7cm}l}
+\toprule
+Variable & Type & Description & Domain \\
+\midrule
+$x_{ij}^k$ & Binary & 1 if shipment $k$ uses arc $(i,j) \in A^k$ & $\{0,1\}$ \\
+$y_{k,c,ij}$ & Binary & 1 if shipment $k$ loaded in FTL/PTL truck slot $c$ on linehaul arc $(i,j)$ & $\{0,1\}$ \\
+$z_{c,ij,e}$ & Binary & 1 if FTL truck slot $c$ on arc $(i,j)$ uses equipment type $e$ & $\{0,1\}$ \\
+$t_k(i)$ & Integer & Day-bucket arrival time of shipment $k$ at node $i$ & $\mathbb{Z}_{\geq 0}$ \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\paragraph{Slot indexing and bound.}
+For each FTL/PTL linehaul arc $(i,j)$, slots $c \in C_{ij}$ with upper bound:
+\[
+  |C_{ij}| = \ceil{\frac{\sum_{k : (i,j) \in A^k_{\text{LH-FTL}} \cup A^k_{\text{LH-PTL}}} v_k}{\eta \cdot V_{\min}}}
+\]
+where $V_{\min}$ is the smallest equipment volume (48$'$). Symmetry breaking applied (see \S\ref{sec:symmetry}).
+
+\paragraph{Time discretization.}
+$t_k(i)$ is integer (day bucket), not continuous. Discretizing to days reduces big-M
+constraint counts and yields 10--100$\times$ solve-time improvement at no realism loss
+(LTL and FTL transit times are quoted in days, not hours).
+
+%%--------------------------------------------------------------------
+\section{Constraints}
+%%--------------------------------------------------------------------
+
+\subsection*{P.1 — Flow Conservation}
+For each $k$ and $n \in N_k$:
+\begin{equation}
+  \sum_{j : (n,j) \in A^k} x_{nj}^k - \sum_{i : (i,n) \in A^k} x_{in}^k =
+  \begin{cases} +1 & n = o(k) \\ -1 & n = d(k) \\ 0 & \text{otherwise} \end{cases}
+  \label{eq:tk-P1}
+\end{equation}
+
+\subsection*{P.2 — FTL/PTL Truck Volume Capacity}
+For each linehaul arc $(i,j) \in A_{\text{LH-FTL}} \cup A_{\text{LH-PTL}}$ and slot $c \in C_{ij}$:
+\begin{equation}
+  \sum_{k \in K} v_k \cdot y_{k,c,ij} \;\leq\; \eta \cdot \sum_{e \in \mathcal{E}} V_e \cdot z_{c,ij,e}
+  \label{eq:tk-P2}
+\end{equation}
+
+\subsection*{P.3 — FTL/PTL Truck Weight Capacity}
+\begin{equation}
+  \sum_{k \in K} w_k \cdot y_{k,c,ij} \;\leq\; \sum_{e \in \mathcal{E}} W_e \cdot z_{c,ij,e}
+  \label{eq:tk-P3}
+\end{equation}
+
+\subsection*{P.4 — Single Equipment Type per Slot}
+\begin{equation}
+  \sum_{e \in \mathcal{E}} z_{c,ij,e} \;\leq\; 1
+  \label{eq:tk-P4}
+\end{equation}
+
+\subsection*{P.5 — Arc-to-Slot Linkage}
+For each shipment $k$ and FTL/PTL linehaul arc $(i,j) \in A^k_{\text{LH-FTL}} \cup A^k_{\text{LH-PTL}}$:
+\begin{equation}
+  x_{ij}^k \;=\; \sum_{c \in C_{ij}} y_{k,c,ij}
+  \label{eq:tk-P5}
+\end{equation}
+
+\subsection*{P.6 — LTL Linear-Foot Rule (Hard Refusal)}
+For each shipment $k$ and LTL arc $(i,j) \in A_{\text{LH-LTL}}$:
+\begin{equation}
+  \ell_k \cdot x_{ij}^k \;\leq\; L_{ij}^{\text{LTL,max}}
+  \label{eq:tk-P6}
+\end{equation}
+If $\ell_k > L_{ij}^{\text{LTL,max}}$ (typically 12 ft), the shipment cannot use this LTL arc.
+\textbf{Pre-processing exclusion:} simply remove $(i,j)$ from $A^k$ for such shipments.
+
+\subsection*{P.7 — LTL Piece Dimension and Weight Refusal}
+For each LTL arc $(i,j)$ and shipment $k$ with $L_k^{\max} > L_{ij}^{\text{LTL,piece,max}}$,
+or $W_k^{\max} > W_{ij}^{\text{LTL,piece,max}}$, or $w_k > W_{ij}^{\text{LTL,max}}$:
+\begin{equation}
+  x_{ij}^k \;=\; 0
+  \label{eq:tk-P7}
+\end{equation}
+\textbf{Pre-processing exclusion:} arc removed from $A^k$.
+
+\subsection*{P.8 — LTL Pickup Cutoff}
+For each shipment $k$ and LTL pickup-related arc:
+\begin{equation}
+  t_k(i) \;\leq\; \text{CGC}_{ij}(\tau^*) + M (1 - x_{ij}^k)
+  \label{eq:tk-P8}
+\end{equation}
+where $\tau^*$ is the day the pickup is scheduled.
+
+\subsection*{P.9 — Time Propagation (day-bucket)}
+For each arc $(i,j) \in A^k$:
+\begin{equation}
+  t_k(j) \;\geq\; t_k(i) + \mu_{ij} - M (1 - x_{ij}^k)
+  \label{eq:tk-P9}
+\end{equation}
+$\mu_{ij}$ is the arc transit time in days.
+
+\subsection*{P.10 — Delivery Window / MABD}
+\begin{equation}
+  T_k^{\text{open}} \;\leq\; t_k(d(k)) \;\leq\; T_k^{\text{close}}
+  \label{eq:tk-P10}
+\end{equation}
+Hard window. Setting $T_k^{\text{open}} = 0$ relaxes the lower bound; setting
+$T_k^{\text{close}} = T_{\max}$ relaxes the upper bound. Mid-market forwarder MVP defaults
+to wide windows unless customer specifies appointment.
+
+\subsection*{P.11 — Carrier-Lane Service Availability}
+For each shipment $k$ and arc $(i,j)$:
+\begin{equation}
+  x_{ij}^k \;=\; 0 \quad \text{if } \text{flags}_k \not\subseteq \text{flagsAvail}_{ij}
+  \label{eq:tk-P11}
+\end{equation}
+If shipment requires liftgate but the carrier doesn't offer liftgate on this lane: arc
+excluded. Pre-processing.
+
+\subsection*{P.12 — Contract FTL Allocation Cap}
+For each contract FTL lane $(i,j)$ with $\text{ct}(i,j) = $ contract, and period $\tau$:
+\begin{equation}
+  \sum_{c \in C_{ij}} \sum_{e \in \mathcal{E}} z_{c,ij,e} \cdot \mathbb{1}[\text{week}(c) = \tau]
+  \;\leq\; \text{alloc}_{ij}(\tau)
+  \label{eq:tk-P12}
+\end{equation}
+Forwarder cannot exceed contracted truck allocation per week on contract lanes.
+Parallels Ocean FCL string allocation (P.3 in ocean model).
+
+\subsection*{P.13 — Cargo Type Compatibility}
+For shipments requiring DGR / temp-controlled / oversize handling, restrict arc set
+to compatible carriers (pre-processing).
+
+\subsection*{P.14 — Equipment Compatibility (Container-to-Chassis)}
+For drayage arcs where shipment $k$ is an FCL container (20$'$ TEU or 40$'$ FEU):
+\begin{itemize}[noitemsep]
+  \item TEU shipment requires a 20$'$ chassis truck (excluded from 40$'$/53$'$ chassis arcs)
+  \item FEU shipment requires a 40$'$ chassis truck (excluded from 20$'$/53$'$ chassis arcs)
+  \item One container per chassis per truck (hard).
+\end{itemize}
+
+\subsection*{P.15 — Symmetry Breaking on Slot Index}
+\label{sec:symmetry}
+For each linehaul arc $(i,j)$ and equipment $e$:
+\begin{equation}
+  z_{c,ij,e} \;\leq\; z_{c-1,ij,e} \quad \forall c \geq 2
+  \label{eq:tk-P15}
+\end{equation}
+Forces filling slot 1 of equipment type $e$ before slot 2.
+
+Additionally, on shipment-to-slot assignment, impose lex ordering: shipment with smallest $k$
+index uses lowest-numbered slot when feasible. See \S\ref{sec:symmetry-impl} for the
+implementation discussion.
+
+\subsection*{P.16 — Budget Cap (optional)}
+\begin{equation}
+  \text{cost}_k \;\leq\; B_k \quad \forall k : B_k < \infty
+  \label{eq:tk-P16}
+\end{equation}
+
+\subsection*{P.17 — Domain}
+\begin{equation}
+  x_{ij}^k,\, y_{k,c,ij},\, z_{c,ij,e} \in \{0,1\}; \quad t_k(i) \in \mathbb{Z}_{\geq 0}
+  \label{eq:tk-P17}
+\end{equation}
+
+%%--------------------------------------------------------------------
+\section{Objective Function}
+%%--------------------------------------------------------------------
+
+Minimize total expected cost:
+\begin{align}
+  \min \quad
+  & \sum_{k \in K} \sum_{(i,j) \in A^k_{\text{PU}} \cup A^k_{\text{FD}}} c_{ij}^{\text{G}} \cdot x_{ij}^k
+    \tag{pickup + delivery ground} \\
+  +\;
+  & \sum_{(i,j) \in A_{\text{LH-FTL}}} \sum_{c \in C_{ij}} \sum_{e \in \mathcal{E}} c_{ij,e}^{\text{FTL,exp}} \cdot z_{c,ij,e}
+    \tag{FTL truck cost (per-truck, expected)} \\
+  +\;
+  & \sum_{k \in K} \sum_{(i,j) \in A^k_{\text{LH-PTL}}} c_{ij}^{\text{PTL,exp}}(k) \cdot x_{ij}^k
+    \tag{PTL per-shipment cost (expected)} \\
+  +\;
+  & \sum_{k \in K} \sum_{(i,j) \in A^k_{\text{LH-LTL}}} c_{ij}^{\text{LTL,exp}}(k) \cdot x_{ij}^k
+    \tag{LTL pre-computed cost (expected)} \\
+  +\;
+  & \sum_{k \in K} \text{accessorials}(k) \;+\; \sum_{k \in K} \text{drayage\_holding}(k)
+    \tag{accessorials + chassis/per diem/demurrage}
+\end{align}
+
+The FTL cost $c_{ij,e}^{\text{FTL,exp}}$ is per-truck per-equipment-type, computed via
+Eq.~\eqref{eq:tender-expected}:
+\[
+  c_{ij,e}^{\text{FTL,exp}} \;=\; (r_{ij}^{\text{FTL}} \cdot \text{dist}_{ij})(1 + \text{fsc}_{ij}) \cdot
+                                  \bigl[1 + (1 - p_{ij}^{\text{acc}})(\rho_{ij}^{\text{re}} - 1)\bigr]
+\]
+
+%%--------------------------------------------------------------------
+\section{Symmetry Breaking — Implementation Notes}
+\label{sec:symmetry-impl}
+%%--------------------------------------------------------------------
+
+\paragraph{What is symmetry in MILP?}
+The slot index $c$ on FTL/PTL trucks is symbolic --- ``slot 1'' and ``slot 2'' on the same
+lane with the same equipment are interchangeable from the optimizer's perspective. If a
+solution assigns shipment $k_a$ to slot 1 and shipment $k_b$ to slot 2, then the assignment
+$k_a \to $ slot 2, $k_b \to $ slot 1 is an \emph{equivalent solution} with identical cost.
+The LP relaxation cannot distinguish these, and the branch-and-bound tree explores both,
+wasting solve time.
+
+\paragraph{Why it matters at scale.}
+With $|C_{ij}| = 10$ slots per lane and $|K_{ij}| = 30$ shipments routable on the lane, the
+number of equivalent assignments is $|C_{ij}|! / (|C_{ij}| - |K_{ij}|)!$ for any feasible
+assignment. Without symmetry breaking, solver time grows multiplicatively.
+
+\paragraph{Lex-order constraints (P.15) — explanation in plain code terms.}
+
+The constraint $z_{c,ij,e} \leq z_{c-1,ij,e}$ encodes: \emph{slot $c$ can be used only if
+slot $c-1$ is also used.} In Python-equivalent pseudocode the optimizer sees:
+
+\begin{verbatim}
+# For each lane (i,j) and equipment type e:
+for c in range(2, max_slots + 1):
+    model.add_constraint(z[c, ij, e] <= z[c - 1, ij, e])
+\end{verbatim}
+
+Effect: only solutions where slots are filled in increasing order are feasible. The solver
+no longer explores ``slot 5 used but slot 3 empty'' --- it always packs into the lowest
+available slot first. Solver time typically drops 5--20$\times$ on instances with
+significant slot symmetry.
+
+\paragraph{Additional symmetry-breaking on shipment assignment (optional in MVP).}
+
+A secondary symmetry exists in $y_{k,c,ij}$: two interchangeable shipments could swap slot
+assignments. This is harder to break without losing feasibility. MVP relies on slot
+lex-ordering only; full assignment lex-ordering is deferred.
+
+\paragraph{Implementation guidance in code.}
+
+\begin{itemize}[noitemsep]
+  \item Compute $|C_{ij}|$ before adding $y$ and $z$ variables. Don't over-allocate
+        --- excessive slot counts widen the search space even with lex constraints.
+  \item Add P.15 in the model-build step right after $z$ variable creation.
+  \item Use a solver with strong branch-and-bound (HiGHS, Gurobi, CBC). HiGHS auto-detects
+        some symmetry; lex-ordering helps it further.
+  \item Profile solve time: with and without lex-ordering on a representative 50-shipment
+        instance. Document the speedup. Symmetric-tight instances (many similar shipments
+        on a single lane) benefit most.
+\end{itemize}
+
+%%--------------------------------------------------------------------
+\section{Critique Findings Incorporated}
+\label{sec:critique}
+%%--------------------------------------------------------------------
+
+An adversarial review of the initial design (\texttt{SESSION\_LOG.md}, Session 9) identified
+the following corrections, all incorporated in this draft:
+
+\begin{enumerate}[noitemsep]
+  \item \textbf{Partial Truckload (PTL) added as third mode.} Original design had only
+        FTL and LTL. The 10{,}000--25{,}000 kg / 6--18 pallet band is the dominant
+        forwarder economic regime and is neither traditional FTL nor LTL.
+  \item \textbf{(Carrier, origin SC, destination SC) tuples replace intermediate hub nodes.}
+        Powell \& Sheffi load planning is the \emph{carrier's} internal problem; as
+        forwarders we tender to a carrier and the carrier routes through their own hubs.
+  \item \textbf{LTL hard refusal constraints (P.6, P.7).} Linear-foot rule, piece-length
+        cap, piece-weight cap, total-shipment-weight ceiling. Real-world refusals, not
+        soft cost trade-offs.
+  \item \textbf{Contract FTL allocation cap (P.12).} Parallels ocean string allocation;
+        the model without this assumes infinite contract capacity.
+  \item \textbf{Delivery window / MABD (P.10).} Big-box consignees enforce appointment
+        windows with chargebacks. Modeled as $[T_k^{\text{open}}, T_k^{\text{close}}]$
+        window; default to wide window if no appointment.
+  \item \textbf{Carrier-lane service availability matrix (P.11).} Liftgate, residential,
+        limited access, inside delivery as feasibility flags, not just cost.
+  \item \textbf{FAK class override.} Shipper-contract-specific class collapse, not global
+        NMFC lookup.
+  \item \textbf{Tender acceptance probability (\S\ref{sec:tender}).} Deterministic per-arc
+        cost adjustment incorporating $p^{\text{acc}}$ and $\rho^{\text{re}}$. Critical
+        for accurate quotes; deterministic-only cost would under-quote by 15--25\%.
+  \item \textbf{Chassis day rate, per diem, demurrage, pier pass} as drayage cost
+        components.
+  \item \textbf{Time discretization to days; lex-order on slot index $c$.} Tractability
+        fixes; 10--100$\times$ solve-time win.
+\end{enumerate}
+
+%%--------------------------------------------------------------------
+\section{Open Items and Future Extensions}
+%%--------------------------------------------------------------------
+
+The following are explicitly deferred to P1 and beyond:
+
+\begin{enumerate}[noitemsep]
+  \item \textbf{Stochastic tender acceptance modeling.} MVP uses deterministic expected-cost
+        adjustment. P1: explicit Monte Carlo over tender attempts; re-routing on rejection
+        via rolling-horizon controller.
+  \item \textbf{Driver Hours of Service (DOT).} 11 h driving, 14 h on-duty, 70-in-8 cycle.
+        Affects which lanes a single-driver truck can serve in one shift; team-driver
+        operations relaxes. MVP assumes all lanes are operationally feasible.
+  \item \textbf{Backhaul / round-trip optimization.} Optimizing the truck's return load.
+        Carrier-side problem; relevant for dedicated lane pricing.
+  \item \textbf{Driver / specific-truck dispatch.} Which driver, which truck, which load.
+        Carrier-side problem.
+  \item \textbf{Specialty equipment.} Reefer, flatbed, lowboy, hazmat-certified, oversize
+        permits, intermodal-only chassis types.
+  \item \textbf{Dedicated lanes / weekly milk runs.} Recurring scheduled FTL with fixed
+        capacity. Important for high-volume forwarders.
+  \item \textbf{Pool distribution.} LCL/PTL freight broken down at an intermediate pool
+        point and re-distributed via local LTL or last-mile.
+  \item \textbf{Cross-border (Mexico, Canada) trucking.} US-MX customs at land border;
+        bonded carriers; B1 visa drivers; transflo handoffs.
+  \item \textbf{Stop-off charges, TONU, reweigh / reclass variance.} Modeled as flat
+        accessorials in MVP; full operational treatment via agent layer feedback.
+  \item \textbf{Spot rate stochastic availability.} Spot capacity not always available
+        on the requested day; subsumes under tender acceptance probability for now.
+  \item \textbf{Twin-20 combo chassis at port.} In-port two-TEU drayage move. Rare;
+        deferred.
+  \item \textbf{Drop-and-hook operations.} Carrier drops a pre-loaded trailer at shipper
+        and picks up a loaded one in return. Affects scheduling but not routing.
+  \item \textbf{Dock appointment scheduling.} MVP treats appointments as windows; P1
+        could query consignee appointment availability via API.
+  \item \textbf{LTL re-classification variance.} Reweigh/reclass at carrier dock can
+        change post-billed cost from quoted cost by 5--15\%. Flag to agent layer.
+\end{enumerate}
+
+%%--------------------------------------------------------------------
+\section{References and Sources}
+%%--------------------------------------------------------------------
+
+\subsection*{Academic and industry literature}
+\begin{itemize}[noitemsep]
+  \item Powell, W. B., \& Sheffi, Y. (1983). The Load Planning Problem of Motor Carriers:
+        Problem Description and a Proposed Solution Approach. \emph{Transportation Research
+        Part A}.
+  \item Powell, W. B. (1986). Approximate, Iterative Algorithm for the Network Design
+        Problem with Stochastic Demands. \emph{Transportation Science}.
+  \item Powell, W. B., \& Koskosidis, Y. A. (1992). Shipment Routing Algorithms with
+        Tree Constraints. \emph{Transportation Science}.
+  \item Powell, W. B. (2011). \emph{Approximate Dynamic Programming: Solving the Curses of
+        Dimensionality} (2nd ed.). Wiley.
+  \item Sheffi, Y. (1985). \emph{Urban Transportation Networks: Equilibrium Analysis with
+        Mathematical Programming Methods}. Prentice Hall.
+  \item Caplice, C. (1996). An Optimization Based Bidding Process: A New Framework for
+        Shipper-Carrier Relationships. MIT Dissertation. (Foundation of combinatorial
+        procurement auctions in freight.)
+  \item Caplice, C. (2007). Electronic Markets for Truckload Transportation.
+        \emph{Production and Operations Management}.
+  \item O'Kelly, M. E. (1987). A Quadratic Integer Program for the Location of Interacting
+        Hub Facilities. \emph{European Journal of Operational Research}.
+  \item Erera, A., et al. (2020). The Dynamic Freight Routing Problem for Less-than-Truckload
+        Carriers. \emph{Optimization Online}.
+        \url{https://optimization-online.org/wp-content/uploads/2020/11/8093.pdf}
+\end{itemize}
+
+\subsection*{Industry rate structure and 2025 NMFC overhaul}
+\begin{itemize}[noitemsep]
+  \item National Motor Freight Traffic Association (NMFTA). \emph{Standard Density Scale
+        (SDS) --- effective July 19, 2025.}
+  \item GoShip (2026). \emph{The End of Freight Class? How Density-Based Pricing Is
+        Quietly Changing LTL in 2026.}
+        \url{https://www.goship.com/blog/the-end-of-freight-class-how-density-based-pricing-is-quietly-changing-ltl-in-2026/}
+  \item Nuvocargo. \emph{LTL Freight Class Explained: How It Works and Why It Matters for
+        Your Cost (2026 Guide).}
+        \url{https://www.nuvocargo.com/blog-posts/ltl-freight-class-explained}
+  \item DAT. \emph{How to Calculate LTL Freight Rates.}
+        \url{https://www.dat.com/resources/how-to-calculate-ltl-freight-rates}
+  \item ISYE Georgia Tech (2010). \emph{LTL Training Module 1.}
+        \url{https://www2.isye.gatech.edu/~jvandeva/Classes/6203/2011/LTLTrainingManual1}
+  \item SMC³. \emph{Less-Than-Truckload Rate Quote System (CzarLite).}
+  \item Hatfield Associates. \emph{The Ultimate LTL Pricing Guide.}
+\end{itemize}
+
+\subsection*{Commercial systems and references}
+\begin{itemize}[noitemsep]
+  \item Optimal Dynamics (Powell). CORE.ai platform for truckload dispatch.
+        \url{https://optimaldynamics.com/}
+  \item Optym HaulPlan --- LTL linehaul optimization commercial product.
+        \url{https://www.optym.com/ltl/haulplan}
+  \item MIT Center for Transportation \& Logistics (Caplice).
+        \url{https://caplice.mit.edu/}
+\end{itemize}
+
+\subsection*{FTL/LTL boundary and PTL}
+\begin{itemize}[noitemsep]
+  \item Nuvocargo. \emph{LTL vs FTL: When to Use Each Mode (2026 Guide).}
+        \url{https://www.nuvocargo.com/blog-posts/ltl-vs-ftl-when-to-use-each}
+  \item Racklify. \emph{When to Switch Between LTL and FTL Freight.}
+        \url{https://racklify.com/encyclopedia/split-the-difference-knowing-when-to-switch-from-ltl-ftl-freight/}
+  \item GetTransport. \emph{Balancing Cross-Border LTL and FTL Costs.}
+\end{itemize}
+
+\end{document}
