@@ -2,6 +2,75 @@
 
 ---
 
+## 2026-05-17 (Session 11 — air model v2b Task #6 closed; ψ policy correction + Tech C5/M4 cleanup)
+
+**Focus:** Resume air model v2b walkthrough at Task #6 (Through-ULD ψ policy correction). User confirmed ψ stays as parameter (not decision variable) and asked for clear documentation so future-self understands the rationale. Bundled Tech C5+M4 (math cleanup of P.14 and rehandling cost term) into the same edit since both touch the same constraint.
+
+**Vault sync (start of session):** Pushed CONTEXT.md, SESSION_LOG.md, air_freight_routing.tex+pdf to Obsidian vault. Last vault sync was 2026-05-16 (Session 9); the air model had grown substantially in Session 10 and was missing from vault entirely. Memory `feedback_vault_sync.md` updated.
+
+**Task #6 — Through-ULD ψ policy correction (closed).**
+
+The pre-Task-#6 ψ rule was operationally wrong on alliance interline. Old rule: ψ=1 only if same airline + (through-flight OR through-cargo agreement). Real industry: IATA ULD-CPM agreements (Star Alliance, SkyTeam, oneworld + bilaterals) allow ULDs to transfer between pool members at compatible hubs without breakdown. The old rule forced ψ=0 on every interline pair, systematically over-counting re-ULDing on routings that are operationally common.
+
+**LaTeX changes (`air_freight_routing.tex`):**
+
+1. **Flight parameters table:** Replaced single `carrier(f)` with `carrier^op(f)` (operating, used for ULD pool / contract / capacity) and `carrier^mk(f)` (marketing, billing only). ψ logic now correctly keys on operating carrier — fixes codeshare misattribution.
+
+2. **§6.6 ULD interchange set Π:** New paragraph defining Π ⊆ {(c₁, c₂, u)} from alliance pools + bilaterals. Sources: Star/SkyTeam/oneworld + IATA ULD-CPM database. For MVP synthetic instances, populated from static alliance membership table.
+
+3. **§6.6 MVP rule for ψ:** Rewritten as 3-case OR (was 2-case): (a) through-flight, (b) same-airline through-cargo at hub, (c) interline ULD interchange via Π. All cases key on operating carrier.
+
+4. **§6.6 Remark "Why ψ is a parameter":** New formal remark capturing the rationale (operational reality dictates ψ; forwarder doesn't choose; resort case is the only edge requiring decision-var promotion, rare in mid-market, deferred to P1). Tagged for future-self.
+
+5. **§6.6 TPE→JFK worked example:** Three paths (CX-CX same-airline, AC+LH Star Alliance interline, BR+AA non-alliance interline) showing how each rule fires and what the old rule got wrong.
+
+6. **Hub connection parameter table:** Split rehandling cost into `ρ^reULD_{f,g,u}` (same-ULD case) and new `bar_ρ^reULD_{f,g}` (cross-ULD case, e.g., LD3 belly → PMC freighter).
+
+7. **P.14 Hub MCT (Tech C5+M4 cleanup):** Rewrote with explicit per-tuple effective MCT (eq. effective-mct), then split into Case 1 (same-u, indexed by u; activation big-M uses Σ_c y_{f,u,k}^c on each arc) and Case 2 (cross-u, uses MCT^reULD with χ indicator). Resolves the implicit "the u used by k" notation and the implicit c,c' contract indices.
+
+8. **§9 Objective rehandling term:** Split into same-ULD (ρ · (1-ψ) · ζ) and cross-ULD (bar_ρ · χ) terms. Removed floating c,c' indices.
+
+9. **§10.2 Linearization rewrite:** Defined ζ_{f,g,u,k} (same-ULD indicator) rigorously over aggregated Σ_c y; added ξ_{f,g,k} (both-arcs-used indicator, McCormick on x·x); defined χ_{f,g,k} = ξ - Σ_u ζ (cross-ULD indicator). Variable count documented (~|U|+5 binaries per hub arc-pair per shipment).
+
+10. **§5 Subgraph hub transitions pass:** Updated to use min_u MCT*_{f,g,u} (optimistic, since u isn't known at subgraph time). P.14 enforces exact MCT at solve.
+
+11. **§11 Deferred items:** Added `\label{item:psi-decision-var}` for cross-reference from the rationale remark.
+
+12. **Section labels:** Added `sec:constraints` and `sec:objective` labels for cross-references.
+
+**PDF rebuilt clean:** 31 pages (was 25+), 570 KB. No undefined refs after second pass.
+
+**Tech v2a tasks resolved by this edit:**
+- C5 (P.14 endogenous MCT) — resolved by explicit per-tuple MCT*_{f,g,u} and case split
+- M4 (P.14 ULD-type binding) — resolved by activation big-M with Σ_c y_{f,u,k}^c
+
+**Practitioner v2b tasks closed:** Task #6.
+
+**Status after this session:**
+- v2b: 6 of 27 tasks closed (Tasks #1–6). 21 remaining.
+- v2a: 4 of 27 tech tasks closed (C3, C6 from Session 10; C5, M4 from this session). 23 remaining.
+- Next up: **Task #7 — Locked-in commitments (K_locked)** — P0 Critical.
+
+**Where we left off (end of session 11, 2026-05-17 evening):**
+- Air model `air_freight_routing.tex` 31 pages, ~85 KB, builds clean
+- Vault has latest tex+pdf (synced at start of session)
+- No code written. PRD v0.3 still not formally approved. LaTeX still draft.
+
+**Tomorrow's starting move:**
+1. Task #7 — Locked-in commitments. Define K_locked set, partial-flow constraints to honor prior commitments in a rolling-horizon replan.
+2. Continue v2b through Tasks #8 (service-level commitments), #9 (carrier blacklist/preference), then P1 cluster.
+3. Vault sync overdue after this session — air PDF was rebuilt at 16:26, last vault sync was end-of-session (today, this morning, 19:18). Re-sync at end of next session.
+
+**Files touched this session:**
+- `model/air_freight_routing.tex` — 12 distinct edits across §3 (flight params), §6.6 (ψ rule + remark + example), §6 (rehandling param), §5 (subgraph), §8 (P.14), §9 (objective), §10.2 (linearization), §11 (deferred items label), plus section labels.
+- `model/air_freight_routing.pdf` — rebuilt clean
+- `SESSION_LOG.md` (this entry)
+- `CONTEXT.md` (to be updated)
+- Obsidian vault — CONTEXT, SESSION_LOG, air model tex+pdf synced at session start
+- Memory `feedback_vault_sync.md` — last-synced date updated to 2026-05-17
+
+---
+
 ## 2026-05-17 (Session 10 — air model adversarial review and v2b scope decisions)
 
 **Focus:** Two adversarial critique agents run against `model/air_freight_routing.tex` Draft v1 (technical formulation + practitioner operational). Began systematic v2b scope decision walkthrough with user (point-by-point), executing inline LaTeX edits as decisions are reached. 5 of 27 practitioner-scope points closed.

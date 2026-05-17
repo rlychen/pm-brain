@@ -586,7 +586,8 @@ For each flight $f \in F$ (equivalently, each $(i,j) \in A_{\text{AIR}}$):
 \toprule
 Parameter & Symbol & Description & Unit \\
 \midrule
-Carrier & $\text{carrier}(f)$ & IATA carrier code (CI, BR, CX, JL, NH, 5Y, ...) & — \\
+Operating carrier & $\text{carrier}^{\text{op}}(f)$ & IATA code of the carrier physically operating the aircraft. Determines ULD pool ownership, $\psi$ pre-computation (Section~\ref{sec:through-uld}), and contract / capacity allocation. & — \\
+Marketing carrier & $\text{carrier}^{\text{mk}}(f)$ & IATA code of the carrier issuing the AWB / marketing the flight; may differ on codeshares. Used for billing presentation only; operational eligibility keys on $\text{carrier}^{\text{op}}$. & — \\
 Flight number & $\text{fno}(f)$ & Flight number; multiple legs may share a number & — \\
 Aircraft type & $\text{ac}(f)$ & 777F, 747-8F, A330F, 777-300ER, A350-900, ... & — \\
 ETD & $\text{ETD}_f$ & Scheduled departure datetime & datetime \\
@@ -920,7 +921,8 @@ Parameter & Symbol & Description & Unit \\
 Through-ULD compatible & $\psi_{f,g,u}$ & 1 if a ULD of type $u$ can transit hub $j$ without being broken down (same aircraft for through-flights; or same airline through-cargo agreement) & boolean \\
 MCT (through) & $\text{MCT}_{f,g}^{\text{thru}}$ & Min connect time when through-ULD is used (technical-stop turnaround or hub through-cargo time) & hours \\
 MCT (re-ULD) & $\text{MCT}_{f,g}^{\text{reULD}}$ & Min connect time when ULD must be broken down and rebuilt at hub & hours \\
-Rehandling cost & $\rho_{f,g,u}^{\text{reULD}}$ & Cost per ULD to break down at hub and rebuild for onward flight & USD/ULD \\
+Rehandling cost (same-ULD) & $\rho_{f,g,u}^{\text{reULD}}$ & Cost per ULD when same type $u$ is used on both legs but $\psi_{f,g,u}=0$ (e.g., interline pair without ULD interchange agreement) & USD/ULD \\
+Rehandling cost (cross-ULD) & $\bar{\rho}_{f,g}^{\text{reULD}}$ & Cost when different ULD types are used on $f$ and $g$ (e.g., LD3 belly to PMC freighter); typically equal to or slightly higher than $\rho^{\text{reULD}}$ since cargo restuffs into a different shape & USD/ULD \\
 \bottomrule
 \end{tabular}
 \end{center}
@@ -942,21 +944,87 @@ across the hub — either remaining on the same aircraft (through-flight technic
 moving as a complete unit between aircraft at hub through-cargo facilities.
 \end{defn}
 
-\paragraph{MVP simplification.}
-In MVP, $\psi_{f,g,u}$ is a \emph{pre-computed parameter}, not a decision variable. For each
-consecutive arc pair at a hub:
+\paragraph{ULD interchange set.}
+Let \(\Pi \subseteq \{\, (c_1, c_2, u) \,\}\) be the \emph{ULD interchange set}: triples
+for which carriers \(c_1\) and \(c_2\) have a bilateral or alliance-level IATA ULD-CPM
+(Container Pallet Movement) agreement covering ULD type \(u\). When
+\((c_1, c_2, u) \in \Pi\), a built ULD of type \(u\) can physically transfer from \(c_1\)'s
+pool to \(c_2\)'s pool at a hub with cross-airline transfer facilities --- no breakdown,
+no rebuild, no fee. Typical sources for \(\Pi\):
 \begin{itemize}[noitemsep]
-  \item If $\text{carrier}(f) = \text{carrier}(g)$ \emph{and} $\text{fno}(f) = \text{fno}(g)$
-        (through-flight, same aircraft, intermediate stop): $\psi_{f,g,u} = 1$ for all $u \in U_f \cap U_g$.
-  \item If $\text{carrier}(f) = \text{carrier}(g)$ \emph{and} the hub has a through-cargo
-        agreement for type $u$: $\psi_{f,g,u} = 1$.
-  \item Otherwise (interline or incompatible ULD type): $\psi_{f,g,u} = 0$, re-ULDing required.
+  \item Star Alliance ULD pool: AC, LH, NH, OZ, SK, UA, ... covering common types (LD3, PMC, AKE).
+  \item SkyTeam ULD pool: AF, KL, DL, KE, MU, ...
+  \item oneworld ULD pool: AA, BA, CX, JL, QF, ...
+  \item Bilateral non-alliance agreements (limited; e.g., cargo-only carrier pairs).
 \end{itemize}
-The MILP uses $\psi$ to select the applicable MCT and rehandling cost on each used arc pair.
-The choice between ``use through-ULD'' and ``re-ULD anyway'' is not a free decision in MVP;
-through-ULD is used whenever $\psi = 1$. P1 extension: promote $\psi$ to a decision variable
-to allow forwarder-elected re-ULDing (e.g., for re-sorting cargo destined to different
-onward routes at the hub).
+For MVP synthetic instances, \(\Pi\) is populated from a static table of alliance
+memberships intersected with the ULD type catalog. For production, the source is each
+airline's published ULD interchange directory or the IATA ULD-CPM database.
+
+\paragraph{MVP rule for pre-computing $\psi_{f,g,u}$.}
+$\psi_{f,g,u}$ is a \emph{pre-computed parameter} populated before solve. The rule keys
+on the \emph{operating} carrier $\text{carrier}^{\text{op}}(\cdot)$, not the marketing
+carrier --- ULD pool ownership follows the airline that physically operates the aircraft,
+not the airline whose code appears on the AWB. Set $\psi_{f,g,u} = 1$ if and only if
+$u \in U_f \cap U_g$ \emph{and} at least one of the following holds:
+\begin{itemize}[noitemsep]
+  \item[(a)] \textbf{Through-flight (technical stop).} $\text{fno}(f) = \text{fno}(g)$ \emph{and}
+        $\text{carrier}^{\text{op}}(f) = \text{carrier}^{\text{op}}(g)$. The ULD never
+        leaves the aircraft.
+  \item[(b)] \textbf{Same-airline through-cargo at hub.}
+        $\text{carrier}^{\text{op}}(f) = \text{carrier}^{\text{op}}(g)$ \emph{and} the hub
+        $j$ supports through-cargo handling for type $u$ at this carrier's terminal.
+  \item[(c)] \textbf{Interline ULD interchange.}
+        $(\text{carrier}^{\text{op}}(f),\,\text{carrier}^{\text{op}}(g),\,u) \in \Pi$
+        \emph{and} the hub $j$ supports cross-airline ULD transfer for the relevant pool.
+\end{itemize}
+Otherwise $\psi_{f,g,u} = 0$ and re-ULDing is required.
+
+\begin{remark}[Why $\psi$ is a parameter, not a decision variable --- and why this is the right MVP choice]
+\label{rem:psi-as-param}
+Whether a built ULD can ride through a hub is determined by physical and contractual
+realities that exist before the forwarder plans the move:
+\begin{itemize}[noitemsep]
+  \item Which carrier operates each leg (codeshares are irrelevant --- only the operator's
+        ULD pool matters).
+  \item Whether the hub has the through-cargo handling infrastructure for that ULD type.
+  \item Whether a bilateral or alliance ULD-CPM agreement exists between the operators
+        for that ULD type.
+\end{itemize}
+The forwarder cannot ``elect'' through-ULD where the operational reality doesn't allow it;
+conversely, the forwarder generally has no operational reason to elect re-ULDing when
+through-ULD is available --- it just adds dwell time and rehandling fees with no benefit.
+The single edge case where the forwarder \emph{could} elect re-ULD despite $\psi = 1$
+is hub re-sorting (splitting one ULD's cargo across multiple onward flights). That edge
+case is rare in the mid-market forwarder context, structurally distinct, and deferred to
+P1; see Section~\ref{sec:deferred}, item~\ref{item:psi-decision-var}.
+\textbf{Bottom line for MVP:} $\psi$ is a data input. The model only needs the right data;
+no decision-variable promotion is needed. If you (future-reader) are considering revisiting
+this, the question is not ``should $\psi$ be a decision variable?'' --- the question is
+``does the routing-with-resort use case justify the model complexity?'' For MVP, no.
+\end{remark}
+
+\paragraph{Reading the rule with an example.}
+Consider shipment $k$ routing TPE $\to$ JFK across three candidate hub connections, with
+$u = $ PMC pallet:
+\begin{itemize}[noitemsep]
+  \item \emph{Path A --- CX564 TPE-HKG + CX880 HKG-JFK (same airline).} Rule (b) applies:
+        $\text{carrier}^{\text{op}} = \text{CX}$ on both legs; HKG has Cathay through-cargo
+        for PMC. $\psi_{\text{CX564, CX880, PMC}} = 1$. Hub MCT $\approx 3$h, no rehandling fee.
+  \item \emph{Path B --- AC2 TPE-YYZ + LH471 YYZ-JFK (Star Alliance interline).} Rule (c)
+        applies: $(\text{AC}, \text{LH}, \text{PMC}) \in \Pi$ via Star Alliance pool;
+        YYZ supports cross-airline transfer. $\psi = 1$. Hub MCT $\approx$ 3--4h, no
+        rehandling fee. (A naïve ``same-carrier-only'' rule would incorrectly return
+        $\psi = 0$ here and over-count re-ULDing on alliance interline routings ---
+        this is the bug that motivated Task~\#6's correction.)
+  \item \emph{Path C --- BR32 TPE-LAX + AA90 LAX-JFK (non-alliance interline).} Neither
+        (b) nor (c) applies: BR is Star Alliance, AA is oneworld; no joint ULD pool.
+        $\psi = 0$. Re-ULDing required at LAX: $\sim$6--12h dwell, $\sim$\$150--500/ULD fee.
+\end{itemize}
+
+The MILP uses $\psi$ in constraint P.14 (Section~\ref{sec:constraints}) to select the
+applicable MCT, and in the objective (Section~\ref{sec:objective}) to attribute
+rehandling cost.
 
 \subsection{Embargo Parameters}
 \label{sec:embargo}
@@ -1213,9 +1281,12 @@ $o(k) \to d(k)$ path.
         shipments, \(\text{lithium\_ok}\) is trivially \(\text{True}\).
 
   \item \textbf{Hub transitions pass.} For each pair of consecutive air arcs $(f, g)$ at hub $h$:
-        compute $\tau_k(g_{\text{start}}) = \text{ETA}_f + \text{MCT}_{f,g}^{*}$
-        where $\text{MCT}^*$ uses $\text{MCT}^{\text{thru}}$ if $\psi_{f,g,u} = 1$ for some
-        $u \in U_f \cap U_g$, else $\text{MCT}^{\text{reULD}}$.
+        compute the \emph{optimistic} arrival time $\tau_k(g_{\text{start}}) = \text{ETA}_f
+        + \min_{u \in U_f \cap U_g} \text{MCT}^*_{f,g,u}$, where $\text{MCT}^*_{f,g,u}$ is
+        defined in (Eq.~\ref{eq:effective-mct}). Optimistic because at subgraph time the
+        ULD type to be used by $k$ is not yet known; pre-filter is conservative on arc
+        admission. P.14 will enforce the exact MCT at solve time based on the actual
+        ULD type selected.
 
   \item \textbf{Destination CFS \& delivery pass.} For each destination airport $b \in N_{\text{AP,D}}$
         reachable: include arc $(b, c) \in A_{\text{DC}}$ where $c \in N_{\text{CFS,D}}$, then
@@ -1246,6 +1317,7 @@ $t_k(i)$ & Continuous & Arrival time of shipment $k$ at node $i \in N_k$ & $\mat
 
 %%--------------------------------------------------------------------
 \section{Constraints}
+\label{sec:constraints}
 %%--------------------------------------------------------------------
 
 \subsection*{P.1 — Flow Conservation}
@@ -1379,15 +1451,45 @@ For each shipment $k$ and each air arc $(i,j) \in A^k_{\text{AIR}}$ with $f = f(
 
 \subsection*{P.14 — Hub Minimum Connect Time}
 
-For each shipment $k$ and each pair of consecutive air arcs $(f, g)$ at hub $h$ with both
-$x_{(\cdot,h)}^k = 1$ and $x_{(h,\cdot)}^k = 1$:
+For each shipment $k$ and each pair of consecutive air arcs $(f, g)$ at hub $h$, the
+minimum dwell depends on the ULD type used by $k$ on both legs. Define the per-tuple
+effective MCT (a constant since $\psi$ is a parameter):
 \begin{equation}
-  t_k(g_{\text{start}}) \;\geq\; \text{ETA}_f \;+\; \text{MCT}_{f,g}^*
-  \;-\; M(2 - x_{f}^k - x_{g}^k)
-  \label{eq:P14}
+  \text{MCT}^*_{f,g,u}
+  \;\defeq\; \psi_{f,g,u}\,\text{MCT}^{\text{thru}}_{f,g}
+            \;+\; (1 - \psi_{f,g,u})\,\text{MCT}^{\text{reULD}}_{f,g}
+  \qquad \forall\, u \in U_f \cap U_g
+  \label{eq:effective-mct}
 \end{equation}
-where $\text{MCT}_{f,g}^* = \text{MCT}_{f,g}^{\text{thru}}$ if $\psi_{f,g,u} = 1$ for the
-ULD type $u$ used by $k$ on both arcs, otherwise $\text{MCT}_{f,g}^{\text{reULD}}$.
+
+\paragraph{Case 1 --- same ULD type on both arcs.}
+For each $u \in U_f \cap U_g$ and each $(k, f, g)$:
+\begin{equation}
+  t_k(g_{\text{start}}) \;\geq\; \text{ETA}_f \;+\; \text{MCT}^*_{f,g,u}
+  \;-\; M\!\biggl( 2 - \sum_{c} y^{c}_{f,u,k} - \sum_{c'} y^{c'}_{g,u,k} \biggr)
+  \label{eq:P14a}
+\end{equation}
+The big-M term deactivates the constraint unless shipment $k$ uses ULD type $u$ on
+\emph{both} arcs ($\sum_c y^c_{f,u,k} = 1$ and $\sum_{c'} y^{c'}_{g,u,k} = 1$).
+
+\paragraph{Case 2 --- cross-ULD (different type on $f$ vs.\ $g$).}
+When $k$ uses different ULD types on $f$ and $g$ (e.g., LD3 on a belly leg, PMC on a
+freighter leg), breakdown is operationally forced and $\text{MCT}^{\text{reULD}}_{f,g}$
+binds:
+\begin{equation}
+  t_k(g_{\text{start}}) \;\geq\; \text{ETA}_f \;+\; \text{MCT}^{\text{reULD}}_{f,g}
+  \;-\; M\!\biggl( 2 - x_f^k - x_g^k \;+\; \sum_{u \in U_f \cap U_g} \zeta_{f,g,u,k} \biggr)
+  \label{eq:P14b}
+\end{equation}
+where $\zeta_{f,g,u,k}$ is the same-ULD indicator (1 iff $k$ uses $u$ on both arcs),
+reused from the rehandling-cost linearization (Section~\ref{sec:linearization}).
+The big-M term deactivates this constraint when (i) $k$ does not use both arcs, or
+(ii) $k$ uses some $u$ on both arcs (Case~1 governs instead).
+
+\paragraph{Joint behavior.}
+$\zeta$ and Case~2's deactivation indicator are mutually exclusive within a given
+$(k, f, g)$ tuple; their sum equals $x_f^k \cdot x_g^k$. Exactly one of (P.14a, P.14b)
+binds when both arcs are used, and neither binds otherwise.
 
 \subsection*{P.15 — Deadline}
 
@@ -1437,6 +1539,7 @@ where $\text{cost}_k$ is the per-shipment cost contribution from the objective.
 
 %%--------------------------------------------------------------------
 \section{Objective Function}
+\label{sec:objective}
 %%--------------------------------------------------------------------
 
 Minimize total cost across all shipments:
@@ -1456,13 +1559,26 @@ Minimize total cost across all shipments:
     \;+\; \text{(THC, AMS — per shipment per arc)}
     \tag{surcharges} \\
   +\;
-  & \sum_{k \in K} \sum_{(f,g) \in \text{Hub}(k)} \sum_{u} \rho_{f,g,u}^{\text{reULD}} \cdot (1 - \psi_{f,g,u}) \cdot y_{f,u,k}^c \cdot y_{g,u,k}^{c'}
-    \tag{rehandling cost when re-ULDing}
+  & \sum_{k \in K} \sum_{(f,g) \in \text{Hub}(k)} \sum_{u \in U_f \cap U_g} \rho_{f,g,u}^{\text{reULD}} \cdot (1 - \psi_{f,g,u}) \cdot \zeta_{f,g,u,k}
+    \tag{rehandling cost --- same-ULD case} \\
+  +\;
+  & \sum_{k \in K} \sum_{(f,g) \in \text{Hub}(k)} \bar{\rho}^{\text{reULD}}_{f,g} \cdot \chi_{f,g,k}
+    \tag{rehandling cost --- cross-ULD case}
 \end{align}
 
-The rehandling cost term is bilinear ($y \cdot y$); linearize by introducing an auxiliary
-binary variable per consecutive air-arc pair per shipment per ULD type that equals the
-product (Section~\ref{sec:linearization}).
+The same-ULD term uses $\zeta_{f,g,u,k}$ (defined in Section~\ref{sec:linearization}):
+the indicator that shipment $k$ uses ULD type $u$ on \emph{both} $f$ and $g$. The term
+contributes only when $\psi_{f,g,u} = 0$ --- i.e., same ULD type on both legs but no
+through-ULD eligibility (e.g., interline pair outside any ULD interchange agreement).
+
+The cross-ULD term uses $\chi_{f,g,k} = x_f^k \cdot x_g^k - \sum_{u} \zeta_{f,g,u,k}$
+(also defined in Section~\ref{sec:linearization}): the indicator that $k$ uses both
+arcs but different ULD types. $\bar{\rho}^{\text{reULD}}_{f,g}$ is the cross-type
+rehandling cost --- typically equal to or slightly higher than the same-type cost,
+since cargo must be re-stuffed into a new ULD shape.
+
+The two cases together cover all re-ULDing situations exactly: same-u with $\psi=0$, and
+cross-u (always forced).
 
 \paragraph{Indicator $\mathbb{1}[k \text{ on } f]$.}
 Equals $1$ if shipment $k$ uses flight $f$; can be substituted as $\sum_{c,u} y_{f,u,k}^c + b_{f,k}$.
@@ -1486,19 +1602,49 @@ constraint, i.e., the maximum of the two right-hand sides. Adds one continuous v
 two inequality constraints per (contract, flight, ULD type) triple.
 
 \subsection{Bilinear Rehandling Cost Linearization}
+\label{sec:lin-rehandling}
 
-The rehandling cost term contains $y_{f,u,k}^c \cdot y_{g,u,k}^{c'}$ (product of two binaries).
-Standard McCormick linearization: introduce auxiliary binary $\zeta_{f,g,u,k} \in \{0,1\}$
-representing the product, with three constraints:
+The hub-pair indicators required by the objective (rehandling cost) and by P.14 are
+defined here. The previous draft wrote the rehandling product as
+$y_{f,u,k}^c \cdot y_{g,u,k}^{c'}$ with implicit contract indices $c, c'$; the
+cleaner formulation aggregates over contracts, since a shipment uses at most one
+contract per (flight, ULD type) per (P.9 spot/contract exclusivity).
+
+\paragraph{Same-ULD indicator $\zeta_{f,g,u,k}$.}
+Binary variable: $\zeta = 1$ iff $k$ uses ULD type $u$ on \emph{both} arcs $f$ and $g$,
+across any contract on each.
 \begin{align}
-  \zeta_{f,g,u,k} \;&\leq\; y_{f,u,k}^c \\
-  \zeta_{f,g,u,k} \;&\leq\; y_{g,u,k}^{c'} \\
-  \zeta_{f,g,u,k} \;&\geq\; y_{f,u,k}^c + y_{g,u,k}^{c'} - 1
+  \zeta_{f,g,u,k} \;&\leq\; \sum_{c} y_{f,u,k}^{c} \\
+  \zeta_{f,g,u,k} \;&\leq\; \sum_{c'} y_{g,u,k}^{c'} \\
+  \zeta_{f,g,u,k} \;&\geq\; \sum_{c} y_{f,u,k}^{c} \;+\; \sum_{c'} y_{g,u,k}^{c'} \;-\; 1 \\
+  \zeta_{f,g,u,k} \;&\in\; \{0, 1\}
 \end{align}
-Since $\zeta$ appears with positive coefficient in the objective (rehandling cost), the
-optimizer drives $\zeta$ down to 0 unless both $y$ values force it to 1 — exactly the
-desired AND semantics. Adds one binary variable and three inequalities per consecutive
-arc pair per ULD type per shipment.
+The upper bounds force $\zeta = 0$ if either side is 0; the lower bound forces
+$\zeta = 1$ if both sides are 1. Standard McCormick AND linearization.
+
+\paragraph{Both-arcs-used indicator $\xi_{f,g,k}$.}
+Binary variable: $\xi = 1$ iff $k$ uses both $f$ and $g$ (regardless of ULD type).
+\begin{align}
+  \xi_{f,g,k} \;&\leq\; x_f^k \\
+  \xi_{f,g,k} \;&\leq\; x_g^k \\
+  \xi_{f,g,k} \;&\geq\; x_f^k + x_g^k - 1 \\
+  \xi_{f,g,k} \;&\in\; \{0, 1\}
+\end{align}
+
+\paragraph{Cross-ULD indicator $\chi_{f,g,k}$.}
+Binary variable: $\chi = 1$ iff $k$ uses both arcs but a different ULD type on each.
+\begin{equation}
+  \chi_{f,g,k} \;=\; \xi_{f,g,k} \;-\; \sum_{u \in U_f \cap U_g} \zeta_{f,g,u,k}
+\end{equation}
+$\chi$ is binary because at most one $\zeta_{f,g,u,k}$ can equal 1 (a shipment uses one
+ULD type per flight under MVP; cf.\ deferred item~\ref{item:psi-decision-var} neighborhood).
+$\chi$ enters the objective with positive coefficient (cross-ULD rehandling cost),
+so the solver has no incentive to inflate it.
+
+\paragraph{Variable count per consecutive hub arc-pair per shipment.}
+$|U_f \cap U_g|$ $\zeta$ variables, $1$ $\xi$ variable, $1$ $\chi$ variable;
+$\approx 5|U|+5$ constraints. Reused by P.14 (same-ULD and cross-ULD MCT cases)
+and by the objective's two rehandling-cost terms.
 
 \subsection{Big-M Tightening}
 
@@ -1586,7 +1732,7 @@ specific sequence:
   \item \textbf{Period-level commitment optimization (P.7).} MVP takes $\underline{M}_{c,u,t}$
         from a separate upstream model. Future: joint optimization of period commitment
         allocation across the rolling horizon.
-  \item \textbf{Through-ULD as decision variable.} MVP makes $\psi$ a pre-computed
+  \item \label{item:psi-decision-var} \textbf{Through-ULD as decision variable.} MVP makes $\psi$ a pre-computed
         parameter. P1: promote to decision variable, allowing forwarder-elected re-ULDing
         at compatible hubs for cargo re-sorting.
   \item \textbf{Probabilistic transit time objective.} MVP uses deterministic mean transit

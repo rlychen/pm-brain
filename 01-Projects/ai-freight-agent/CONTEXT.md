@@ -1,6 +1,6 @@
 # Project Context
 
-**Last updated:** 2026-05-17 (Session 10 — end of day)
+**Last updated:** 2026-05-17 (Session 11 — Task #6 closed)
 
 ---
 
@@ -27,7 +27,7 @@
 
 Two adversarial critique agents (technical + practitioner) reviewed `air_freight_routing.tex` Draft v1. User opted to walk through scope decisions point by point before formalizing v2. Approach: opinionated Claude rec → user final call → inline LaTeX edit → immediate PDF rebuild.
 
-**v2b — Practitioner scope (27 tasks total, 5 closed):**
+**v2b — Practitioner scope (27 tasks total, 6 closed):**
 
 | # | Task | Status |
 |---|---|---|
@@ -36,8 +36,8 @@ Two adversarial critique agents (technical + practitioner) reviewed `air_freight
 | 3 | Embargo modeling | ✓ added; pre-filter pattern; 11-field schema; embargo_ok predicate |
 | 4 | Lithium battery PI classification | ✓ added; whitelist matrix; commodity attributes; lithium_ok predicate |
 | 5 | Supply layer generalization | ✓ added; supply_type enum; co-loader dual-mode; GSA as markup; spot TTL |
-| 6 | Through-ULD ψ policy correction | **next up — pending** |
-| 7 | Locked-in commitments (K_locked) | pending P0 |
+| 6 | Through-ULD ψ policy correction | ✓ closed Session 11. ULD interchange set Π added (Star/SkyTeam/oneworld); 3-case rule; operating vs marketing carrier; cross-ULD case; rationale remark + worked example. Bundled Tech C5+M4 (P.14 + rehandling cost linearization cleanup). |
+| 7 | Locked-in commitments (K_locked) | **next up — pending P0** |
 | 8 | Service-level commitments | pending P0 |
 | 9 | Carrier blacklist/preference | pending P0 |
 | 10–22 | P1 important items | pending |
@@ -47,9 +47,9 @@ Two adversarial critique agents (technical + practitioner) reviewed `air_freight
 
 | Bucket | Count | Status |
 |---|---|---|
-| Critical (C1–C7) | 7 | C3 resolved (MAWB restructure), C6 resolved (cutoff set). C4 ↔ Task #24, C5 ↔ Task #6 (pending). C1, C2, C7 pending pure-tech fix. |
+| Critical (C1–C7) | 7 | C3 resolved (MAWB restructure), C6 resolved (cutoff set), **C5 resolved Session 11** (P.14 explicit per-tuple MCT). C4 ↔ Task #24. C1, C2, C7 pending pure-tech fix. |
 | High (H1–H6) | 6 | H1 ↔ Task #20, H3 partial via Task #4. H2, H4, H5, H6 pending pure-tech. |
-| Medium (M1–M6) | 6 | M4 ↔ Task #6. M1+M6, M2, M3, M5 pending pure-tech. |
+| Medium (M1–M6) | 6 | **M4 resolved Session 11** (Σ_c y activation on P.14). M1+M6, M2, M3, M5 pending pure-tech. |
 | Low (L1–L4) | 1 cluster | pending pure-tech notation hygiene batch |
 | Reformulation (RC1, RH1–RH3, RM1–RM4) | 8 | RC1 ↔ Task #24. RH1–RH3, RM1–RM4 pending implementation phase. |
 | Scalability mitigation doc | 1 | pending |
@@ -60,12 +60,12 @@ Two adversarial critique agents (technical + practitioner) reviewed `air_freight
 
 ## Immediate next steps (start of next session — 2026-05-18)
 
-1. **Resume air model v2b walkthrough at Task #6** (Through-ULD ψ policy correction). Overlaps Tech C5 + M4.
-2. **Continue v2b sequentially through Tasks #6–27.** 22 points remaining. Approach validated.
-3. **Execute v2a math correctness pass** (Tasks #28–54 minus resolved) once v2b complete.
+1. **Resume air model v2b walkthrough at Task #7** (Locked-in commitments, K_locked). P0 Critical.
+2. **Continue v2b sequentially through Tasks #8–27.** 21 points remaining. Approach validated.
+3. **Execute v2a math correctness pass** (~21 remaining tech findings) once v2b complete.
 4. **Then formalize as Air Model Draft v2** and submit for LaTeX approval.
 5. **After Air Model approved**, return to deferred work: Graph Generator LaTeX model, remaining LaTeX models (Transit Time, Destination Leg Planner, Rules Engine), PRD review continuation.
-6. **Obsidian vault sync** — last synced end of Session 9 (2026-05-16). LaTeX file substantially expanded in Session 10; sync needed before next session.
+6. **Obsidian vault sync** — synced 2026-05-17 (start of Session 11): CONTEXT, SESSION_LOG, air model tex+pdf. Re-sync needed after Session 11 edits (air model rebuilt to 31 pages with Task #6 changes).
 
 ## Laptop feasibility — confirmed at end of session 9
 
