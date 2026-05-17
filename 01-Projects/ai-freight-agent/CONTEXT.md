@@ -1,6 +1,6 @@
 # Project Context
 
-**Last updated:** 2026-05-16 (Session 9 — end of day)
+**Last updated:** 2026-05-17 (Session 10 — end of day)
 
 ---
 
@@ -8,12 +8,12 @@
 
 **Phase 0 — PRD.** PRD v0.3 in review (reorganized 2026-05-16). Not yet formally approved.
 
-**Phase 1 — LaTeX models drafted in parallel** per user direction (don't wait for PRD approval to flesh out math models). **4 of ~11 models drafted as of session 9:**
+**Phase 1 — LaTeX models drafted in parallel** per user direction (don't wait for PRD approval to flesh out math models). **4 of ~11 models drafted; Air model in v2 scope revision:**
 
 | Model | File | Status | PDF |
 |---|---|---|---|
 | Ocean FCL | `model/ocean_fcl_routing.tex` | Draft v2 | rendered, 677 KB |
-| Air Freight | `model/air_freight_routing.tex` | Draft v1 | 17 pages |
+| Air Freight | `model/air_freight_routing.tex` | **Draft v1 → v2 scope revision in progress (session 10)** | ~25+ pages, rebuilt cleanly |
 | Ocean LCL | `model/ocean_lcl_routing.tex` | Draft v1 | 14 pages |
 | Trucking (FTL/PTL/LTL) | `model/trucking_routing.tex` | Draft v1 | 16 pages |
 
@@ -23,14 +23,49 @@
 
 ---
 
-## Immediate next steps (start of next session — 2026-05-17)
+## Air model v2 revision — in progress (Session 10, 2026-05-17)
 
-1. **Graph Generator LaTeX model** — user has specific instructions queued for this; first task tomorrow morning. Note: also generates synthetic test instances.
-2. **Continue remaining LaTeX models** — Transit Time Models (ocean/trucking/air/path-level), Destination Leg Planner, Rules Engine, Instance Generator (if separate from Graph Generator)
-3. **Resume PRD review** — agent_design.md §1.3 onward (guardrails through capability registry)
-4. **Adversarial critique pass** on remaining specialist files (data_model, ui_spec, personas_and_tools, build_plan)
-5. **Formal PRD + all LaTeX approval** — gate to Phase 2
-6. **Obsidian vault sync done end of session 9** — see vault for current copies
+Two adversarial critique agents (technical + practitioner) reviewed `air_freight_routing.tex` Draft v1. User opted to walk through scope decisions point by point before formalizing v2. Approach: opinionated Claude rec → user final call → inline LaTeX edit → immediate PDF rebuild.
+
+**v2b — Practitioner scope (27 tasks total, 5 closed):**
+
+| # | Task | Status |
+|---|---|---|
+| 1 | MAWB / HAWB restructure | ✓ scope agreed; conceptual content in LaTeX §2; decision-vars deferred to v2 MAWB rewrite |
+| 2 | DCO + AMS + ICS2 + ACI cutoff set | ✓ added to LaTeX; P.11 + subgraph step 3 use effective cutoff CO_f* |
+| 3 | Embargo modeling | ✓ added; pre-filter pattern; 11-field schema; embargo_ok predicate |
+| 4 | Lithium battery PI classification | ✓ added; whitelist matrix; commodity attributes; lithium_ok predicate |
+| 5 | Supply layer generalization | ✓ added; supply_type enum; co-loader dual-mode; GSA as markup; spot TTL |
+| 6 | Through-ULD ψ policy correction | **next up — pending** |
+| 7 | Locked-in commitments (K_locked) | pending P0 |
+| 8 | Service-level commitments | pending P0 |
+| 9 | Carrier blacklist/preference | pending P0 |
+| 10–22 | P1 important items | pending |
+| 23–27 | Over-engineering drop decisions | pending |
+
+**v2a — Technical math correctness pass (27 tasks total, 2 closed by v2b):**
+
+| Bucket | Count | Status |
+|---|---|---|
+| Critical (C1–C7) | 7 | C3 resolved (MAWB restructure), C6 resolved (cutoff set). C4 ↔ Task #24, C5 ↔ Task #6 (pending). C1, C2, C7 pending pure-tech fix. |
+| High (H1–H6) | 6 | H1 ↔ Task #20, H3 partial via Task #4. H2, H4, H5, H6 pending pure-tech. |
+| Medium (M1–M6) | 6 | M4 ↔ Task #6. M1+M6, M2, M3, M5 pending pure-tech. |
+| Low (L1–L4) | 1 cluster | pending pure-tech notation hygiene batch |
+| Reformulation (RC1, RH1–RH3, RM1–RM4) | 8 | RC1 ↔ Task #24. RH1–RH3, RM1–RM4 pending implementation phase. |
+| Scalability mitigation doc | 1 | pending |
+
+**v2 plan:** finish v2b walkthrough (22 points remaining), then execute v2a as a single math correctness pass (~17 pure-tech items batched).
+
+---
+
+## Immediate next steps (start of next session — 2026-05-18)
+
+1. **Resume air model v2b walkthrough at Task #6** (Through-ULD ψ policy correction). Overlaps Tech C5 + M4.
+2. **Continue v2b sequentially through Tasks #6–27.** 22 points remaining. Approach validated.
+3. **Execute v2a math correctness pass** (Tasks #28–54 minus resolved) once v2b complete.
+4. **Then formalize as Air Model Draft v2** and submit for LaTeX approval.
+5. **After Air Model approved**, return to deferred work: Graph Generator LaTeX model, remaining LaTeX models (Transit Time, Destination Leg Planner, Rules Engine), PRD review continuation.
+6. **Obsidian vault sync** — last synced end of Session 9 (2026-05-16). LaTeX file substantially expanded in Session 10; sync needed before next session.
 
 ## Laptop feasibility — confirmed at end of session 9
 

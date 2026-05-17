@@ -2,6 +2,75 @@
 
 ---
 
+## 2026-05-17 (Session 10 — air model adversarial review and v2b scope decisions)
+
+**Focus:** Two adversarial critique agents run against `model/air_freight_routing.tex` Draft v1 (technical formulation + practitioner operational). Began systematic v2b scope decision walkthrough with user (point-by-point), executing inline LaTeX edits as decisions are reached. 5 of 27 practitioner-scope points closed.
+
+**Adversarial agents launched (run in parallel):**
+
+1. **Technical agent (formulation, notation, reformulation, scalability)** — produced 23 findings: 7 Critical (C1–C7), 6 High (H1–H6), 6 Medium (M1–M6), 4 Low (L1–L4); 8 reformulation recommendations (RC1, RH1–RH3, RM1–RM4, RL1–RL2); full scalability analysis. Verdict: model is structurally sound; ~10 blockers fixable in v2 revision in hours; primary scalability concern is `|C|²` blowup from naïve McCormick on bilinear rehandling (RC1 mandatory before code).
+
+2. **Practitioner agent (mid-market forwarder ops)** — produced ~30 findings across 4 sections: (1) missing operational realities, (2) unrealistic assumptions, (3) Monday-morning blockers, (4) over-engineering items to drop. Verdict: "mathematically clean, operationally a 2015 model." Top three blockers if only fixing three: (a) flexible supply layer (allocations + GSA + co-loader + dynamic spot, not just BSA + IATA tier), (b) MAWB / HAWB consolidation structure, (c) DCO + embargoes + lithium PI as first-class constraints.
+
+**User direction:** review v2b (practitioner scope) first; one point at a time, opinionated rec from Claude, user makes final call; Claude makes inline LaTeX edits + tracks decisions; v2a (math correctness pass on tech findings) deferred until v2b scope is locked.
+
+**Task tracking established:** 27 v2b practitioner-scope tasks (#1–27) created with full descriptions. 27 v2a tech-finding tasks (#28–54) created with overlap notes against practitioner points. Resolved tech findings marked complete (C3, C6).
+
+**v2b points closed this session (Tasks #1–5):**
+
+- **Task #1 — MAWB/HAWB restructure (P0 Critical, agreed scope).** Full §2 added to LaTeX: definitions, filing mechanics (Cargo-IMP FWB/FHL, ONE Record), universality across procurement modes, Direct MAWB special case, co-loader pattern, consolidation economics worked example (8 × 150 kg consol: $5,760 → $2,640 airline cost, $2,760 vs $-360 margin), constraints that bind on consol, v2 decision-variable sketch (m ∈ M, h_{k,m}, y_{f,u,m}^c). MAWB-level chargeable weight subsection (Eq. mawb-cw) with density mixing worked example (sum of HAWB CW = 400 kg vs MAWB-level = 284 kg) and 5% dunnage factor. Rate function subsection (Eq. rate-fn) with TACT/BUC/NAC/BSA-pivot/dynamic spot encoded as (b_i, m_i) tuples; cross-rate-shape cost comparison table; supply-option assignment binaries y_{f,m,o} as MILP encoding (not SOS-2). Convex/concave PWL clarification with LP-underestimates-by-$61.67 worked example (pushed back on user — concave PWL minimization needs binaries, not convex). PMC explanation with IATA ULD code convention. Weight-vs-volume binding table per ULD type.
+
+- **Task #2 — DCO and customs filing deadlines (P0 Critical, all included).** Flight parameters expanded to include DCO_f, AMS_f, ICS2_f, ACI_f alongside CGC_f. Cutoff set CO_f defined (Eq. cutoff-set), effective cutoff CO_f* via min (Eq. effective-cutoff), prep_time_k formula (Eq. prep-time) covering base + per-HAWB + DGR + PER + customs. P.11 rewritten as t_k(i) + prep_time_k ≤ CO_f* + M(1−x). Subgraph step 3 updated to use effective cutoff. Model structure unchanged — same single inequality with richer RHS.
+
+- **Task #3 — Embargo modeling (P0, mirroring cutoff pattern).** New §6 Embargo Parameters: full 11-field schema, active embargo set E_f (Eq. active-embargoes), match predicate, embargo-feasibility predicate (Eq. embargo-feasibility), 4 illustrative records (CX lithium TPE→US, EK Hajj, HKG CNY perishables, generic pax-belly PI965), sourcing strategy (MVP manual → P1 agent intake → P2 WebCargo API), 4 scope decisions (hard-only, individual carriers, global per tenant, lithium reference forward). Subgraph step 3 adds embargo_ok check.
+
+- **Task #4 — Lithium battery PI classification (P0, whitelist approach).** New §6 Lithium Battery Taxonomy: IATA UN3480/3481/3090/3091 × PI965–970 × Section IA/IB/II taxonomy; commodity-level lithium_spec_k attributes (un_number, pi_code, section, watt_hours, soc_compliant, ddr); per-flight whitelist acceptance matrix lithium_accept_f indexed on (PI, Section, ac_type) (Eq. lithium-accept); lithium feasibility predicate (Eq. lithium-ok) with DDR exclusion + SOC compliance + acceptance check; interaction with embargo (AND-ed); aircraft-type dependency preserved (links forward to Task #15); MVP scope decisions enumerated; sourcing notes. Subgraph step 3 adds lithium_ok check.
+
+- **Task #5 — Supply layer generalization (P0, structural additions).** New §6 Procurement Types and Supply Layer Catalog: supply_type enum {DIRECT_BSA_HARD, DIRECT_BSA_SOFT, GSA, COLOADER, DYNAMIC_SPOT}; catalog table mapping each to allocation holder, contract counterparty, MAWB issuer, rate function shape, allocation accounting; parameter-block mapping per type; co-loader explicit dual-mode with HAWB-level binary coloader_{k,o} (Eq. coloader) and exactly-one constraint across procurement paths (formal restructure deferred to v2 MAWB); GSA as marked-up direct contract (no structural change); dynamic spot as single-segment + expiry_c; out-of-MVP-scope list (charter, broker-of-record, alliance slot sharing — already deferred elsewhere).
+
+**Tech tasks resolved by v2b work:**
+- C3 (multi-ULD per shipment broken) → resolved by Task #1 MAWB restructure
+- C6 (ETD-as-cutoff invariant) → resolved by Task #2 cutoff set
+
+**Overlapping tech tasks tracked but pending resolution with practitioner peers:**
+- C4 + RC1 (bilinear rehandling) ↔ Task #24
+- C5 + M4 (P.14 endogenous MCT) ↔ Task #6
+- H1 (surcharge contract path) ↔ Task #20
+- H3 (cargo type compat) ↔ partial via Task #4
+
+**LaTeX file growth:** `air_freight_routing.tex` 17 pages (Draft v1) → ~25+ pages (v2b in-progress). PDF rebuilt cleanly after each scope addition. T1 font encoding added (`\usepackage[T1]{fontenc}`) to support inch marks.
+
+**Where we left off (end of session 10, 2026-05-17):**
+
+- **5 of 27 v2b practitioner-scope tasks closed** (Tasks #1–5). 22 remaining.
+  - Next up: **Task #6 — Through-ULD ψ policy correction** (P0 Important). Overlaps Tech C5+M4.
+  - Order of remaining P0 critical: #7 locked-in commitments, #8 service-level commitments, #9 carrier blacklist.
+  - Then P1 (Tasks #10–22) — 12 items.
+  - Then over-engineering drops (Tasks #23–27) — 5 items.
+
+- **2 of 27 v2a tech-finding tasks closed** (C3, C6 resolved via v2b). 25 remaining.
+  - 8 tech tasks have practitioner overlap and will resolve as their peer task closes.
+  - ~17 pure-tech tasks (notation hygiene, indexing fixes, reformulation, scalability docs) deferred to a single v2a math correctness pass after v2b is fully complete.
+
+- **No code written.** No agent capability added. PRD v0.3 still not formally approved. LaTeX models still draft.
+
+- **Approach validated:** point-by-point walkthrough with opinionated Claude recommendation + user final call + inline LaTeX edits + immediate PDF rebuild works well. Maintains user control while moving fast. No scope creep or undocumented decisions.
+
+**Tomorrow's starting move:**
+1. Resume at Task #6 (Through-ULD ψ policy correction)
+2. Continue point-by-point through Tasks #6–27
+3. Once v2b complete, run v2a math correctness pass as a single batch (Tasks #28–54 except those already resolved)
+4. After both passes complete, render final PDF and submit for formal LaTeX approval
+
+**Files touched this session:**
+- `model/air_freight_routing.tex` — substantial additions: §2 Commercial Structure (MAWB/HAWB + density mixing + rate function), expanded flight parameters (cutoff set), new §6 subsections (Embargo, Lithium, Procurement Types)
+- `model/air_freight_routing.pdf` — rebuilt cleanly multiple times, ~25+ pages
+- Task tracker — 27 v2b + 27 v2a tasks created, 5 v2b + 2 v2a marked complete
+- SESSION_LOG.md (this entry)
+- CONTEXT.md (to be updated)
+
+---
+
 ## 2026-05-16 (Session 9 — same day continuation, switched to Opus 4.7)
 
 **Focus:** Continue drafting LaTeX models for all transportation modes. Completed: LCL, Trucking. Air completed in prior session.
