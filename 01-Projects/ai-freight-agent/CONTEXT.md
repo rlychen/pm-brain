@@ -1,6 +1,6 @@
 # Project Context
 
-**Last updated:** 2026-05-17 (Session 11 — Task #6 closed)
+**Last updated:** 2026-05-17 (Session 11 — air model math review complete; ready for user PDF review then LCL)
 
 ---
 
@@ -13,7 +13,7 @@
 | Model | File | Status | PDF |
 |---|---|---|---|
 | Ocean FCL | `model/ocean_fcl_routing.tex` | Draft v2 | rendered, 677 KB |
-| Air Freight | `model/air_freight_routing.tex` | **Draft v1 → v2 scope revision in progress (session 10)** | ~25+ pages, rebuilt cleanly |
+| Air Freight | `model/air_freight_routing.tex` | **Draft v2 — P0 cluster + math review complete (Session 11); awaiting user PDF review** | ~3,162 lines LaTeX (estimated ~55–65 pages once rebuilt); user compiles PDF manually per CLAUDE.md rule |
 | Ocean LCL | `model/ocean_lcl_routing.tex` | Draft v1 | 14 pages |
 | Trucking (FTL/PTL/LTL) | `model/trucking_routing.tex` | Draft v1 | 16 pages |
 
@@ -27,7 +27,7 @@
 
 Two adversarial critique agents (technical + practitioner) reviewed `air_freight_routing.tex` Draft v1. User opted to walk through scope decisions point by point before formalizing v2. Approach: opinionated Claude rec → user final call → inline LaTeX edit → immediate PDF rebuild.
 
-**v2b — Practitioner scope (27 tasks total, 6 closed):**
+**v2b — Practitioner scope (27 tasks total, 9 closed). P0 Critical cluster fully closed.**
 
 | # | Task | Status |
 |---|---|---|
@@ -37,35 +37,48 @@ Two adversarial critique agents (technical + practitioner) reviewed `air_freight
 | 4 | Lithium battery PI classification | ✓ added; whitelist matrix; commodity attributes; lithium_ok predicate |
 | 5 | Supply layer generalization | ✓ added; supply_type enum; co-loader dual-mode; GSA as markup; spot TTL |
 | 6 | Through-ULD ψ policy correction | ✓ closed Session 11. ULD interchange set Π added (Star/SkyTeam/oneworld); 3-case rule; operating vs marketing carrier; cross-ULD case; rationale remark + worked example. Bundled Tech C5+M4 (P.14 + rehandling cost linearization cleanup). |
-| 7 | Locked-in commitments (K_locked) | **next up — pending P0** |
-| 8 | Service-level commitments | pending P0 |
-| 9 | Carrier blacklist/preference | pending P0 |
-| 10–22 | P1 important items | pending |
-| 23–27 | Over-engineering drop decisions | pending |
+| 7 | Locked-in commitments (K_locked) | ✓ closed Session 11. K^loc + per-arc locked prefix A_k^loc (and locked-off set); 7-state lifecycle → lock-posture mapping; locks derived from lifecycle + execution events; P.19 Locked Commitments constraint (renamed Domain to P.20); sunk costs retained in objective for traceability; lock-induced infeasibility routed as structured rescue event; P1 lock-buyout deferred. |
+| 8 | Service-level commitments | ✓ closed Session 11. Named service-product catalog P (PRM_AIR_EXP, STD_AIR, ECON_AIR, MM_EXPEDITED, MM_STD, MM_ECON, OCN_EXP, OCN_STD); per-shipment sp(k) binding; bundle attributes = mode_allow, carrier_allow, carrier_deny, ac_type_allow, T^SLA, handling_tier, cargo_type_min; subgraph pre-filter predicates mode_ok/carrier_ok/ac_type_ok added to flight reachability pass; P.20 Transit-Time SLA hard constraint (renamed Domain to P.21); P1 soft-OTP penalty deferred (item:sla-soft-otp); SLA breach = rescue event. |
+| 9 | Carrier blacklist / preference | ✓ closed Session 11. Layered cascade above service product: tenant blacklist → shipper-lane allow/deny → service product → lane preference → commodity overlay. Deny-wins conflict semantics. Resolved per-shipment sets C_k^allow, C_k^deny, C_k^pref. carrier_ok predicate redefined to use resolved sets (Eq. carrier-ok-resolved supersedes sp-carrier-ok). Soft preference via lexicographic two-pass: Pass 1 cost min → z*; Pass 2 max preferred-carrier count s.t. cost ≤ z* + ε^pref. Rules engine is a separate component (own LaTeX model in Phase 1). Time-windowed rules + ML override-learning deferred to rules engine model + Phase 5 constraint learning. |
+| 10–22 | P1 important items + practitioner v2 critique pass | Closed via re-run practitioner agent + Groups 1–5 in Session 11. 17 findings triaged: 12 closed in model (incl. surcharge data model, ULD attribute completeness, screening cert, CGC by cargo type, cargo-ready window, supply-side lock invalidation, time-zone convention, B/L release type, currency/FX, shipment attributes doc, clearance dwell); 2 doc-only (sell-rate scope note, booking-rejection recovery); 2 deferred P1 with sourced rate notes (CFS storage/demurrage, partial-split shipment); 1 SKIP-with-note (per-flight lithium aggregate is carrier-side); 1 skip outright (AWB stock). New supporting files: `shipment_attributes.md` (295 lines); `data_model.md` extended with §4 Policy Rules, §5 Spot Rate Snapshots, §6 Surcharge Catalog, §7 Currency/FX (1,148 lines total). |
+| 23–27 | Over-engineering drop decisions | Implicitly handled by the user-driven triage in Session 11 — items skipped or deferred as scope decisions during the 17-finding triage. |
 
-**v2a — Technical math correctness pass (27 tasks total, 2 closed by v2b):**
+**v2a — Technical math correctness pass — superseded Session 11 by fresh 3-agent critique pass on the post-v2b model:**
 
-| Bucket | Count | Status |
+Session 11 launched 3 parallel critique agents on the post-v2b air model: (1) **notation & formulation correctness**, (2) **linearization & MILP technique**, (3) **simplification & tractability at scale**. The 3 agents produced ~56 findings (15 + 21 + 20) clustered into 5 themes by fix-shape; all bugs and tightening items closed in Session 11. Original v2a list from Session 10 is superseded by this fresher pass.
+
+| Cluster | Items | Status |
 |---|---|---|
-| Critical (C1–C7) | 7 | C3 resolved (MAWB restructure), C6 resolved (cutoff set), **C5 resolved Session 11** (P.14 explicit per-tuple MCT). C4 ↔ Task #24. C1, C2, C7 pending pure-tech fix. |
-| High (H1–H6) | 6 | H1 ↔ Task #20, H3 partial via Task #4. H2, H4, H5, H6 pending pure-tech. |
-| Medium (M1–M6) | 6 | **M4 resolved Session 11** (Σ_c y activation on P.14). M1+M6, M2, M3, M5 pending pure-tech. |
-| Low (L1–L4) | 1 cluster | pending pure-tech notation hygiene batch |
-| Reformulation (RC1, RH1–RH3, RM1–RM4) | 8 | RC1 ↔ Task #24. RH1–RH3, RM1–RM4 pending implementation phase. |
-| Scalability mitigation doc | 1 | pending |
+| **1. Real bugs (correctness)** | 6 — B1 x_f^k undefined, B2 pickup-window not enforced, B3 τ_k overloaded, B4 per_uld surcharge bilinearity, B5 χ binary misstatement, B6 CO_f^* missing k | ✓ all closed (Cluster 1 sweep). New x_f^k shorthand defined; P.21 extended with cargo-ready-window constraint; categorical `\ctype` macro replaces overloaded τ_k; per_uld surcharge re-attributed to flight-level (Path B); χ now continuous [0,1]; subgraph CO subscript fixed. |
+| **2. Tightening (correct but loose)** | 5 — T1 per-constraint tight big-M, T2 P.14b → (1−χ), T3 P.10 disaggregation note, T4 P.19 inequality form + pre-solve check, T5 ε^pref ≥ Pass-1 MIP gap | ✓ all closed (Cluster 2 sweep). §10.3 rewritten with per-constraint M^P11/M^P12/M^P13/M^P14a/M^P14b. P.19 uses two-sided inequalities for clean presolve diagnostics. |
+| **3. Notation hygiene** | 9 — cargo-type enum canonical {GEN,DGR,PER,VAL,AVI,HUM}, Hub_k(j)/Hub(k) split, wildcard fix, ζ scope, ξ role note, P.18 attribution, F_c(t) definition, function-style convention note, cargo_type_ok predicate | ✓ all closed (Cluster 3 sweep). |
+| **4. Tractability roadmap** | 8 simplification levers + 4 strategy notes | ✓ documented as new §Tractability and Scaling Roadmap with sourced benchmarks. Not active model changes; gated on production solve-time data. |
+| **5. Strategy notes** | Folded into Cluster 4 in §Tractability section | ✓ documented |
 
-**v2 plan:** finish v2b walkthrough (22 points remaining), then execute v2a as a single math correctness pass (~17 pure-tech items batched).
+**Net result:** the air model has had a complete math correctness + linearization + notation pass on the v2b structure. Outstanding tech work is now empirical (instrument pre-filter survival rate; measure LP-gap-source post-deployment).
 
 ---
 
-## Immediate next steps (start of next session — 2026-05-18)
+## Immediate next steps (start of next session)
 
-1. **Resume air model v2b walkthrough at Task #7** (Locked-in commitments, K_locked). P0 Critical.
-2. **Continue v2b sequentially through Tasks #8–27.** 21 points remaining. Approach validated.
-3. **Execute v2a math correctness pass** (~21 remaining tech findings) once v2b complete.
-4. **Then formalize as Air Model Draft v2** and submit for LaTeX approval.
-5. **After Air Model approved**, return to deferred work: Graph Generator LaTeX model, remaining LaTeX models (Transit Time, Destination Leg Planner, Rules Engine), PRD review continuation.
-6. **Obsidian vault sync** — synced 2026-05-17 (start of Session 11): CONTEXT, SESSION_LOG, air model tex+pdf. Re-sync needed after Session 11 edits (air model rebuilt to 31 pages with Task #6 changes).
+**User is doing a personal PDF review of the air model**, then will continue with LCL model work.
+
+1. **Air model status:** Draft v2 ready for user review. ~3,162 lines LaTeX; rebuild for personal PDF review will produce ~55–65 pages.
+2. **When user resumes:** they'll pick up either with corrections from their PDF review, or with the LCL model (`model/ocean_lcl_routing.tex`) — which is currently Draft v1 (14 pages, written Session 9, pre-dating the v2b operational additions and the 3-agent math review). The LCL model likely needs the same kind of pass the air model just went through.
+3. **LCL work — expected scope:** the operational-realism additions from air v2b (service products, locked commitments, screening, surcharge data model, shipment attributes, time-zone convention, CGC by cargo type, cargo-ready window, customs dwell, B/L release type, currency/FX, supply-side lock invalidation, carrier policy cascade) all apply to ocean LCL with mode-specific adjustments. The math correctness + linearization + notation review pattern (3-agent critique) is the recommended next move once LCL operational scope is locked.
+4. **Lesson logged from Session 11:** initial Task-#10 framing as "rolling BSA capacity release" was based on a fabricated tranche schedule. After sourced research (Levin/Nediak/Topaloglu 2012, IATA Net Rates docs, FreightAmigo), retracted and pivoted to spot rate snapshot data model. New memories saved: `feedback_no_fabricated_mechanisms.md`, `feedback_minimal_design_default.md`, `feedback_confirm_before_committing.md`.
+5. **PRD review continuation, Graph Generator LaTeX, Transit Time models, Destination Leg Planner, Rules Engine LaTeX** all still pending after LCL.
+6. **Obsidian vault** — re-synced at end of Session 11 (after all Cluster 1–4 edits). See `feedback_vault_sync.md`.
+
+## Files modified in Session 11
+
+| File | What changed |
+|---|---|
+| `model/air_freight_routing.tex` | Massive growth: ~3,162 lines. New §2 Time-zone Convention; expanded §6 with screening cert (§6.12), service products (§6.14), carrier policy (§6.15); expanded §6.1 with cargo-ready window; rewritten §6.4 ULD specs with 16 operational attributes; rewritten §6.7 surcharges with Path-A/B split; new P.20 SLA, expanded P.19 Locked Commitments with supply-side invalidation, P.21 Domain+Initial Conditions; new §Tractability and Scaling Roadmap; updated §10 Linearization with per-constraint tight big-M; new \ctype macro and canonical cargo-type enum |
+| `data_model.md` | 1,148 lines. New §4 Policy Rules and Snapshots (generic 3-table framework); §5 Spot Rate Snapshots; §6 Surcharge Catalog (Path-A per-arc + Path-B flight-level); §7 Currency/FX |
+| `shipment_attributes.md` | New file, 295 lines. Static + dynamic shipment attribute catalog; lifecycle state mapping; milestone event taxonomy; source-of-truth mapping |
+| `CLAUDE.md` | Added "Do not auto-compile LaTeX" rule under guardrails |
+| Memory files | `feedback_no_fabricated_mechanisms.md`, `feedback_minimal_design_default.md`, `feedback_confirm_before_committing.md`; updated `feedback_vault_sync.md` date |
 
 ## Laptop feasibility — confirmed at end of session 9
 

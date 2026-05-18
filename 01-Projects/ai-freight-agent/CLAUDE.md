@@ -89,6 +89,10 @@ If a file you are about to write or edit would contain any banned term, stop and
   Format: one JSON object per line with fields `timestamp`, `role`, `content`, and
   optionally `tool_calls`. This log is the primary input for extending capabilities.
 
+- **Do not auto-compile LaTeX.** When editing `.tex` files under `model/`, write the
+  edits and stop. Do not run `pdflatex` or any other compile step. The user compiles
+  manually and reviews the rendered PDF themselves.
+
 ## Data sources
 
 Real network topology + synthetic commercial parameters. Document data provenance

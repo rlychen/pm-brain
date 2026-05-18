@@ -23,6 +23,7 @@
 \newcommand{\ceil}[1]{\left\lceil #1 \right\rceil}
 \newcommand{\floor}[1]{\left\lfloor #1 \right\rfloor}
 \newcommand{\defeq}{\triangleq}
+\newcommand{\ctype}{\text{ctype}}
 
 \theoremstyle{definition}
 \newtheorem{defn}{Definition}
@@ -87,7 +88,75 @@ of commodities to paths through the multimodal air freight network such that:
         time-window feasibility. Probabilistic on-time delivery objective deferred to P1.
   \item Hazmat / perishable / valuable cargo type segregation: model parameter, not a hard MVP
         constraint (recorded for future restriction logic).
+  \item \textbf{Scope boundary --- sell rate and margin are upstream of this MILP.}
+        Sell rate to the shipper is set by a separate quote engine at booking time
+        (cost-plus-margin, market-rate comparison, competitor signals); once a shipment
+        is booked, the price is fixed and the routing problem is pure cost
+        minimization. The MILP outputs cost; the quote engine composes
+        $\text{margin} = \text{sell} - \text{cost}$ for operator-facing screens. Sell
+        rate is stored on the shipment record (\texttt{shipment\_attributes.md} \S2.5)
+        but is not an input to the routing optimization.
 \end{itemize}
+
+%%--------------------------------------------------------------------
+\section{Time-zone Convention}
+\label{sec:tz-convention}
+%%--------------------------------------------------------------------
+
+All timestamps, time-window parameters, decision-variable arrival times $t_k(n)$, and
+constraint-side time bounds in this model are expressed in \textbf{Coordinated Universal
+Time (UTC)}. This convention is normative for every internal computation; conversions to
+local time happen only at I/O boundaries (operator display, customer notifications,
+external API payloads keyed on origin-local or destination-local).
+
+\paragraph{Why UTC internally.}
+\begin{itemize}[noitemsep]
+  \item IATA SSIM Chapter~6 (Airport Coordination Procedures) standardizes slot
+        coordination messaging on UTC — the regulatory channel between airlines and slot
+        coordinators uses UTC for all dates, days, and times.\footnote{IATA Standard
+        Schedules Information Manual, Chapter 6 --- Airport Coordination Procedures.
+        \url{https://www.iata.org/en/store/publications/manuals-standards-and-regulations/standard-schedule-information-manual-chapter-6airport-coordination-procedures__ssim-ch6/}}
+  \item Flight planning and Air Traffic Control universally use UTC (``Zulu time'').
+  \item Date-line crossings (e.g., TPE$\to$SFO) and daylight-saving transitions create
+        ambiguity in local time and disappear as categories in UTC arithmetic.
+  \item Cross-leg arithmetic ($\text{ETA}_f + \text{MCT} \leq \text{ETD}_g$) is direct in
+        UTC; in local time it would require hop-by-hop conversion at every constraint.
+\end{itemize}
+
+\paragraph{Ingestion of SSIM-style sources.}
+SSIM messages carry a Time Mode field with value \texttt{U} (UTC) or \texttt{L} (local);
+the Local mode records include a paired UTC offset field
+(\texttt{utc\_local\_time\_variation\_departure} and the arrival analog).\footnote{Octallium,
+``Flight Schedules From SSIM'' (technical analysis, 2025).
+\url{https://www.octallium.com/blog/2025/02/27/flight-schedules-from-ssim/}} At
+ingestion, any record in Time Mode \texttt{L} is converted to UTC using the embedded
+offset; only the resulting UTC timestamps enter the model. Where source data omits an
+offset, ingestion fails fast with a structured error --- the model does not silently
+infer a timezone.
+
+\paragraph{Cutoffs and customs filing deadlines.}
+$\text{CGC}_{f,\tau}$, $\text{DCO}_f$, $\text{AMS}_f$, $\text{ICS2}_f$, $\text{ACI}_f$ (\S\ref{sec:flight-params}),
+the shipment-indexed effective cutoff $\text{CO}_{f,k}^*$, and prep-time-adjusted
+feasibility bounds are all UTC absolute timestamps. The carrier-side cutoff is published
+in local time at the origin airport; ingestion converts at intake.
+
+\paragraph{Daylight Saving Time.}
+IATA publishes seasonal schedules (Summer + Winter); UTC offsets in flight records change
+with the season. Working in UTC absorbs DST entirely --- no DST math anywhere in the
+model. Schedules near a DST transition simply carry the post-transition UTC offset in the
+SSIM record, and ingestion produces correct UTC timestamps either way.
+
+\paragraph{Date-line crossings.}
+A flight whose ETD and ETA fall on the same UTC date but different local dates is
+unambiguous in UTC. The SSIM format handles this via the operational suffix `Z' for
+flights using the same flight number on the same UTC date, and via the Overnight
+Indicator attached to Departure time for overmidnight aircraft layovers. The MILP sees
+only the UTC timestamps; the date-line is invisible to constraint evaluation.
+
+\paragraph{User-facing display.}
+Operator dashboards and customer-facing screens convert UTC back to local time at the
+relevant station (origin for cargo cutoff and pickup; destination for ETA, deadline, and
+delivery). The conversion is a presentation-layer concern, not a model concern.
 
 %%--------------------------------------------------------------------
 \section{Commercial Structure: MAWB and HAWB}
@@ -494,6 +563,19 @@ See Section~\ref{sec:prefilter} for the construction algorithm.
 \section{Sets and Indices}
 %%--------------------------------------------------------------------
 
+\paragraph{Notation convention.}
+Function-style names with arguments --- $\text{prep\_time}_k$,
+$\text{cost}^{\text{spot}}(k,f)$, $\text{surcharge\_cost}(k,i,j)$,
+$\text{flight\_uld\_surcharge\_cost}(f)$, $\text{cargo\_type\_ok}(k,f)$,
+$\text{embargo\_ok}(k,f)$, $\text{lithium\_ok}(k,f)$, $\text{screening\_ok}(k,f)$,
+$\text{mode\_ok}(k,f)$, $\text{carrier\_ok}(k,f)$, $\text{ac\_type\_ok}(k,f)$ ---
+denote \emph{pre-computable constants}, not decision variables. They are evaluated
+during ingestion / subgraph construction from shipment attributes and supply data,
+and enter the MILP as coefficients or predicates. The function-style notation is
+preserved (over subscript style) to keep the arguments explicit; the reader should
+treat each as a parameter computed once per (k, f, ...) tuple before the optimizer
+runs.
+
 \begin{center}
 \begin{tabular}{lp{11.5cm}}
 \toprule
@@ -513,8 +595,20 @@ $U_f \subseteq U$ & ULD types available on flight $f$ (depends on aircraft type)
 $C$ & Set of ULD allocation contracts (BSAs), indexed by $c$ \\
 $C_f \subseteq C$ & Contracts that allocate ULDs on flight $f$ \\
 $T$ & Set of allocation time periods (e.g., monthly), indexed by $t$ \\
+$F_c(t) \defeq \{f \in F_c : \text{period\_basis}_c(\text{ETD}_f) = t\}$ & Flights of contract $c$ whose ETD falls in period $t$ under the contract's period-basis convention (\S\ref{sec:bsa-params}, period-boundary remark) \\
 $\tau_k(i)$ & Earliest arrival time of commodity $k$ at node $i$ \\
-$\text{Hub}(j)$ & Set of consecutive air-arc pairs at hub node $j \in N_{\text{AP,H}}$ for shipment $k$: $\{((i,j), (j,\ell)) : (i,j), (j,\ell) \in A^k_{\text{AIR}}\}$ \\
+$\text{Hub}_k(j) \defeq \{((i,j), (j,\ell)) : (i,j), (j,\ell) \in A^k_{\text{AIR}}\}$ & Set of consecutive air-arc pairs at hub node $j \in N_{\text{AP,H}}$ for shipment $k$ \\
+$\text{Hub}(k) \defeq \bigcup_{j \in N_{\text{AP,H}}} \text{Hub}_k(j)$ & Union over all hubs; used in objective sums over consecutive air-arc pairs of $k$ \\
+$K^{\text{loc}} \subseteq K$ & Shipments with one or more locked (already-committed) decisions at solve time; Section~\ref{sec:locked-commitments} \\
+$A_k^{\text{loc}} \subseteq A_k$ & Locked-on arcs for shipment $k$ (committed to be used) \\
+$A_k^{\text{loc-off}} \subseteq A_k$ & Locked-off arcs for shipment $k$ (committed not to be used, e.g., flights passed over in favor of the committed routing) \\
+$P$ & Tenant-scoped catalog of service products, indexed by $p$ (Section~\ref{sec:service-products}) \\
+$\text{sp}(k) \in P$ & Service product bound to shipment $k$ \\
+$T_p^{\text{SLA}}$ & Transit-time SLA (door-to-door, hours) for service product $p$ \\
+$C_k^{\text{allow}}$ & Resolved hard-allowed carrier set for shipment $k$ (Section~\ref{sec:carrier-policy}, Eq.~\ref{eq:carrier-allow}) \\
+$C_k^{\text{deny}}$ & Resolved hard-denied carrier set for shipment $k$ \\
+$C_k^{\text{pref}}$ & Resolved soft-preferred carrier set for shipment $k$ (Eq.~\ref{eq:carrier-pref}) \\
+$\varepsilon^{\text{pref}}$ & Tenant-configured cost tolerance for the lexicographic preference pass (Section~\ref{sec:carrier-policy}) \\
 \bottomrule
 \end{tabular}
 \end{center}
@@ -534,17 +628,33 @@ Volume & $v_k$ & Cargo volume (sum of all pieces) & CBM \\
 Actual weight & $w_k$ & Gross weight & kg \\
 Chargeable weight & $cw_k$ & $\max(w_k,\, v_k \cdot 167)$ & kg \\
 Piece dimensions & $D_k$ & Max single-piece L$\times$W$\times$H (for ULD fit check) & cm \\
-Cargo ready & $t_k^{\text{rdy}}$ & Earliest pickup time from origin door & datetime \\
+Cargo ready window (early) & $t_k^{\text{rdy,early}}$ & Earliest moment the shipper makes cargo available at the origin door (start of the pickup window) & datetime \\
+Cargo ready window (late) & $t_k^{\text{rdy,late}}$ & Latest moment within the shipper's window after which cargo cannot be picked up (end of the pickup window) & datetime \\
 Deadline & $T_k^{\text{dead}}$ & Latest acceptable arrival at destination & datetime \\
 Origin & $o(k)$ & Source node $\in N_O$ & — \\
 Destination & $d(k)$ & Sink node $\in N_D$ & — \\
-Cargo type & $\tau_k$ & General / DGR / PER / VAL / HEA & categorical \\
+Cargo type & $\ctype_k$ & Canonical enum $\{\text{GEN}, \text{DGR}, \text{PER}, \text{VAL}, \text{AVI}, \text{HUM}\}$ following IATA Cargo-IMP category set: \texttt{GEN} general cargo; \texttt{DGR} dangerous goods; \texttt{PER} perishables; \texttt{VAL} valuables; \texttt{AVI} live animals; \texttt{HUM} human remains. (Note: $\tau_k(\cdot)$ in \S\ref{sec:subgraph}-style usage is a distinct time-function symbol; cargo type uses $\ctype_k$ to avoid overload.) Heavy / oversize is captured by piece dimensions / weight, not by a separate cargo-type code. & categorical \\
 HS code & $\text{hs}_k$ & 6-digit Harmonized System code & — \\
 Incoterm & $\text{inco}_k$ & EXW / FCA / CIF / DDP & — \\
 Budget cap & $B_k$ & Hard cost ceiling; $\infty$ if not set & USD \\
 \bottomrule
 \end{tabular}
 \end{center}
+
+\paragraph{Cargo ready window.}
+The shipper offers cargo for pickup within a window
+$[t_k^{\text{rdy,early}},\, t_k^{\text{rdy,late}}]$, not at a single moment. The model
+treats $t_k(o(k))$ --- the actual pickup time at the origin door --- as a continuous
+decision variable bounded by:
+\begin{equation}
+  t_k^{\text{rdy,early}} \;\leq\; t_k(o(k)) \;\leq\; t_k^{\text{rdy,late}}
+  \label{eq:cargo-ready-window}
+\end{equation}
+The optimizer chooses the pickup time within the window. Anchors throughout the rest of
+the model (subgraph optimistic arrival, big-M tightening, SLA computation) reference
+$t_k^{\text{rdy,early}}$ as the canonical ``cargo first available'' time, since
+service-level commitments are measured from the shipper's earliest readiness, not from
+when the forwarder elects to pick up.
 
 \paragraph{Chargeable weight.}
 \begin{equation}
@@ -555,6 +665,7 @@ IATA standard: $1\,\text{m}^3 = 167\,\text{kg}$ volumetric equivalent. Dense car
 electronics) rated on $w_k$; bulky-light cargo (furniture, packaging) rated on volumetric.
 
 \subsection{Ground Arc Parameters (Pickup, CFS, Final Delivery)}
+\label{sec:ground-arc-params}
 
 For each ground arc $(i,j) \in A_{\text{PU}} \cup A_{\text{OC}} \cup A_{\text{DC}} \cup A_{\text{FD}}$:
 
@@ -564,17 +675,68 @@ For each ground arc $(i,j) \in A_{\text{PU}} \cup A_{\text{OC}} \cup A_{\text{DC
 Parameter & Symbol & Description & Unit \\
 \midrule
 Cost & $c_{ij}^{\text{G}}$ & Truck cost per shipment & USD \\
-Mean transit & $\mu_{ij}^{\text{G}}$ & Mean transit time & days \\
-Std dev & $\sigma_{ij}^{\text{G}}$ & Std dev of transit & days \\
+Mean transit & $\mu_{ij}^{\text{G}}$ & Mean transit time (truck/drayage) & hours \\
+Std dev & $\sigma_{ij}^{\text{G}}$ & Std dev of transit & hours \\
 CFS build-up time & $\beta^{\text{O}}$ & Fixed origin CFS dwell (ULD build-up). Configurable. & hours \\
 CFS breakdown time & $\beta^{\text{D}}$ & Fixed destination CFS dwell (ULD breakdown). Configurable. & hours \\
 \bottomrule
 \end{tabular}
 \end{center}
 
-The effective transit time on the CFS$\to$airport arc $(i,j) \in A_{\text{OC}}$ includes the
-CFS build-up: $\tilde{\mu}_{ij}^{\text{OC}} = \mu_{ij}^{\text{OC}} + \beta^{\text{O}}$. Likewise for
-$A_{\text{DC}}$ with $\beta^{\text{D}}$.
+\paragraph{Per-shipment dwell terms on the destination chain.}
+Two additional dwell terms apply only to the destination ground chain. Both are computed
+\emph{per shipment} at intake from static shipment attributes (\texttt{shipment\_attributes.md}
+\S2.7 regulatory flags, \S2.3 destination country); the MILP sees a single number per
+shipment per dwell type, not a distribution.
+
+\begin{center}
+\begin{tabular}{llp{6.5cm}l}
+\toprule
+Parameter & Symbol & Description & Unit \\
+\midrule
+Destination customs clearance dwell & $\delta^{\text{cust}}_k$ & Wait at destination airport between flight arrival and physical release from customs. Function of \texttt{destination\_country}, \texttt{cargo\_type}, \texttt{commodity\_class}, broker performance, and whether customs entry was pre-filed (which the model assumes per the cutoff set in \S\ref{sec:flight-params}). & hours \\
+AWB release dwell at destination CFS & $\delta^{\text{rel}}_k$ & Wait at destination CFS between cargo arrival and AWB release authorization. Function of \texttt{release\_type}: \texttt{express\_release} $\approx 0$h; \texttt{telex\_equivalent} typically 1--4h; \texttt{original\_awb\_surrender} 24--72h if the physical AWB ships separately from cargo; \texttt{freight\_collect\_release} depends on payment timing. & hours \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\paragraph{Sourcing $\delta^{\text{cust}}_k$ and $\delta^{\text{rel}}_k$.}
+For MVP, both parameters resolve from tenant-configurable lookup tables keyed on the
+shipment attributes:
+\begin{itemize}[noitemsep]
+  \item $\delta^{\text{cust}}_k = \text{lookup}^{\text{cust}}(\text{destination\_country}, \text{cargo\_type}, \text{commodity\_class})$
+  \item $\delta^{\text{rel}}_k = \text{lookup}^{\text{rel}}(\text{release\_type})$
+\end{itemize}
+Initial values are tenant-calibrated from historical clearance times observed in the
+forwarder's own broker performance data. The customs filing deadlines themselves
+(AMS / ICS2 / ACI) are already modeled as effective cutoffs in
+\S\ref{sec:flight-params} (Eq.~\ref{eq:effective-cutoff}); $\delta^{\text{cust}}_k$
+captures the \emph{post-arrival} clearance hold, distinct from the pre-flight filing.
+
+\paragraph{Effective transit times on each ground arc type.}
+\begin{align}
+  \tilde{\mu}_{ij}^{\text{PU}}  &= \mu_{ij}^{\text{PU}}
+                                 & & \text{(pickup; no CFS dwell)} \label{eq:eff-transit-pu} \\
+  \tilde{\mu}_{ij}^{\text{OC}}  &= \mu_{ij}^{\text{OC}} + \beta^{\text{O}}
+                                 & & \text{(origin CFS $\to$ airport; includes build-up)} \label{eq:eff-transit-oc} \\
+  \tilde{\mu}_{ij,k}^{\text{DC}} &= \mu_{ij}^{\text{DC}} + \delta^{\text{cust}}_k + \beta^{\text{D}}
+                                 & & \text{(airport $\to$ destination CFS; includes customs + breakdown)} \label{eq:eff-transit-dc} \\
+  \tilde{\mu}_{ij,k}^{\text{FD}} &= \mu_{ij}^{\text{FD}} + \delta^{\text{rel}}_k
+                                 & & \text{(destination CFS $\to$ final delivery; includes AWB release)} \label{eq:eff-transit-fd}
+\end{align}
+Origin-side transit times $\tilde{\mu}^{\text{PU}}, \tilde{\mu}^{\text{OC}}$ are arc-only
+(do not depend on $k$). Destination-side $\tilde{\mu}^{\text{DC}}_{ij,k}, \tilde{\mu}^{\text{FD}}_{ij,k}$
+are shipment-specific because the clearance and release dwells depend on shipment
+attributes.
+
+\paragraph{Why the destination dwells are not deferred to P1.}
+Without $\delta^{\text{cust}}_k$, the optimizer treats destination customs as
+instantaneous --- door-to-door SLAs $T_p^{\text{SLA}}$ will be quoted tighter than
+achievable. Without $\delta^{\text{rel}}_k$, the optimizer ignores the operational
+reality that an \texttt{original\_awb\_surrender} shipment cannot release to consignee
+until the AWB physically arrives, which often dwarfs the truck transit. Both terms are
+modest in complexity (each adds one constant per shipment to the existing $\tilde{\mu}$
+expressions) and large in operational impact, so both enter MVP.
 
 \subsection{Flight (Air Arc) Parameters}
 \label{sec:flight-params}
@@ -594,7 +756,7 @@ ETD & $\text{ETD}_f$ & Scheduled departure datetime & datetime \\
 ETA & $\text{ETA}_f$ & Scheduled arrival datetime & datetime \\
 Block time & $\mu_f^{\text{AIR}}$ & $\text{ETA}_f - \text{ETD}_f$ & hours \\
 Std dev & $\sigma_f^{\text{AIR}}$ & Std dev of actual block time & hours \\
-Cargo cutoff & $\text{CGC}_f$ & Latest time ULDs must be tendered to airline cargo terminal & datetime \\
+Cargo cutoff (per cargo type) & $\text{CGC}_{f,\tau}$ & Latest time ULDs must be tendered to airline cargo terminal, indexed by cargo type $\tau \in \{\text{GEN}, \text{DGR}, \text{PER}, \text{VAL}, \text{AVI}\}$. Carriers publish materially different cutoffs by cargo class --- DGR typically requires the earliest cutoff, AVI similar; GEN is the latest. & datetime \\
 Document cutoff & $\text{DCO}_f$ & Latest time MAWB+HAWB filed with airline (Cargo-IMP \texttt{FWB}/\texttt{FHL}, Cargo-XML, ONE Record) & datetime \\
 US pre-load filing & $\text{AMS}_f$ & Pre-load CBP filing deadline (US destinations only) & datetime \\
 EU pre-load filing & $\text{ICS2}_f$ & Pre-load ENS filing deadline (EU destinations only) & datetime \\
@@ -605,10 +767,11 @@ Cold chain & $\text{per}(f)$ & Maintains $\leq 8^\circ$C? & boolean \\
 \end{tabular}
 \end{center}
 
-\paragraph{Cutoff set and effective cutoff.}
-Define the set of applicable cutoffs for flight \(f\):
+\paragraph{Cutoff set and effective cutoff (per shipment).}
+The cutoff set depends on the shipment's cargo type $\ctype_k$ and the destination region.
+Define for shipment $k$ on flight $f$:
 \begin{equation}
-  \text{CO}_f \;\defeq\; \{\,\text{CGC}_f,\; \text{DCO}_f\,\} \cup
+  \text{CO}_{f,k} \;\defeq\; \{\,\text{CGC}_{f,\ctype_k},\; \text{DCO}_f\,\} \cup
     \begin{cases}
       \{\text{AMS}_f\} & \text{if } d(k) \in \text{US destinations} \\
       \{\text{ICS2}_f\} & \text{if } d(k) \in \text{EU destinations} \\
@@ -618,23 +781,24 @@ Define the set of applicable cutoffs for flight \(f\):
   \label{eq:cutoff-set}
 \end{equation}
 Cargo and document preparation must complete before the \emph{most restrictive} of
-these. The effective cutoff is the minimum over the set:
+these. The effective cutoff is the minimum:
 \begin{equation}
-  \text{CO}_f^* \;\defeq\; \min_{c \in \text{CO}_f}\, c
+  \text{CO}_{f,k}^* \;\defeq\; \min_{c \in \text{CO}_{f,k}}\, c
   \label{eq:effective-cutoff}
 \end{equation}
-Typical timing (offsets from \(\text{ETD}_f\)): \(\text{CGC}_f\) = ETD\(-4\)h to \(-8\)h
-(cargo-type dependent), \(\text{DCO}_f\) = ETD\(-4\)h to \(-6\)h, \(\text{AMS}_f\) =
-ETD\(-4\)h to \(-5\)h, \(\text{ICS2}_f\) = ETD\(-4\)h, \(\text{ACI}_f\) = ETD\(-4\)h.
-Equivalently, the lead time required is \(\text{LT}_f^* = \max_c (\text{ETD}_f - c)\)
-and \(\text{CO}_f^* = \text{ETD}_f - \text{LT}_f^*\).
+Typical timing (offsets from $\text{ETD}_f$, indicative): GEN cutoff $\text{CGC}_{f,\text{GEN}}$
+= ETD$-4$h to $-6$h; DGR cutoff $\text{CGC}_{f,\text{DGR}}$ = ETD$-6$h to $-12$h (earliest);
+PER and AVI typically $\sim$ETD$-6$h. $\text{DCO}_f$ = ETD$-4$h to $-6$h; $\text{AMS}_f$ =
+ETD$-4$h to $-5$h; $\text{ICS2}_f, \text{ACI}_f$ = ETD$-4$h. Exact values come from each
+carrier's published cargo cutoff schedule; for MVP synthetic instances, populate from a
+per-(carrier, $\tau$) lookup table.
 
 \paragraph{Per-shipment document preparation time.}
 Filing the MAWB+HAWB stack is not instant; it depends on shipment complexity:
 \begin{equation}
   \text{prep\_time}_k \;\defeq\; \tau^{\text{base}} + \alpha \cdot |\text{HAWBs}_k|
-    + \mathbb{1}[\tau_k = \text{DGR}] \cdot \tau^{\text{DGR}}
-    + \mathbb{1}[\tau_k = \text{PER}] \cdot \tau^{\text{PER}}
+    + \mathbb{1}[\ctype_k = \text{DGR}] \cdot \tau^{\text{DGR}}
+    + \mathbb{1}[\ctype_k = \text{PER}] \cdot \tau^{\text{PER}}
     + \tau^{\text{customs}}(k)
   \label{eq:prep-time}
 \end{equation}
@@ -644,17 +808,30 @@ Defaults: \(\tau^{\text{base}} = 30\) min, \(\alpha = 1.5\) min per HAWB,
 
 The binding feasibility check at the origin airport node \(a \in N_{\text{AP,O}}\) is:
 \begin{equation}
-  \tau_k(a) + \text{prep\_time}_k \;\leq\; \text{CO}_f^*
+  \tau_k(a) + \text{prep\_time}_k \;\leq\; \text{CO}_{f,k}^*
   \label{eq:cutoff-feasibility}
 \end{equation}
-This replaces the single-cutoff check on \(\text{CGC}_f\) in the subgraph
-construction (Section~\ref{sec:prefilter}) and in constraint P.11.
+This is enforced in subgraph construction (Section~\ref{sec:prefilter}) and in
+constraint P.11. The shipment-indexed $\text{CO}_{f,k}^*$ captures both the cargo-type
+dependency (DGR cutoff is materially tighter than GEN on most carriers) and the
+destination-region dependency (US, EU, Canada add pre-load filings).
 
 \subsection{ULD Specifications}
 \label{sec:uld-spec}
 
-\paragraph{IATA ULD code convention.}
-ULD codes are 3-letter identifiers with structural meaning:
+ULD specifications are governed by IATA ULD Regulations (ULDR).\footnote{IATA Unit Load
+Device Regulations (ULDR). \url{https://www.iata.org/en/publications/manuals/uld-regulations/}}
+The model needs a richer per-ULD attribute set than vol/weight alone — physical fit at
+the aircraft door, floor-load tolerance, deck position, tare-vs-cargo weight separation,
+and certification all influence whether a given (shipment, flight, ULD) triple is
+operationally feasible.
+
+\paragraph{IATA ULD identification format.}
+The standard ULD identifier is \texttt{XXX-NNNNN-CC}: 3 leading letters (type code),
+4--5 numerals (serial number), 2 trailing letters (owning airline IATA code).\footnote{ULD CARE,
+``ULD Identification Codes Demystified.''
+\url{https://www.uldcare.com/articles/library/care/uld-identification-codes-demystified/}}
+The 3-letter type code has structural meaning:
 \begin{itemize}[noitemsep]
   \item \textbf{1st letter}: family. \texttt{P} = Pallet, \texttt{A} = Aircraft container
         (rigid walls), \texttt{R} = Reefer, \texttt{U} = Non-certified.
@@ -664,55 +841,102 @@ ULD codes are 3-letter identifiers with structural meaning:
   \item \textbf{3rd letter}: contour / shape. \texttt{C} = standard cube,
         \texttt{E} = contoured, \texttt{P} = lower-deck contour.
 \end{itemize}
+Example: \textbf{PMC} = Pallet, 96\textquotedbl{}\(\times\)125\textquotedbl{} base, cube
+contour. A flat aluminum pallet $244 \times 318$ cm with cargo stacked on top and
+secured by net; PMCs are main-deck freighter ULDs. Contrast \textbf{LD3 (AKE/AVE)}:
+rigid-walled container used in wide-body belly compartments, cargo stuffed inside
+through a door. The distinction matters for loadability (pallets lose volume to net
+gaps and contour) and aircraft compatibility (PMCs only fit freighters and main decks;
+LD3s fit both passenger belly and freighter lower decks).
 
-So \textbf{PMC} = Pallet, 96\textquotedbl{}\(\times\)125\textquotedbl{} base, cube contour:
-a flat aluminum pallet \(244 \times 318\) cm with cargo stacked on top and secured
-with a strapping net. PMCs are main-deck freighter ULDs. Contrast with \textbf{LD3
-(AKE/AVE)}: a rigid-walled container used in wide-body belly compartments — cargo
-is stuffed inside through a door. The distinction matters for loadability
-(pallets have more volumetric loss to net gaps and contour) and aircraft
-compatibility (PMCs only fit freighters; LD3s fit both passenger belly and
-freighter).
+\paragraph{Reference catalog.}
+Per-ULD specifications used in MVP synthetic instances (sourced from carrier-published
+spec sheets and IATA ULDR):\footnote{Sources cited per row: AirBridgeCargo ULD
+Specifications \url{https://www.airbridgecargo.com/files/ULD_new.pdf};
+DSV LD3-AKE-AVE container specifications
+\url{https://www.dsv.com/en/our-solutions/modes-of-transport/air-freight/unit-load-devices/ld3-ake-ave-container};
+Hansatic Air Freight ULD Guide \url{https://hansatic.com/en/guides/air-freight-uld-guide};
+SKYbrary Unit Load Devices \url{https://skybrary.aero/articles/unit-load-devices-uld}.}
 
 \begin{center}
-\begin{tabular}{llllll}
+\small
+\begin{tabular}{lllrrrrl}
 \toprule
-ULD type & Code & Family & Volume & Payload & Aircraft compatibility \\
+Family & Type code & Base (cm) & MGW (kg) & Tare (kg) & Cargo (kg) & Vol (m\textsuperscript{3}) & Deck \\
 \midrule
-LD3       & AKE/AVE & Container & 4.5 m\textsuperscript{3} & 1{,}587 kg & Wide-body belly + freighter \\
-LD7       & ALE/AAY & Container & 11.1 m\textsuperscript{3} & 4{,}626 kg & Wide-body belly + freighter \\
-PMC       & PMC/PAG & Pallet    & 7.5 m\textsuperscript{3} & 6{,}804 kg & Freighter main deck only \\
-AKE small & AKE     & Container & 4.5 m\textsuperscript{3} & 1{,}497 kg & Wide-body belly \\
+LD3 & AKE/AVE & 153 $\times$ 153 & 1{,}588 & $\approx$80 & 1{,}508 & 4.5 & lower \\
+LD7 & AKH/AAY/ALE & 244 $\times$ 318 & 3{,}175 & $\approx$120 & 3{,}055 & 11.1 & lower \\
+LD11 & AMP & 244 $\times$ 318 & 6{,}804 & $\approx$240 & 6{,}564 & 7.0 & lower / main \\
+PMC & PMC/PAG/P6P & 244 $\times$ 318 & 6{,}804 & $\approx$130 (pallet+net) & 6{,}674 & 7.5 (cube contour) & main \\
 \bottomrule
 \end{tabular}
 \end{center}
 
-For each $u \in U$:
+Tare values are nominal; airlines publish exact tare on the ULD identification plate per
+serial-number. For routing purposes, the model uses the nominal tare from the catalog;
+exact tare matters at billing not at planning.
+
+\paragraph{Operational parameter set per $u \in U$.}
 \begin{center}
-\begin{tabular}{llp{6.5cm}l}
+\begin{tabular}{llp{7cm}l}
 \toprule
 Parameter & Symbol & Description & Unit \\
 \midrule
-Volume capacity & $V_u$ & ULD usable volume (Table above) & CBM \\
-Weight capacity & $W_u$ & ULD payload limit & kg \\
-Fill rate cap & $\eta$ & Max fraction of CBM usable in practice (default $0.97$) & — \\
+Family name & --- & LD3 / LD7 / LD11 / PMC / AKE / ... & --- \\
+Type code & --- & IATA 3-letter type (AKE, ALE, PMC, P6P, ...) & --- \\
+Base dimensions & --- & Width $\times$ length of ULD footprint & cm \\
+Internal volume & $V_u$ & Usable interior volume after contour & m\textsuperscript{3} \\
+External dimensions & --- & L $\times$ W $\times$ H including frame (door clearance) & cm \\
+Max gross weight & $\text{MGW}_u$ & Total ULD weight loaded (cargo + tare) & kg \\
+Tare weight & $\text{tare}_u$ & Empty ULD weight & kg \\
+Cargo weight capacity & $W_u$ & $\text{MGW}_u - \text{tare}_u$; effective payload & kg \\
+Floor load limit & $\phi_u$ & Maximum kg per m\textsuperscript{2} on the ULD floor & kg/m\textsuperscript{2} \\
+Contour profile & --- & Contour code (LD3-contour, M6-contour, ...) defining aircraft compatibility & --- \\
+Deck position class & --- & \texttt{main} / \texttt{lower} / \texttt{either} & --- \\
+Pressurized hold & --- & Whether the ULD position is in a pressurized hold (live animals, sensitive perishables) & boolean \\
+Fill rate cap & $\eta$ & Practical max fraction of $V_u$ usable due to nets, cargo shape (default $0.97$) & --- \\
+Build-up time & $\beta^{u,\text{up}}$ & Forwarder labor minutes to build a $u$-type ULD & min \\
+Breakdown time & $\beta^{u,\text{down}}$ & Minutes to break down at destination CFS & min \\
+ULDR certification & --- & IATA ULDR certification level (standard / supplementary) & --- \\
 \bottomrule
 \end{tabular}
 \end{center}
 
-For each flight $f$ and ULD type $u \in U_f$:
-\begin{center}
-\begin{tabular}{llp{6.5cm}l}
-\toprule
-Parameter & Symbol & Description & Unit \\
-\midrule
-Aircraft ULD positions & $P_{f,u}$ & Number of $u$-type ULD positions on $\text{ac}(f)$ & — \\
-\bottomrule
-\end{tabular}
-\end{center}
+\paragraph{Floor-load constraint.}
+Each ULD position has a floor-load limit $\phi_u$ (typically $\sim 730$ kg/m\textsuperscript{2}
+for standard ULDs).\footnote{Hansatic Air Freight ULD Guide, op.\ cit.\ Floor-load limits
+vary by ULD type and by aircraft floor structure; the value used is the binding minimum
+of the ULD limit and the aircraft-position limit.} A shipment with a heavy piece on a
+small footprint (e.g., a 1{,}500 kg machine on a 0.8 m\textsuperscript{2} base produces
+$\sim 1{,}875$ kg/m\textsuperscript{2}, well above limit) is operationally infeasible on
+that ULD even if the aggregate weight fits. MVP captures this via the pre-processing
+exclusion P.17 (physical fit), with the floor-load check incorporated alongside the
+contour fit check.
 
-$P_{f,u}$ is an upper bound on physical positions for ULD type $u$ on the aircraft. It is
-independent of the forwarder's contracted allocation.
+\paragraph{Aircraft compatibility.}
+Which ULD types fit which aircraft, at which position, is captured by:
+\begin{itemize}[noitemsep]
+  \item $U_f \subseteq U$: ULD types acceptable on flight $f$. Derived from $\text{ac}(f)$
+        and the published aircraft-ULD compatibility matrix (e.g., 777F accepts PMC main
+        deck + AKE/AKH/AAY lower deck; A330 belly accepts AKE/AKH only).
+  \item $P_{f,u}$: number of $u$-type ULD positions on $\text{ac}(f)$. An upper bound on
+        physical positions, independent of the forwarder's contracted allocation. Used
+        in P.5 (Aircraft Physical Position Cap).
+\end{itemize}
+Aircraft-ULD compatibility is published by manufacturers and codified per airline; for
+MVP it is loaded as a static reference table per aircraft type.
+
+\paragraph{Cargo-type compatibility (cross-references).}
+Specific cargo-type acceptance on a given ULD is governed by separate parameters
+elsewhere in the model:
+\begin{itemize}[noitemsep]
+  \item Dangerous goods acceptance --- handled at flight level via $\text{dgr}(f)$
+        (\S\ref{sec:flight-params}) and lithium-specific acceptance matrix
+        (\S\ref{sec:lithium}).
+  \item Cold chain --- temperature control is a P1 deferred concern; relevant ULD
+        attribute is \texttt{pressurized} (above) for sensitive perishables.
+  \item Class 7 radioactive position restrictions --- specific IATA DGR positions; P1.
+\end{itemize}
 
 \subsection{Procurement Types and Supply Layer Catalog}
 \label{sec:procurement-types}
@@ -861,6 +1085,22 @@ loads only $400\,\text{kg}$ of cargo, the forwarder pays for $1{,}000\,\text{kg}
 This is the take-or-pay floor on hard BSAs.
 \end{remark}
 
+\begin{remark}[Period boundary convention]
+\label{rem:bsa-period-boundary}
+A flight's membership in period $t$ for the period-utilization sums P.6, P.7 is
+determined by the \textbf{UTC calendar month} of $\text{ETD}_f$ (consistent with
+\S\ref{sec:tz-convention} time-zone convention). A flight with $\text{ETD}_f$ on
+May 31 23:30 UTC counts in May; one on June 1 00:30 UTC counts in June. This
+convention is normative by default; individual BSA contracts may specify an
+alternative (e.g., origin-local-time month, ETA-destination month, week-Monday
+boundary) as a per-contract override $\text{period\_basis}_c \in
+\{\text{utc\_month}, \text{origin\_local\_month}, \text{etd\_week\_monday}, \ldots\}$
+stored on the contract record. The default UTC-month avoids billing disputes from
+ambiguity; tenant-specific overrides are honored when explicitly set in the
+contract. Research did not surface a universal industry convention; per-contract
+explicit choice is the safe play.
+\end{remark}
+
 \subsection{Spot Rate-Card Parameters}
 \label{sec:spot-params}
 
@@ -891,21 +1131,122 @@ pre-computable. The IATA rule that ``charging at the next tier with a lower rate
 lower total cost'' is captured automatically by the min.
 
 \subsection{Surcharge Parameters}
+\label{sec:surcharge}
 
-Per shipment per flight, the surcharge stack adds:
+Real air-freight quotes layer 10--20 surcharges per shipment per arc on top of the base
+freight rate. Fuel surcharge (FSC) and security surcharge (SSC) are the most visible,
+but the full stack also includes terminal handling, customs filing (AMS / ICS2 / ACI),
+AWB issuance, screening, DGR handling, war risk, peak-season surcharge, perishable /
+cool-chain handling, valuables handling, overweight surcharge, and lithium handling.
+Together these typically add 30--50\% on top of the base rate for a tier~2 forwarder
+quote; omitting them produces systematic under-quoting.
+
+\paragraph{Storage.}
+Surcharges are stored in the \texttt{surcharge\_catalog} table per tenant
+(\texttt{data\_model.md} \S6), versioned via the same append-only + per-run-snapshot
+pattern as policy rules (\S4) and spot rate snapshots (\S5). Each catalog row carries:
+\texttt{surcharge\_type} (enumerated), \texttt{scope} (applicability JSONB:
+carrier, origin, destination, ac\_type, cargo\_type, region, date range), and
+\texttt{calculation} (basis: per\_kg / per\_shipment / per\_awb / per\_uld / per\_cbm /
+per\_piece / percent\_of\_freight, rate, currency, optional min/max).
+See \texttt{data\_model.md} \S6.2 for the full type enumeration and \S6.4 for the
+calculation formulas per basis.
+
+\paragraph{Per-arc resolution.}
+Pre-solve, for each shipment $k$ and each arc $(i,j) \in A_k$, the resolver materializes
+the applicable surcharges:
+\begin{equation}
+  S_{\text{arc}}(k, i, j) \;\defeq\; \{\, s \in \text{surcharge\_catalog} :
+    \text{scope\_match}(s, k, i, j) \,\wedge\, s.\text{status} = \text{active} \,\wedge\,
+    \text{now} \in [s.\text{effective\_from}, s.\text{effective\_to})\,\}
+  \label{eq:surcharge-applicable}
+\end{equation}
+The per-arc surcharge cost is the sum of resolved amounts:
+\begin{equation}
+  \text{surcharge\_cost}(k, i, j) \;\defeq\; \sum_{s \in S_{\text{arc}}(k, i, j)}
+    \text{amount}(s, k, i, j)
+  \label{eq:surcharge-cost}
+\end{equation}
+where $\text{amount}(s, k, i, j)$ is computed per the surcharge's calculation basis and
+clipped by the optional $[\text{min\_charge}, \text{max\_charge}]$ band. Surcharges
+split into two cost paths based on whether the basis can be attributed per-shipment
+per-arc (path A) or only per-flight (path B):
+
+\paragraph{Path A --- per-shipment-per-arc bases (resolve into $\text{surcharge\_cost}(k,i,j)$).}
+\begin{itemize}[noitemsep]
+  \item \texttt{per\_kg}: $\text{rate} \cdot cw_k$ (or $w_k$ if \texttt{weight\_basis = "actual"})
+  \item \texttt{per\_shipment}: $\text{rate}$ (flat)
+  \item \texttt{per\_awb}: $\text{rate}$ (flat per AWB; for a single-HAWB shipment, equivalent to per\_shipment)
+  \item \texttt{per\_cbm}: $\text{rate} \cdot v_k$
+  \item \texttt{per\_piece}: $\text{rate} \cdot \text{piece\_count}_k$
+  \item \texttt{percent\_of\_freight}: $\text{rate} \cdot \text{base\_freight}_k$
+        (only when \texttt{percent\_of\_field = base\_freight}; \texttt{base\_freight}
+        is pre-computed per arc from rate tables, a constant)
+\end{itemize}
+Because $cw_k$, $v_k$, $w_k$, $\text{piece\_count}_k$, and $\text{base\_freight}_k$ are
+known constants, $\text{surcharge\_cost}(k, i, j)$ for Path-A surcharges is a constant
+once resolved --- not a decision variable.
+
+\paragraph{Path B --- flight-level bases (resolve into $\text{flight\_uld\_surcharge\_cost}(f)$).}
+\begin{itemize}[noitemsep]
+  \item \texttt{per\_uld}: $\text{rate} \cdot \sum_{u, c} z_{f,u}^c$ --- linear in the
+        integer variable $z$; charged once per flight per loaded ULD, regardless of
+        which shipments share those ULDs. Captured as a separate objective term, not
+        multiplied by $x_{ij}^k$.
+\end{itemize}
+The flight-level cost is:
+\begin{equation}
+  \text{flight\_uld\_surcharge\_cost}(f) \;\defeq\;
+  \sum_{s \in S_{\text{flight}}(f)}\, \text{rate}_s \cdot \sum_{u \in U_f,\, c \in C_f} z_{f,u}^c
+  \label{eq:flight-uld-surcharge}
+\end{equation}
+where $S_{\text{flight}}(f)$ is the set of \texttt{per\_uld}-basis surcharges
+applicable to flight $f$. Operationally: terminal-handling-per-ULD, airline-charged
+ULD build-up fees, and similar costs depend on how many ULDs were loaded by the
+forwarder, not which shipments contributed cargo to them.
+
+\paragraph{Why the split.}
+Treating \texttt{per\_uld} as per-shipment-per-arc was a bug in the prior draft:
+multiplying $\text{rate} \cdot \sum_u z_{f,u}^c$ by $x_{ij}^k$ either over-charges
+(every shipment on the flight pays the full fee, $n$ times for $n$ shipments) or
+introduces a bilinear $x \cdot z$ term requiring McCormick linearization. The
+flight-level treatment is correct accounting, eliminates the bilinearity, and
+matches \texttt{data\_model.md} \S6.5 ``two cost paths'' resolution.
+
+\paragraph{Common ground-arc surcharges.}
+Most surcharges apply to specific arc types:
+\begin{itemize}[noitemsep]
+  \item Origin THC, AWB fee, origin screening, DGR handling: origin-side arcs ($A_k^{\text{PU}} \cup A_k^{\text{OC,origin-leg}}$)
+  \item Destination THC, AMS / ICS2 / ACI, destination handling: destination-side arcs ($A_k^{\text{DC}} \cup A_k^{\text{FD}}$)
+  \item FSC, SSC, war risk, PSS / GRI, percent\_of\_freight surcharges: air arcs ($A_k^{\text{AIR}}$)
+\end{itemize}
+The \texttt{applies\_on\_arc\_types} scope field controls this gating; the resolver
+attributes the cost to the matching arcs only.
+
+\paragraph{Worked example.}
+For a 1{,}200 kg GEN shipment TPE $\to$ JFK on CX564 + CX880 (PRM\_AIR\_EXP, May 2026
+solve outside PSS season), the surcharge stack resolves to approximately:
 \begin{center}
-\begin{tabular}{llp{6.5cm}l}
+\begin{tabular}{lrr}
 \toprule
-Parameter & Symbol & Description & Unit \\
+Surcharge & Per-arc TPE-HKG (USD) & Per-arc HKG-JFK (USD) \\
 \midrule
-Fuel surcharge & $\text{FSC}_f$ & USD/kg, monthly refresh & USD/kg \\
-Security surcharge & $\text{SSC}_f$ & USD/kg & USD/kg \\
-Origin THC & $\text{THC}_f^O$ & Per shipment, origin terminal handling & USD \\
-Destination THC & $\text{THC}_f^D$ & Per shipment, destination terminal handling & USD \\
-AMS fee (US imports) & $\text{AMS}_f$ & Per shipment & USD \\
+FSC (0.42/kg) & 504 & 504 \\
+SSC (0.18/kg) & 216 & 216 \\
+THC origin & 65 & --- \\
+THC destination & --- & 90 \\
+AMS (US filing) & --- & 25 \\
+AWB fee & 35 & --- \\
+Screening (0.06/kg, min 35) & --- & 72 \\
+\midrule
+Subtotal & 820 & 907 \\
 \bottomrule
 \end{tabular}
 \end{center}
+Total surcharge stack: $\sim$\$1{,}727 on a base rate that might be \$3{,}500--4{,}000
+--- a $\sim$45\% uplift the MILP must see to quote correctly.
+See \texttt{data\_model.md} \S6.6 for the JSON catalog rows that produce this
+breakdown.
 
 \subsection{Hub Connection Parameters (Through-ULD vs.\ Re-ULDing)}
 \label{sec:through-uld}
@@ -1240,6 +1581,612 @@ seeded from carrier cargo portals and IATA DGR section 9 (state and operator
 variations). Annual refresh plus event-driven updates after carrier policy
 changes (typically following lithium fire incidents).
 
+\paragraph{Scope note --- per-flight aggregate caps are carrier-side, not forwarder-side.}
+Carriers publish per-flight aggregate limits on lithium quantity (e.g., max
+\textit{N} kg of PI965~II per flight) and enforce these at acceptance across all
+forwarders booking the same flight. A single forwarder cannot model the aggregate
+because they do not see other forwarders' bookings on the same flight. The MILP's
+job is correct \emph{per-shipment} declaration and acceptance check (modeled here);
+aggregate enforcement is the carrier's responsibility. If a forwarder's shipment
+is bumped at acceptance because the carrier's aggregate cap was reached after
+booking, this surfaces as a booking-rejection event handled by the recovery
+workflow (\S\ref{sec:locked-commitments}, booking-confirmation rejection recovery).
+
+\subsection{Cargo Screening Certification (TSA CCSF / EU ACC3-RA3)}
+\label{sec:screening}
+
+After 9/11 (US) and the 2010 Yemen cargo-bomb plot (EU), regulators mandated that
+cargo on passenger flights to / through US and EU airspace be screened (X-ray,
+explosive trace detection, physical, or canine) prior to loading. Cargo not certified
+through the appropriate chain at origin is refused at acceptance --- the optimizer's
+recommendation is operationally undeliverable. This subsection adds the screening
+gate to the subgraph filter.
+
+\paragraph{Regulatory anchors.}
+\begin{itemize}[noitemsep]
+  \item \textbf{US} --- TSA Certified Cargo Screening Program (CCSP), 49 CFR Parts 1548
+        and 1549. Cargo on US-destined passenger flights must be screened at a
+        \emph{Certified Cargo Screening Facility (CCSF)}, OR shipped by a \emph{known
+        shipper} with TSA-recognized security profile.\footnote{TSA, 49 CFR 1549
+        Certified Cargo Screening Program; 49 CFR 1548 Indirect Air Carrier Security.}
+        Freighter (all-cargo) flights operate under different rules and do not require
+        the CCSF chain for general cargo.
+  \item \textbf{EU} --- Commission Regulation (EU) 2015/1998, ACC3 / RA3 / KC3 program.
+        Air cargo entering EU airspace must transit a validated chain: \emph{ACC3}
+        (Air Cargo Carrier operating into the EU from a Third Country) accepts cargo
+        only from an \emph{RA3} (Regulated Agent --- 3rd country) or directly from a
+        \emph{KC3} (Known Consignor --- 3rd country).\footnote{Commission Implementing
+        Regulation (EU) 2015/1998 laying down detailed measures for the implementation
+        of the common basic standards on aviation security.}
+\end{itemize}
+
+\paragraph{Shipment-side attribute.}
+Each shipment carries $\text{screening\_status}_k$ (\texttt{shipment\_attributes.md}
+\S2.7):
+\begin{center}
+\begin{tabular}{lp{9cm}}
+\toprule
+Value & Meaning \\
+\midrule
+\texttt{known\_shipper} & TSA-recognized known shipper (US program); satisfies CCSP without per-shipment screening \\
+\texttt{ccsf\_screened} & Screened at a CCSF facility (US); accepted for US PAX\_BELLY \\
+\texttt{ra3\_kc3\_chain} & Transits RA3 or KC3 validated chain (EU); accepted for EU \\
+\texttt{none} & Not screened / not in any program; accepted only for FREIGHTER routings \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\paragraph{Flight-side predicate.}
+Whether a flight requires the screening chain depends on the destination and aircraft
+type:
+\begin{equation}
+  \text{screening\_required}(f, d(k)) \;\defeq\;
+    \mathbb{1}\bigl[\text{ac\_type}(f) = \texttt{PAX\_BELLY}\bigr] \cdot
+    \mathbb{1}\bigl[\text{country}(d(k)) \in \mathcal{R}^{\text{screen}}\bigr]
+  \label{eq:screening-required}
+\end{equation}
+where $\mathcal{R}^{\text{screen}}$ is the set of regulatory regions enforcing pre-load
+screening for passenger-flight cargo. For MVP: $\mathcal{R}^{\text{screen}} = \{\text{US}, \text{EU},
+\text{UK},\, \ldots\}$ --- tenant-configurable, with US and EU as the default-enforced
+regions. Freighter flights are exempt (the model returns false regardless of
+destination).
+
+\paragraph{Subgraph feasibility predicate.}
+For flight $f$ to be admitted to $A_k^{\text{AIR}}$:
+\begin{equation}
+  \text{screening\_ok}(k, f) \;\defeq\;
+    \neg\, \text{screening\_required}(f, d(k))
+    \;\vee\;
+    \text{screening\_status}_k \in \text{accepted}\bigl(\text{country}(d(k))\bigr)
+  \label{eq:screening-ok}
+\end{equation}
+where $\text{accepted}(\text{country})$ is the destination-region-specific acceptance
+set:
+\begin{itemize}[noitemsep]
+  \item For US destinations: $\{\texttt{known\_shipper}, \texttt{ccsf\_screened}\}$
+  \item For EU destinations: $\{\texttt{ra3\_kc3\_chain}\}$
+  \item For other regulated destinations: per regulator-specific table
+\end{itemize}
+The predicate evaluates True when either (i) screening is not required for this flight
+$\times$ destination, or (ii) the shipment's screening certification is in the accepted
+set for that destination. Otherwise the flight is excluded from $A_k$ at subgraph
+construction --- the optimizer never sees a routing it cannot operationally execute.
+
+\paragraph{Multi-region routing.}
+If routing crosses multiple regulated regions (e.g., a US-origin shipment connecting
+through an EU hub to a non-regulated destination), the gate applies at the first
+regulated leg's loading. The model's per-flight evaluation handles this correctly
+because each flight is checked against its own destination requirement. A shipment
+\texttt{ccsf\_screened} but not \texttt{ra3\_kc3\_chain} can fly TPE$\to$JFK on a US
+PAX\_BELLY route, but cannot route TPE$\to$LHR$\to$JFK if the TPE-LHR leg requires
+EU-chain certification.
+
+\subsection{Locked Commitments and Execution State}
+\label{sec:locked-commitments}
+
+At any planning moment, the rolling-horizon optimizer is invoked over a window that
+may contain shipments at various stages of execution. Pickup may already have
+dispatched; cargo may sit at the origin CFS; AWBs may have been filed; ULDs may be
+loaded on aircraft. Decisions \emph{already taken} cannot be unwound by the optimizer.
+This subsection defines the lock semantics that preserve prior commitments while
+leaving remaining decisions free.
+
+\paragraph{Lifecycle states and lock semantics.}
+The shipment lifecycle (defined in \texttt{data\_model.md}) is a 7-state DAG. Each
+state maps to a lock posture:
+\begin{center}
+\begin{tabular}{lp{7.5cm}l}
+\toprule
+Lifecycle state & Lock semantics & MILP visibility \\
+\midrule
+\texttt{UNROUTED} & No commitments; fully open. & Full decision space \\
+\texttt{SOFT\_PLANNED} & Tentative routing for cost preview; revocable. & Full decision space; current plan can be used as warm-start \\
+\texttt{FIRM\_DEADLINE} & Dry-run window closed; about to commit. & Open if window not expired; near-locked otherwise \\
+\texttt{FIRM\_PLANNED} & Routing committed to carriers; bookings issued. & Locked prefix = full intended route until execution events update it \\
+\texttt{IN\_TRANSIT} & Cargo physically moving; legs lock as events arrive. & Locked prefix grows monotonically with execution events \\
+\texttt{DESTINATION\_PLANNING} & All air legs done; destination-side ground legs still open. & Air arcs locked; destination CFS and final delivery arcs open \\
+\texttt{DELIVERED} & Terminal state. & Excluded from MILP entirely \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\paragraph{Locked-commitment set $K^{\text{loc}}$ and locked prefix $A_k^{\text{loc}}$.}
+$K^{\text{loc}} \subseteq K$ is the set of shipments with one or more locked decisions
+in the current solve. For each $k \in K^{\text{loc}}$, the locked prefix
+$A_k^{\text{loc}} \subseteq A_k$ collects the arcs committed to be used, and
+$A_k^{\text{loc-off}}$ collects arcs explicitly committed \emph{not} to be used
+(e.g., a candidate flight that was passed over in favor of the committed routing).
+Decision-variable values along the locked prefix are pre-specified parameters:
+\begin{itemize}[noitemsep]
+  \item Arc-use: $\bar{x}_{ij}^k \in \{0,1\}$ for each $(i,j) \in A_k^{\text{loc}} \cup A_k^{\text{loc-off}}$.
+  \item ULD assignment: $\bar{y}_{f,u,k}^c \in \{0,1\}$ for each $(f, u, c)$ committed
+        on a locked air arc.
+  \item Spot booking: $\bar{b}_{f,k} \in \{0,1\}$ for each spot-rate flight already
+        booked.
+  \item Observed node arrival times: $\bar{t}_k(i) \in \mathbb{R}_{\geq 0}$ for nodes
+        on the executed portion of the route (from milestone events such as
+        \texttt{gate-out}, \texttt{cargo-loaded}, \texttt{flight-departed},
+        \texttt{flight-arrived}).
+\end{itemize}
+
+\paragraph{Per-shipment lock schema.}
+Each shipment in $K^{\text{loc}}$ carries:
+\begin{center}
+\begin{tabular}{lp{7cm}l}
+\toprule
+Field & Description & Source \\
+\midrule
+\texttt{lifecycle\_state} & Current state in the 7-state DAG & system of record \\
+\texttt{committed\_arcs} & Set of $(arc, value)$ tuples; $A_k^{\text{loc}} \cup A_k^{\text{loc-off}}$ derived from this & booking + execution events \\
+\texttt{committed\_uld\_assignments} & $(f, u, c) \to \bar{y}$, per locked air arc & ULD build-up events \\
+\texttt{committed\_spot\_bookings} & $f \to \bar{b}$, per booked spot flight & spot booking event \\
+\texttt{observed\_node\_times} & node $\to \bar{t}_k(i)$, for executed nodes & milestone events \\
+\texttt{lock\_horizon} & Datetime through which locks are enforced & rolling-horizon controller \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\paragraph{How lock state is derived.}
+Locks are not stored as a separate decision; they are derived at each solve from
+(i)~the shipment's current lifecycle state and (ii)~execution events recorded since
+the last booking. The mapping:
+\begin{itemize}[noitemsep]
+  \item \texttt{FIRM\_PLANNED} $\to$ all booking-event arcs are locked (typically the
+        full intended route until execution begins).
+  \item \texttt{IN\_TRANSIT} $\to$ arcs are locked once their corresponding
+        \texttt{gate-out} / \texttt{cargo-loaded} / \texttt{flight-departed} event is
+        recorded; air arcs become irrevocable at \texttt{flight-departed}.
+  \item \texttt{DESTINATION\_PLANNING} $\to$ all air arcs are locked (final flight
+        arrived); destination CFS and final-delivery arcs remain free.
+\end{itemize}
+The rolling-horizon controller is responsible for materializing
+\texttt{committed\_arcs}, \texttt{committed\_uld\_assignments},
+\texttt{committed\_spot\_bookings}, and \texttt{observed\_node\_times} from these
+signals before invoking the MILP.
+
+\paragraph{Worked example.}
+A Wednesday 14:00 planning window contains three shipments:
+\begin{itemize}[noitemsep]
+  \item $k_1$ --- \texttt{UNROUTED}: $k_1 \notin K^{\text{loc}}$. Full decision space.
+  \item $k_2$ --- \texttt{IN\_TRANSIT}: pickup completed, cargo at TPE CFS, AWB filed
+        on CI5232 TPE--LAX, cargo cutoff passed. $A_{k_2}^{\text{loc}}$ contains the
+        pickup arc, the origin CFS handover, and the CI5232 air arc. LAX-onward arcs
+        (destination CFS handover, final delivery) remain open and re-plannable.
+  \item $k_3$ --- \texttt{IN\_TRANSIT}: airborne on CV9701 HKG--ANC; onward CV9702
+        ANC--JFK already booked with ULDs built at HKG. $A_{k_3}^{\text{loc}}$
+        contains all arcs from origin through the CV9702 air arc; only destination
+        CFS and final-delivery arcs remain free.
+\end{itemize}
+The MILP solves over all three shipments together, with $k_2$'s and $k_3$'s
+committed arcs fixed; capacity contributed by locked arcs counts against the same
+P.2--P.7 capacity caps as $k_1$'s open decisions.
+
+\paragraph{Capacity accounting.}
+Locked shipments still consume capacity on their committed arcs. Because constraints
+P.2--P.7 sum over $k \in K$ (not $K \setminus K^{\text{loc}}$), and the locked
+variables are fixed to their committed values, locked-shipment contributions appear
+on the LHS automatically. No special pre-subtraction from RHS is needed.
+
+\paragraph{Cost handling.}
+Locked-arc costs (sunk costs) are retained in the objective for full traceability:
+the objective value reports total cost across all shipments and arcs. Because locked
+variables are constants, sunk-cost terms do not affect the optimizer's argmin --- the
+optimizer minimizes over open decisions only, but the reported objective value
+includes everything. Per-shipment cost attribution and reporting are therefore
+direct, no separate sunk-cost ledger needed.
+
+\paragraph{Supply-side lock invalidation.}
+Lock semantics so far capture \emph{demand-side} commitments: cargo dispatched, AWBs
+filed, ULDs built, flights departed. Real operations also generate \emph{supply-side}
+events that invalidate previously-committed routings without any change on the
+shipment's side:
+\begin{itemize}[noitemsep]
+  \item \textbf{Flight cancellation} --- carrier cancels the entire flight (mechanical,
+        weather, crew). Communicated via IATA Cargo-IMP \texttt{FFM}
+        amendment or Cargo-XML cancellation message; on-the-ground
+        notification via \texttt{FSU} status updates.
+  \item \textbf{Equipment swap} --- carrier swaps aircraft (e.g., 777F $\to$ A330F due to
+        maintenance). Same flight number, different $\text{ac}(f)$, different
+        $U_f$ set, potentially different position counts $P_{f,u}$. The committed ULD
+        assignment may no longer fit.
+  \item \textbf{Allocation pull / capacity reduction} --- carrier reduces the
+        forwarder's contracted allocation on a future flight (rare on hard BSAs;
+        more common on soft BSAs near departure).
+  \item \textbf{Cargo cutoff shift} --- carrier moves $\text{CGC}_{f,\tau}$ earlier
+        on a specific flight due to operational constraints.
+\end{itemize}
+
+Define the \emph{supply event set} $\mathcal{E}^{\text{sup}}$ as the time-ordered
+sequence of these events. Each event $e \in \mathcal{E}^{\text{sup}}$ carries
+$(\text{flight\_id}, \text{event\_type}, \text{payload}, \text{observed\_at})$.
+
+\paragraph{Invalidation rule.}
+For each shipment $k \in K^{\text{loc}}$ with locked-on arcs $A_k^{\text{loc}}$, an
+event $e$ \emph{invalidates the lock on arc $(i,j)$} when any of:
+\begin{enumerate}[noitemsep,label=(\alph*)]
+  \item Flight cancellation: $e.\text{event\_type} = \text{\texttt{flight\_cancelled}}$
+        and $(i,j)$ corresponds to the cancelled flight.
+  \item Equipment swap rendering the locked ULD position infeasible:
+        $e.\text{event\_type} = \text{\texttt{equipment\_swap}}$ and the new
+        $\text{ac}(f)$ no longer supports the locked
+        $(u, \text{position\_count})$ assignment for $(i,j)$.
+  \item Allocation pull below committed quantity:
+        $e.\text{event\_type} = \text{\texttt{allocation\_pull}}$ and the
+        new allocation $<$ the shipment's locked $z_{f,u}^c$ contribution.
+  \item Cargo cutoff moved earlier past the cargo's now-feasible ready time:
+        $e.\text{event\_type} = \text{\texttt{cgc\_shift}}$ and the new
+        $\text{CGC}_{f,\ctype_k}$ violates Eq.~\ref{eq:cutoff-feasibility} given the
+        shipment's current state.
+\end{enumerate}
+On invalidation, the affected arc is removed from $A_k^{\text{loc}}$, the associated
+$\bar{x}, \bar{y}, \bar{b}$ are unfrozen, and the shipment is enqueued for a
+\emph{rescue re-solve} --- a routing run with the invalidated arc treated as
+unavailable and downstream arcs (any locked arcs that depended on the invalidated arc
+to be feasible) likewise unlocked.
+
+\paragraph{Rolling-horizon controller responsibilities.}
+The supply event stream is consumed by the rolling-horizon controller (not the MILP
+itself); the controller is responsible for:
+\begin{enumerate}[noitemsep]
+  \item Subscribing to carrier supply events: Cargo-IMP \texttt{FFM} flight-manifest
+        amendments and \texttt{FSU} status updates, Cargo-XML flight-cancellation
+        messages, and bilateral allocation-update channels per BSA contract.
+  \item Applying invalidation rules to active locks and updating shipment state.
+  \item Enqueuing rescue re-solves with appropriate priority (departure imminent
+        $=$ urgent; days out $=$ normal batch).
+  \item Surfacing the disruption to operators with the affected shipment list and the
+        triggering event.
+\end{enumerate}
+
+\paragraph{P1 deferred --- proactive supply-side risk modeling.}
+MVP reacts to supply events as they arrive. P1 extension: model supply-side
+reliability (per-flight cancellation probability, per-carrier equipment-swap
+likelihood) and let the optimizer weight options accordingly (e.g., prefer a more
+expensive but more reliable routing on critical shipments). Integrates with the
+probabilistic-transit-time deferred item.
+
+\paragraph{Booking-confirmation rejection recovery (workflow, not model).}
+When the optimizer recommends a routing, the operator (or autonomous agent) initiates
+a carrier booking via the operating carrier's API or sales channel. The carrier
+responds with a status: \texttt{KK} (confirmed), \texttt{RQ} (requested, awaiting
+review), or \texttt{NS} (no space / rejected); operational refusals at the cargo
+terminal (cargo overweight per piece, missing screening cert, DGR documentation gap)
+also surface here. Rejection is not a model constraint --- the MILP cannot solve a
+booking that doesn't exist yet. The workflow:
+\begin{enumerate}[noitemsep]
+  \item Rejection event is logged on the shipment record (\texttt{booking\_status\_per\_flight}, \texttt{shipment\_attributes.md} \S3.6).
+  \item The rejected flight is added to $A_k^{\text{loc-off}}$ for the shipment, so the
+        next solve does not propose it again.
+  \item The shipment re-enters the next routing batch (scheduled re-solve) or is
+        flagged for an urgent manual run if departure is imminent and the SLA at risk.
+  \item No model change required --- existing locked-off arc semantics
+        (\S\ref{sec:locked-commitments}) handle the exclusion; existing rolling-horizon
+        controller handles the re-queue.
+\end{enumerate}
+Persistent rejection on the same (carrier, lane) signals a deeper issue (capacity
+sold out, contract dispute, embargo not yet in the catalog) which surfaces through the
+operator-facing exception queue rather than through silent retry.
+
+\paragraph{Lock-induced infeasibility.}
+If the locked prefix is itself infeasible w.r.t.\ downstream constraints (e.g., the
+committed first leg arrives at hub too late for any feasible onward, or the committed
+prefix already violates the deadline), the MILP becomes infeasible. The
+rolling-horizon controller treats this as a structured \emph{rescue} event, not a
+generic MILP infeasibility: it is routed to operator review with the specific
+violated constraint flagged. Resolution paths --- contract buyout, deadline
+re-negotiation with the shipper, partial cancellation --- are operator-driven in
+MVP. P1 extension: model lock-breaking with penalty cost (Section~\ref{sec:deferred},
+item~\ref{item:lock-buyout}).
+
+\subsection{Service Products and Service-Level Commitments}
+\label{sec:service-products}
+
+Forwarders sell named \emph{service products} to shippers --- bundled commitments
+covering transit-time, allowed modes, allowed carriers, equipment, and handling
+tier. A shipper buys ``Premium Air Express, 3-day door-to-door'' or ``Multimodal
+Economy, 25-day''; every routing decision for that shipment must honor the bundle.
+This subsection defines the catalog, the per-shipment binding, and the
+filter-and-constraint integration with the routing MILP.
+
+\paragraph{Service-product catalog.}
+Let $P$ be the per-tenant catalog of service products, indexed by $p$. Each
+$p \in P$ is a tuple:
+\begin{center}
+\begin{tabular}{lp{9.5cm}}
+\toprule
+Field & Description \\
+\midrule
+$\text{id}(p)$ & Stable product identifier (e.g., \texttt{PRM\_AIR\_EXP}, \texttt{STD\_AIR}, \texttt{MM\_ECON}) \\
+$\text{name}(p)$ & Display name shown on contracts and quotes \\
+$\text{mode\_allow}(p)$ & Subset of $\{\text{AIR}, \text{OCEAN}, \text{GROUND}\}$. AIR-only restricts $A_k$ to air arcs and incident ground arcs; multimodal allows arc selection across modes. \\
+$\text{carrier\_allow}(p)$ & Set of operating-carrier codes that may be used, or \texttt{ANY} \\
+$\text{carrier\_deny}(p)$ & Set of operating-carrier codes that may not be used; overrides allow if both present (defensive) \\
+$\text{ac\_type\_allow}(p)$ & Set of aircraft types (\texttt{FREIGHTER}, \texttt{PAX\_BELLY}, ...) acceptable for this product, or \texttt{ANY} \\
+$T_p^{\text{SLA}}$ & Transit-time SLA: maximum door-to-door duration, in hours \\
+$\text{handling\_tier}(p)$ & Priority signal: \texttt{priority} / \texttt{standard} / \texttt{economy}; consumed by the rolling-horizon scheduler, not the within-batch MILP \\
+$\text{cargo\_type\_min}(p)$ & Minimum cargo-handling certification required (e.g., \texttt{COLD\_CHAIN}, \texttt{PHARMA}, \texttt{GEN}); composes with the cargo-type compatibility in P.16 \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\paragraph{Per-shipment binding.}
+Each shipment $k \in K$ carries a foreign key $\text{sp}(k) \in P$ resolving to its
+contracted service product. At solve time, the bundle attributes pre-filter the
+candidate arc set $A_k$ and contribute one hard constraint (transit-time SLA).
+Service products are tenant-scoped --- different tenants offer different catalogs.
+
+\paragraph{Example catalog (illustrative).}
+\begin{center}
+\begin{tabular}{lllllr}
+\toprule
+ID & Mode & Carrier & Aircraft & SLA & Handling \\
+\midrule
+\texttt{PRM\_AIR\_EXP} & AIR & \{CX, BR, CV, LH, EK\} & FREIGHTER & 72h & priority \\
+\texttt{STD\_AIR} & AIR & ANY & ANY & 144h & standard \\
+\texttt{ECON\_AIR} & AIR & ANY & ANY & 240h & economy \\
+\texttt{MM\_EXPEDITED} & AIR, OCEAN & ANY & ANY & 240h & priority \\
+\texttt{MM\_STD} & AIR, OCEAN & ANY & ANY & 600h & standard \\
+\texttt{MM\_ECON} & AIR, OCEAN & ANY & ANY & 840h & economy \\
+\texttt{OCN\_EXP} & OCEAN & \{MSC, CMA, MAERSK\} & --- & 600h & priority \\
+\texttt{OCN\_STD} & OCEAN & ANY & --- & 960h & standard \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\paragraph{Integration with subgraph construction.}
+The service-product bundle for shipment $k$ contributes four predicates to the
+subgraph pre-filter (Section~\ref{sec:prefilter}, flight reachability pass):
+\begin{align}
+  \text{mode\_ok}(k, f) \;&\defeq\; \text{AIR} \in \text{mode\_allow}(\text{sp}(k)) \label{eq:sp-mode-ok} \\
+  \text{carrier\_ok}(k, f) \;&\defeq\;
+    \bigl(\text{carrier\_allow}(\text{sp}(k)) = \texttt{ANY} \;\vee\; \text{carrier}^{\text{op}}(f) \in \text{carrier\_allow}(\text{sp}(k))\bigr) \notag \\
+    & \quad \wedge \;\; \text{carrier}^{\text{op}}(f) \notin \text{carrier\_deny}(\text{sp}(k))
+    \label{eq:sp-carrier-ok} \\
+  \text{ac\_type\_ok}(k, f) \;&\defeq\;
+    \text{ac\_type\_allow}(\text{sp}(k)) = \texttt{ANY} \;\vee\; \text{ac}(f) \in \text{ac\_type\_allow}(\text{sp}(k))
+    \label{eq:sp-ac-ok}
+\end{align}
+A flight $f$ is admitted to $A_k$ only if all three predicates hold (in addition to
+the existing cutoff, embargo, lithium, cargo-type, and physical-fit checks).
+Analogous predicates apply to ocean and ground arcs for the mode filter; carrier and
+aircraft-type filters are vacuous on non-air arcs.
+
+\paragraph{Service-level commitment as constraint.}
+The transit-time SLA $T_p^{\text{SLA}}$ enters the MILP as a hard constraint (P.20,
+Section~\ref{sec:constraints}). For shipments with no operative SLA, set
+$T_p^{\text{SLA}}$ to a large value (or $T_k^{\text{dead}}$) so the constraint is
+vacuous. The effective bound is $\min\bigl(T_p^{\text{SLA}},\, T_k^{\text{dead}}\bigr)$:
+deadline and SLA are independent commitments, both must hold, the tighter binds.
+
+\paragraph{Why service products and not loose flags.}
+Operationally, forwarders sell bundled products to shippers and contracts reference
+those bundles by name. Modeling commitments as a catalog keeps the constraints
+consistent across all shipments under the same contract, surfaces the bundle as a
+first-class entity for billing and policy management, and matches how operators
+reason about exceptions (``Premium Air Express shipments must never go via X''
+rather than ``shipment-37428 must never go via X''). The catalog is mutable by
+tenant policy --- new products are added without re-architecting the optimizer.
+
+\paragraph{SLA violation in MVP.}
+$T_p^{\text{SLA}}$ is enforced hard in MVP. If the locked prefix or the available
+supply cannot meet the SLA, the solve is infeasible and the result is escalated as
+a \emph{rescue event} (same channel as deadline misses and lock-induced
+infeasibility; Section~\ref{sec:locked-commitments}). The operator chooses among
+upgrade-to-premium-air, SLA renegotiation, or paying the OTP penalty out-of-band.
+P1 extension: soft SLA with explicit OTP penalty $\pi^{\text{OTP}}_p$, allowing the
+MILP to elect the violation when the upgrade cost exceeds the penalty
+(Section~\ref{sec:deferred}, item~\ref{item:sla-soft-otp}).
+
+\subsection{Carrier Policy and Rules Resolution}
+\label{sec:carrier-policy}
+
+Beyond the service-product bundle, forwarders maintain a layered set of
+carrier-level rules: tenant-wide blacklists (e.g., payment disputes, sanctions,
+reliability incidents); shipper-lane-specific allow/deny lists (contractual
+restrictions per shipper $\times$ lane); lane-level preferences (where contract rate
+is favorable); commodity-level rules (DGR-certified carriers for hazmat). These
+rules layer \emph{above} the service product and are tenant-mutable in real time
+without re-deploying the optimizer.
+
+\paragraph{Rule cascade and hierarchy.}
+Rules are organized in a precedence order, evaluated outside the MILP by a separate
+\emph{rules-engine component} (cf.\ \texttt{build\_plan.md} component split). The
+output of the rules engine is a per-shipment resolved triple. Cascade levels, from
+broadest to narrowest:
+\begin{enumerate}[noitemsep]
+  \item \textbf{Tenant carrier blacklist:} forwarder-wide hard deny.
+  \item \textbf{Shipper-lane allow/deny:} per (shipper, lane) contractual restriction.
+  \item \textbf{Service product bundle:} $\text{carrier\_allow}(\text{sp}(k))$,
+        $\text{carrier\_deny}(\text{sp}(k))$ from Section~\ref{sec:service-products}.
+  \item \textbf{Lane-level preference:} soft bias toward favorable contract carriers.
+  \item \textbf{Commodity-rule overlay:} DGR/cold-chain/pharma-grade carrier restrictions
+        derived from cargo type and lithium taxonomy.
+\end{enumerate}
+
+\paragraph{Conflict semantics: deny wins.}
+When layers conflict, the resolution rule is \emph{deny wins over allow}, regardless
+of layer rank. Concretely, let $\mathcal{D}_k = \bigcup_{\ell} \text{deny}_\ell(k)$
+(union of all hard denies across layers $\ell$) and let $\mathcal{A}_k =
+\bigcap_{\ell : \text{allow}_\ell(k) \neq \texttt{ANY}} \text{allow}_\ell(k)$
+(intersection of all explicit allows; \texttt{ANY} contributes the full carrier
+universe). The resolved hard-allowed carrier set for shipment $k$ is:
+\begin{equation}
+  C_k^{\text{allow}} \;\defeq\; \mathcal{A}_k \;\setminus\; \mathcal{D}_k
+  \label{eq:carrier-allow}
+\end{equation}
+This guarantees that an explicit deny at \emph{any} layer is honored. Rationale:
+denies represent intentional safety/compliance/contract decisions; silently
+overriding them by a higher-tier allow would be a defect. The corresponding
+hard-denied set is $C_k^{\text{deny}} = \mathcal{D}_k$ (used as belt-and-suspenders
+in the subgraph filter; redundant with $C_k^{\text{allow}}$ but exposed for audit).
+
+\paragraph{Preferred-carrier set $C_k^{\text{pref}}$.}
+Soft preferences from any layer (lane-level, shipper-level, commodity-rule) are
+unioned without override semantics into a single preferred set:
+\begin{equation}
+  C_k^{\text{pref}} \;\defeq\; \biggl( \bigcup_{\ell} \text{prefer}_\ell(k) \biggr)
+                              \;\cap\; C_k^{\text{allow}}
+  \label{eq:carrier-pref}
+\end{equation}
+The intersection with $C_k^{\text{allow}}$ ensures a preferred carrier that is also
+hard-denied does not leak through (deny still wins).
+
+\paragraph{Subgraph integration.}
+The service-product predicate $\text{carrier\_ok}(k, f)$ (Eq.~\ref{eq:sp-carrier-ok})
+is replaced at subgraph construction by the policy-resolved version:
+\begin{equation}
+  \text{carrier\_ok}(k, f) \;\defeq\;
+    \bigl(C_k^{\text{allow}} = \texttt{ANY} \,\vee\, \text{carrier}^{\text{op}}(f) \in C_k^{\text{allow}}\bigr)
+    \;\wedge\; \text{carrier}^{\text{op}}(f) \notin C_k^{\text{deny}}
+  \label{eq:carrier-ok-resolved}
+\end{equation}
+The service-product carrier fields feed the cascade (as layer~3); they no longer
+gate the subgraph directly. This single change consolidates all carrier-level
+filtering through the rules engine.
+
+\paragraph{Operating vs.\ marketing carrier scope.}
+Each rule in the cascade names which carrier identity it evaluates against. The
+shipment-record fields are operating carrier $\text{carrier}^{\text{op}}(f)$ (the
+airline physically operating the aircraft, used by IATA ULD pool / capacity / lithium
+acceptance / screening certification) and marketing carrier $\text{carrier}^{\text{mk}}(f)$
+(the airline whose code prefixes the AWB; for codeshares these differ).
+Each rule's \texttt{scope} JSONB carries a \texttt{carrier\_basis} field:
+\begin{itemize}[noitemsep]
+  \item \texttt{op} (default for compliance/regulatory rules): evaluates the rule's
+        carrier list against $\text{carrier}^{\text{op}}(f)$. Used when the rule
+        concerns physical aircraft operation, ULD pool ownership, or operational
+        safety profile (e.g., regulatory blacklist after an incident).
+  \item \texttt{mk} (default for shipper-contract rules): evaluates against
+        $\text{carrier}^{\text{mk}}(f)$. Used when the shipper's master service
+        agreement names a carrier on the AWB regardless of underlying operation
+        (``no UA on our pharma lane'' typically means UA-prefix AWB, even when
+        operated by LH or NH under codeshare).
+  \item \texttt{either} (when explicitly set): rule applies if either op or mk
+        matches. Conservative interpretation; used when the rule writer was not
+        explicit.
+\end{itemize}
+The resolved $\text{carrier\_ok}(k, f)$ predicate (Eq.~\ref{eq:carrier-ok-resolved})
+applies each rule's \texttt{carrier\_basis} to compute $C_k^{\text{allow}}$ and
+$C_k^{\text{deny}}$. When tenants migrate from a pre-Task-\#8 carrier-only model,
+default values are: tenant blacklist $\to$ \texttt{op}; shipper-lane $\to$
+\texttt{mk}; service-product carrier list $\to$ \texttt{op}; lane preference $\to$
+\texttt{op}. Tenants override per-rule as their contract language dictates.
+
+\paragraph{Solve strategy: lexicographic two-pass for soft preference.}
+Soft preferences enter the optimizer via a lexicographic two-pass solve, not as a
+penalty term in the objective. The two passes share all hard constraints
+(P.1--P.21).
+\begin{enumerate}[noitemsep]
+  \item \textbf{Pass 1 --- cost minimization.} Solve the MILP as defined in
+        Sections~\ref{sec:constraints}--\ref{sec:objective}; obtain optimal cost $z^*$.
+  \item \textbf{Pass 2 --- preference maximization.} Re-solve with the same
+        constraints plus a cost-ceiling constraint
+        $\text{cost}(\text{solution}) \leq z^* + \varepsilon^{\text{pref}}$, replacing
+        the objective with the preferred-carrier count:
+        \begin{equation}
+          \max \quad \sum_{k \in K} \sum_{f \in F^k :\, \text{carrier}^{\text{op}}(f) \in C_k^{\text{pref}}}
+                     \sum_{c \in C_f}\sum_{u \in U_f} y_{f,u,k}^c
+          \label{eq:pass2-obj}
+        \end{equation}
+\end{enumerate}
+The tolerance parameter $\varepsilon^{\text{pref}} \geq 0$ (tenant-configurable,
+default $\varepsilon^{\text{pref}} = 0$ exact or a small percentage of $z^*$ such as
+$0.5\%$) controls how much cost the optimizer may concede to honor preferences.
+When $\varepsilon^{\text{pref}} = 0$, Pass~2 selects the cost-optimal solution that
+maximizes preferred-carrier usage among ties.
+
+\paragraph{MIP-gap interaction with $\varepsilon^{\text{pref}}$ (avoid infeasible Pass~2).}
+HiGHS returns Pass~1 cost $z^*$ within a relative MIP gap $g$ (typically
+$\sim 1\%$ in production; see \S\ref{sec:deferred} solver-strategy notes). The true
+optimum lies in $[z^*(1 - g),\, z^*]$. Setting $\varepsilon^{\text{pref}} = 0$ then
+imposes a Pass-2 cost ceiling at the \emph{optimistic} lower bound of that interval,
+which can render Pass~2 infeasible. Required: $\varepsilon^{\text{pref}} \geq g \cdot z^*$
+(or equivalently, solve Pass~1 to a 0\% MIP gap, which is only practical at small
+scale). Recommended default: $\varepsilon^{\text{pref}} = \max(0.5\% \cdot z^*,\,
+g \cdot z^*)$. This is a standard $\varepsilon$-constraint-method gotcha (Haimes 1971;
+Ehrgott, \emph{Multicriteria Optimization} 2005, \S4).
+
+\paragraph{Why lexicographic and not penalty cost.}
+A penalty-cost term in the objective conflates two different things (dollars and
+preference) under a single coefficient that has no natural calibration --- if the
+penalty is too low, preferences are ignored; too high, preferences silently
+dominate. Lexicographic two-pass keeps the objectives orthogonal: cost is bounded
+first, preference fills the remaining freedom. The cost ceiling
+$z^* + \varepsilon^{\text{pref}}$ is an explicit tenant-policy choice (``we will
+spend up to \$X more to honor preferences''), which is interpretable and auditable.
+
+\paragraph{Worked example.}
+Tenant \texttt{ACME\_FWD}. Shipment $k$ from shipper \texttt{Beta Corp} on lane
+TPE$\to$JFK, service product \texttt{PRM\_AIR\_EXP} ($\text{carrier\_allow} =
+\{\text{CX, BR, CV, LH, EK, KE}\}$).
+\begin{center}
+\begin{tabular}{lp{4cm}l}
+\toprule
+Layer & Rule contribution & Running state \\
+\midrule
+Tenant blacklist & deny \{KE\} & allow $=$ \{CX, BR, CV, LH, EK\} \\
+Shipper-lane (\texttt{Beta Corp}, TPE$\to$JFK) & prefer \{CX, BR\}; deny \{AA\} & AA already excluded; pref $=$ \{CX, BR\} \\
+Service product \texttt{PRM\_AIR\_EXP} & allow \{CX, BR, CV, LH, EK, KE\} & layer~3 intersection no change \\
+Lane TPE$\to$JFK & prefer \{CV\} (contract rate) & pref $=$ \{CX, BR, CV\} \\
+\bottomrule
+\end{tabular}
+\end{center}
+Resolved: $C_k^{\text{allow}} = \{\text{CX, BR, CV, LH, EK}\}$,
+$C_k^{\text{deny}} = \{\text{KE, AA}\}$, $C_k^{\text{pref}} = \{\text{CX, BR, CV}\}$.
+
+With $\varepsilon^{\text{pref}} = 0.5\%$: Pass~1 returns cost-optimal solution with
+some allocation across non-preferred (LH, EK) carriers. Pass~2 re-solves with
+$\text{cost} \leq z^*(1.005)$; if reshuffling to preferred carriers fits within the
+ceiling, Pass~2 returns a solution preferring CX/BR/CV. If not, Pass~2 returns the
+same solution as Pass~1.
+
+\paragraph{Where the rules engine lives.}
+The rules engine is a separate component (\texttt{build\_plan.md} components
+inventory). It exposes a single function call:
+\begin{center}
+\texttt{resolve\_carrier\_policy(tenant\_id, shipment) $\to$ $(C^{\text{allow}}, C^{\text{deny}}, C^{\text{pref}})$}
+\end{center}
+The routing MILP consumes the resolved triple per shipment at solve time. The rules
+engine itself is described in a separate LaTeX model (\texttt{rules\_engine.tex}, to
+be drafted in Phase~1).
+
+\paragraph{Storage and versioning.}
+Carrier-policy rules, snapshots, and per-run bindings live in the generic
+\texttt{policy\_rules} / \texttt{policy\_snapshots} /
+\texttt{routing\_run\_policy\_bindings} schema (\texttt{data\_model.md} \S4). The
+same generic framework backs embargo, lithium, ULD-interchange, and
+service-product policies. Every solve binds to a snapshot at run start; rule edits
+between snapshot creation and solve completion do not affect the in-flight solve.
+Emergency removal $=$ soft-delete (\texttt{status = soft\_deleted}); rows are
+preserved for audit. The reproducibility query in \texttt{data\_model.md} \S4.4
+reconstructs the exact rule state of any past run.
+
+\paragraph{Out of MVP scope (deferred).}
+Time-windowed rules (peak-season vs.\ off-peak), conditional rules (``prefer
+freighter when commodity is electronics''), and machine-learned preference weights
+from override history are deferred to the rules engine model and to Phase~5
+constraint learning.
+
 %%--------------------------------------------------------------------
 \section{Commodity-Specific Subgraph Construction}
 \label{sec:prefilter}
@@ -1254,7 +2201,7 @@ $o(k) \to d(k)$ path.
   \item \textbf{Pickup pass.} For each origin CFS $j \in N_{\text{CFS,O}}$, compute earliest
         CFS arrival:
         \[
-          \tau_k(j) \defeq t_k^{\text{rdy}} + \mu_{o(k),j}^{\text{PU}}
+          \tau_k(j) \defeq t_k^{\text{rdy,early}} + \mu_{o(k),j}^{\text{PU}}
         \]
         Arc $(o(k), j) \in A_{\text{PU}}$ is candidate iff there exists a downstream feasible path.
 
@@ -1267,18 +2214,26 @@ $o(k) \to d(k)$ path.
   \item \textbf{Flight reachability pass.} For each flight $f \in F$ (arc $(a, b) \in A_{\text{AIR}}$):
         $f$ is candidate for $k$ iff
         \begin{align*}
-          &\tau_k(a) + \text{prep\_time}_k \leq \text{CO}_f^* \quad &\text{(meets most restrictive cutoff)}\\
-          &\text{ETD}_f + \mu_f^{\text{AIR}} \leq T_k^{\text{dead}} - \text{(downstream legs)} \quad &\text{(deadline reachable)}\\
+          &\tau_k(a) + \text{prep\_time}_k \leq \text{CO}_{f,k}^* \quad &\text{(meets most restrictive cutoff)}\\
+          &\text{ETD}_f + \mu_f^{\text{AIR}} + \min_{(i,j) \in A^k_{\text{DC}}}\!\tilde{\mu}^{\text{DC}}_{ij,k} + \min_{(i,j) \in A^k_{\text{FD}}}\!\tilde{\mu}^{\text{FD}}_{ij,k} \leq T_k^{\text{dead}} \quad &\text{(deadline reachable)}\\
+          &\text{ETD}_f + \mu_f^{\text{AIR}} + \min_{(i,j) \in A^k_{\text{DC}}}\!\tilde{\mu}^{\text{DC}}_{ij,k} + \min_{(i,j) \in A^k_{\text{FD}}}\!\tilde{\mu}^{\text{FD}}_{ij,k} \leq t_k^{\text{rdy,early}} + T_p^{\text{SLA}} \quad &\text{(SLA reachable)}\\
           &\text{embargo\_ok}(k, f) = \text{True} \quad &\text{(no active embargo matches)}\\
           &\text{lithium\_ok}(k, f) = \text{True} \quad &\text{(lithium acceptance + SOC + non-DDR)}\\
-          &\tau_k = \text{General} \text{ or } \text{dgr}(f) = 1 \text{ if } \tau_k = \text{DGR}  \quad &\text{(cargo-type compatibility)}\\
+          &\text{screening\_ok}(k, f) = \text{True} \quad &\text{(TSA CCSF / EU ACC3-RA3 if required)}\\
+          &\text{mode\_ok}(k, f) \,\wedge\, \text{carrier\_ok}(k, f) \,\wedge\, \text{ac\_type\_ok}(k, f) \quad &\text{(service-product compliance)}\\
+          &\text{cargo\_type\_ok}(k, f) = \text{True} \quad &\text{(cargo-type compatibility, Eq.~\ref{eq:cargo-type-ok})}\\
           &\exists\, u \in U_f : D_k \text{ fits } u  \quad &\text{(physical fit in some ULD)}
         \end{align*}
-        where \(\text{CO}_f^*\) is the effective cutoff (Eq.~\ref{eq:effective-cutoff}),
+        where \(\text{CO}_{f,k}^*\) is the shipment-indexed effective cutoff (Eq.~\ref{eq:effective-cutoff}),
         \(\text{embargo\_ok}(k, f)\) is the embargo-feasibility predicate
-        (Eq.~\ref{eq:embargo-feasibility}), and \(\text{lithium\_ok}(k, f)\) is the
-        lithium feasibility predicate (Eq.~\ref{eq:lithium-ok}). For non-lithium
-        shipments, \(\text{lithium\_ok}\) is trivially \(\text{True}\).
+        (Eq.~\ref{eq:embargo-feasibility}), \(\text{lithium\_ok}(k, f)\) is the
+        lithium feasibility predicate (Eq.~\ref{eq:lithium-ok}), and
+        $\text{mode\_ok}$, $\text{carrier\_ok}$, $\text{ac\_type\_ok}$ are the
+        service-product predicates (Eqs.~\ref{eq:sp-mode-ok}--\ref{eq:sp-ac-ok}), and
+        $\text{screening\_ok}$ is the cargo-screening certification predicate
+        (Eq.~\ref{eq:screening-ok}). For non-lithium shipments, \(\text{lithium\_ok}\)
+        is trivially \(\text{True}\); for freighter flights or non-regulated
+        destinations, $\text{screening\_ok}$ is trivially \(\text{True}\).
 
   \item \textbf{Hub transitions pass.} For each pair of consecutive air arcs $(f, g)$ at hub $h$:
         compute the \emph{optimistic} arrival time $\tau_k(g_{\text{start}}) = \text{ETA}_f
@@ -1314,6 +2269,19 @@ $t_k(i)$ & Continuous & Arrival time of shipment $k$ at node $i \in N_k$ & $\mat
 \bottomrule
 \end{tabular}
 \end{center}
+
+\paragraph{Flight-indexed shorthand.}
+Several constraints and objective terms reference flights rather than arcs. For
+notational compactness, we write:
+\begin{equation}
+  x_f^k \;\defeq\; x_{ij}^k \quad \text{where } (i,j) \text{ is the air arc of flight } f
+                            \text{ (i.e., } f(i,j) = f \text{)}
+  \label{eq:x-flight-shorthand}
+\end{equation}
+This is purely a shorthand; $x_f^k$ is not a separate decision variable. Every
+appearance of $x_f^k$ in P.14, the McCormick linearizations of $\xi$ and $\chi$
+(\S\ref{sec:linearization}), and the objective is mechanically equivalent to
+$x_{ij}^k$ with $(i,j)$ the unique air arc of $f$.
 
 %%--------------------------------------------------------------------
 \section{Constraints}
@@ -1374,7 +2342,7 @@ Total ULDs of type $u$ across all contracts cannot exceed the aircraft's physica
 
 For each contract $c$, ULD type $u$, period $t$:
 \begin{equation}
-  \sum_{f \in F_c \,\cap\, t} z_{f,u}^c \;\leq\; \text{rem}(c, u, t)
+  \sum_{f \in F_c(t)} z_{f,u}^c \;\leq\; \text{rem}(c, u, t)
   \label{eq:P6}
 \end{equation}
 Cumulative ULDs claimed in period $t$ under contract $c$ cannot exceed the period's remaining
@@ -1384,7 +2352,7 @@ allocation (after prior bookings).
 
 For each contract $c$ with $\text{hard}_c = 1$, ULD type $u$, period $t$:
 \begin{equation}
-  \sum_{f \in F_c \,\cap\, t} z_{f,u}^c \;\geq\; \underline{M}_{c,u,t}
+  \sum_{f \in F_c(t)} z_{f,u}^c \;\geq\; \underline{M}_{c,u,t}
   \label{eq:P7}
 \end{equation}
 $\underline{M}_{c,u,t}$ is the per-run minimum allocation passed in from the upstream
@@ -1422,32 +2390,41 @@ $C_{f,u,c} = \max(\sum_k cw_k \cdot y, \pi_{c,u} \cdot z)$ as required. See Sect
 
 For each shipment $k$ and each air arc $(i,j) \in A^k_{\text{AIR}}$ with $f = f(i,j)$:
 \begin{equation}
-  t_k(i) + \text{prep\_time}_k \;\leq\; \text{CO}_f^* + M(1 - x_{ij}^k)
+  t_k(i) + \text{prep\_time}_k \;\leq\; \text{CO}_{f,k}^* + M^{P11}_{f,k}(1 - x_{ij}^k)
   \label{eq:P11}
 \end{equation}
-where $\text{CO}_f^*$ is the effective cutoff (Eq.~\ref{eq:effective-cutoff}) and
-$M$ is a big-M constant (tight bound: $T_k^{\text{dead}} - t_k^{\text{rdy}} +
-\epsilon$). The single inequality enforces cargo cutoff, document cutoff, and
-applicable customs pre-load filing deadlines simultaneously by binding against the
-most restrictive cutoff in the set.
+where $\text{CO}_{f,k}^*$ is the shipment-indexed effective cutoff
+(Eq.~\ref{eq:effective-cutoff}) and $M^{P11}_{f,k}$ is the per-(f,k) tight big-M
+defined in \S\ref{sec:bigm-tightening}. The single inequality enforces
+the cargo-type-specific cargo cutoff $\text{CGC}_{f,\ctype_k}$, document cutoff
+$\text{DCO}_f$, and applicable customs pre-load filing deadlines simultaneously by
+binding against the most restrictive in the set.
 
 \subsection*{P.12 — Arrival Time Propagation (ground arcs)}
 
 For each shipment $k$ and each ground arc $(i,j) \in A^k_{\text{PU}} \cup A^k_{\text{OC}} \cup A^k_{\text{DC}} \cup A^k_{\text{FD}}$:
 \begin{equation}
-  t_k(j) \;\geq\; t_k(i) + \tilde{\mu}_{ij}^{\text{G}} - M(1 - x_{ij}^k)
+  t_k(j) \;\geq\; t_k(i) + \tilde{\mu}_{ij,k}^{\text{G}} - M^{P12}_{ij,k}(1 - x_{ij}^k)
   \label{eq:P12}
 \end{equation}
-where $\tilde{\mu}_{ij}^{\text{G}} = \mu_{ij}^{\text{G}} + \beta^{\text{O}}$ for $A_{\text{OC}}$,
-$\mu_{ij}^{\text{G}} + \beta^{\text{D}}$ for $A_{\text{DC}}$, else $\mu_{ij}^{\text{G}}$.
+where $\tilde{\mu}_{ij,k}^{\text{G}}$ is the effective transit time on the ground arc
+including all applicable dwells, defined per arc type in
+Eqs.~\ref{eq:eff-transit-pu}--\ref{eq:eff-transit-fd}
+(\S\ref{sec:ground-arc-params}). Origin-side arcs ($A_{\text{PU}}, A_{\text{OC}}$) carry
+no shipment-specific dwell; destination-side arcs ($A_{\text{DC}}, A_{\text{FD}}$) carry
+$\delta^{\text{cust}}_k$ and $\delta^{\text{rel}}_k$ respectively, both resolved at
+intake from shipment attributes. The big-M $M^{P12}_{ij,k}$ is the per-arc tight value
+$\tilde{\mu}_{ij,k}^{\text{G}} + \epsilon$ (\S\ref{sec:bigm-tightening}).
 
 \subsection*{P.13 — Arrival Time Propagation (air arcs)}
 
 For each shipment $k$ and each air arc $(i,j) \in A^k_{\text{AIR}}$ with $f = f(i,j)$:
 \begin{equation}
-  t_k(j) \;\geq\; \text{ETA}_f - M(1 - x_{ij}^k)
+  t_k(j) \;\geq\; \text{ETA}_f - M^{P13}_f(1 - x_{ij}^k)
   \label{eq:P13}
 \end{equation}
+where $M^{P13}_f \defeq \text{ETA}_f + \epsilon$ is the tight big-M for the air-arc
+propagation (\S\ref{sec:bigm-tightening}).
 
 \subsection*{P.14 — Hub Minimum Connect Time}
 
@@ -1466,11 +2443,14 @@ effective MCT (a constant since $\psi$ is a parameter):
 For each $u \in U_f \cap U_g$ and each $(k, f, g)$:
 \begin{equation}
   t_k(g_{\text{start}}) \;\geq\; \text{ETA}_f \;+\; \text{MCT}^*_{f,g,u}
-  \;-\; M\!\biggl( 2 - \sum_{c} y^{c}_{f,u,k} - \sum_{c'} y^{c'}_{g,u,k} \biggr)
+  \;-\; M^{P14a}_{f,g}\!\biggl( 2 - \sum_{c} y^{c}_{f,u,k} - \sum_{c'} y^{c'}_{g,u,k} \biggr)
   \label{eq:P14a}
 \end{equation}
-The big-M term deactivates the constraint unless shipment $k$ uses ULD type $u$ on
-\emph{both} arcs ($\sum_c y^c_{f,u,k} = 1$ and $\sum_{c'} y^{c'}_{g,u,k} = 1$).
+The big-M $M^{P14a}_{f,g}$ deactivates the constraint unless shipment $k$ uses ULD type $u$ on
+\emph{both} arcs ($\sum_c y^c_{f,u,k} = 1$ and $\sum_{c'} y^{c'}_{g,u,k} = 1$). Tight
+value: $M^{P14a}_{f,g} \defeq \text{MCT}^{\text{reULD}}_{f,g} / 2 + \epsilon$
+(\S\ref{sec:bigm-tightening}; the divisor 2 reflects the two-indicator deactivator
+form here).
 
 \paragraph{Case 2 --- cross-ULD (different type on $f$ vs.\ $g$).}
 When $k$ uses different ULD types on $f$ and $g$ (e.g., LD3 on a belly leg, PMC on a
@@ -1478,13 +2458,20 @@ freighter leg), breakdown is operationally forced and $\text{MCT}^{\text{reULD}}
 binds:
 \begin{equation}
   t_k(g_{\text{start}}) \;\geq\; \text{ETA}_f \;+\; \text{MCT}^{\text{reULD}}_{f,g}
-  \;-\; M\!\biggl( 2 - x_f^k - x_g^k \;+\; \sum_{u \in U_f \cap U_g} \zeta_{f,g,u,k} \biggr)
+  \;-\; M^{P14b}_{f,g}\bigl( 1 - \chi_{f,g,k} \bigr)
   \label{eq:P14b}
 \end{equation}
-where $\zeta_{f,g,u,k}$ is the same-ULD indicator (1 iff $k$ uses $u$ on both arcs),
-reused from the rehandling-cost linearization (Section~\ref{sec:linearization}).
-The big-M term deactivates this constraint when (i) $k$ does not use both arcs, or
-(ii) $k$ uses some $u$ on both arcs (Case~1 governs instead).
+Tight value: $M^{P14b}_{f,g} \defeq \text{MCT}^{\text{reULD}}_{f,g} + \epsilon$
+(\S\ref{sec:bigm-tightening}; single-indicator $(1-\chi)$ form gives a tight $M$
+equal to the MCT itself).
+where $\chi_{f,g,k}$ is the cross-ULD indicator from \S\ref{sec:linearization}
+(defined as $\xi_{f,g,k} - \sum_u \zeta_{f,g,u,k}$). The deactivator
+$(1 - \chi_{f,g,k}) = 0$ iff $\chi_{f,g,k} = 1$, i.e., iff $k$ uses both arcs with
+different ULD types --- which is exactly when the constraint should bind. The
+deactivator $= 1$ when either (i) $k$ does not use both arcs ($\xi = 0$), or (ii) $k$
+uses the same ULD type on both ($\sum_u \zeta = 1$, $\chi = 0$; Case~1 governs
+instead). This is algebraically tighter than the earlier $(2 - x_f^k - x_g^k + \sum_u
+\zeta_{f,g,u,k})$ formulation while reusing the existing $\chi$ definition.
 
 \paragraph{Joint behavior.}
 $\zeta$ and Case~2's deactivation indicator are mutually exclusive within a given
@@ -1501,12 +2488,33 @@ For each shipment $k$:
 
 \subsection*{P.16 — Cargo Type Compatibility}
 
-For each shipment $k$ with $\tau_k = \text{DGR}$ and each air arc $(i,j) \in A^k_{\text{AIR}}$:
+Define the cargo-type-acceptance predicate per (shipment, flight):
 \begin{equation}
-  x_{ij}^k \;\leq\; \text{dgr}(f(i,j))
+  \text{cargo\_type\_ok}(k, f) \;\defeq\;
+  \begin{cases}
+    \text{True} & \ctype_k = \text{GEN} \\
+    \text{dgr}(f) = 1 & \ctype_k = \text{DGR} \\
+    \text{per}(f) = 1 & \ctype_k = \text{PER} \\
+    \text{val\_capable}(f) = 1 & \ctype_k = \text{VAL} \\
+    \text{avi\_capable}(f) = 1 & \ctype_k = \text{AVI} \\
+    \text{hum\_capable}(f) = 1 & \ctype_k = \text{HUM}
+  \end{cases}
+  \label{eq:cargo-type-ok}
+\end{equation}
+where $\text{dgr}(f)$, $\text{per}(f)$ are defined in \S\ref{sec:flight-params}; the
+other three capability flags follow the same per-flight-boolean pattern (introduced
+implicitly in the carrier's published cargo acceptance schedule; surfaced in the
+flight-parameter table for shipments where the corresponding $\ctype_k$ value
+appears).
+
+For each shipment $k$ and each air arc $(i,j) \in A^k_{\text{AIR}}$ with $f = f(i,j)$:
+\begin{equation}
+  x_{ij}^k \;\leq\; \mathbb{1}\bigl[\text{cargo\_type\_ok}(k, f)\bigr]
   \label{eq:P16}
 \end{equation}
-Analogous constraints for perishable, valuable, heavy cargo.
+The predicate is evaluated at subgraph construction (Section~\ref{sec:prefilter},
+step 3); P.16 acts as a defense-in-depth constraint in case a non-compliant arc
+slips through pre-filtering.
 
 \subsection*{P.17 — ULD Physical Fit}
 
@@ -1519,23 +2527,123 @@ This is a pre-processing exclusion, not a runtime constraint — fit is determin
 $D_k$ vs.\ ULD contour at subgraph construction. Bin-packing of multiple shipments inside
 a single ULD is approximated by the volume constraint P.2; full 3D bin-packing is deferred.
 
-\subsection*{P.18 — Budget Cap (optional)}
+\subsection*{P.18 — Budget Cap (optional, per-shipment-additive components only)}
 
 For each shipment $k$ with $B_k < \infty$:
 \begin{equation}
   \text{cost}_k \;\leq\; B_k
   \label{eq:P18}
 \end{equation}
-where $\text{cost}_k$ is the per-shipment cost contribution from the objective.
+where $\text{cost}_k$ is the sum of \emph{per-shipment-additive} cost components only:
+\begin{equation}
+  \text{cost}_k \;\defeq\;
+    \underbrace{\sum_{(i,j) \in A_k} c_{ij}^{\text{G}} \cdot x_{ij}^k}_{\text{ground}}
+    \;+\;
+    \underbrace{\sum_{f \in F^k} \text{cost}^{\text{spot}}(k, f) \cdot b_{f,k}}_{\text{spot}}
+    \;+\;
+    \underbrace{\sum_{(i,j) \in A_k} \text{surcharge\_cost}(k, i, j) \cdot x_{ij}^k}_{\text{Path-A surcharges}}
+  \label{eq:cost-k-def}
+\end{equation}
 
-\subsection*{P.19 — Domain}
+\paragraph{What is \emph{excluded} from $\text{cost}_k$ for budget-cap purposes.}
+The joint contracted-ULD cost term $r_c \cdot C_{f,u,c}$ couples multiple shipments
+(via the pivot-floor mechanism) and cannot be cleanly attributed to a single shipment
+without inventing an allocation rule (proportional to $cw_k$? volume? chargeable
+weight?). Different allocation choices produce different P.18 binding behavior.
+For MVP, P.18 governs only the per-shipment-additive components above. Rehandling
+costs are also excluded (per-(f,g) coupling). The flight-level
+$\text{flight\_uld\_surcharge\_cost}(f)$ (Path-B surcharges) is excluded for the
+same reason. Operators who need budget caps on the joint-cost contribution should
+use a tenant-level cost ceiling on the routing run total, not P.18.
 
+P1 extension: ULD-share allocation rule (e.g., proportional to $cw_k$ relative to
+total flight chargeable weight) to include the joint cost in $\text{cost}_k$;
+deferred until tenants report concrete need.
+
+\subsection*{P.19 — Locked Commitments}
+
+For each $k \in K^{\text{loc}}$, the decision variables on the locked prefix are pinned
+to their committed/observed values via two-sided inequalities (rather than equality
+fixes) to give HiGHS presolve clean conflict diagnostics
+(\S\ref{sec:locked-commitments}):
+\begin{align}
+  x_{ij}^k \;&\geq\; \bar{x}_{ij}^k,\quad x_{ij}^k \;\leq\; \bar{x}_{ij}^k
+                                    & & \forall\, (i,j) \in A_k^{\text{loc}} \cup A_k^{\text{loc-off}} \\
+  y_{f,u,k}^c \;&\geq\; \bar{y}_{f,u,k}^c,\quad y_{f,u,k}^c \;\leq\; \bar{y}_{f,u,k}^c
+                                    & & \forall\, (f,u,c) \text{ committed on a locked air arc} \\
+  b_{f,k} \;&\geq\; \bar{b}_{f,k},\quad b_{f,k} \;\leq\; \bar{b}_{f,k}
+                                    & & \forall\, f \text{ with a committed spot booking} \\
+  t_k(i) \;&\geq\; \bar{t}_k(i),\quad t_k(i) \;\leq\; \bar{t}_k(i)
+                                    & & \forall\, i \in N \text{ with an observed milestone event}
+  \label{eq:P19}
+\end{align}
+The inequality pair is solver-equivalent to the equality form $x = \bar{x}$, but
+HiGHS (and other MIP presolves) produce more interpretable conflict reasons when an
+inequality binds in an infeasible direction than when an equality conflicts silently.
+For $k \notin K^{\text{loc}}$, no P.19 constraints are generated (full decision space
+preserved). Per-arc variable pinning means the optimizer's effective decision space
+shrinks only on the locked prefix; capacity contributions from pinned variables flow
+through P.2--P.7 automatically because those constraints sum over all $k \in K$.
+
+\paragraph{Pre-solve lock-feasibility check (required, not optional).}
+Before the MILP is built, a separate pass evaluates the locked prefix against the
+non-lock constraints (P.2--P.7 capacity caps, P.11 cutoff with current state, P.15
+deadline, P.20 SLA). If any lock conflicts --- e.g., a committed $\bar{y}$ exceeds
+allocation after an upstream allocation pull, or an observed $\bar{t}_k(i)$ is below
+the propagated lower bound from earlier locks --- the rolling-horizon controller
+surfaces a structured \emph{rescue event} naming the conflicting lock and constraint,
+\emph{without attempting the MILP solve}. This produces actionable operator output
+(``lock on flight CX880 conflicts with allocation pull; remediate'') instead of a
+bare HiGHS \texttt{INFEASIBLE} return. The pre-solve check is part of the
+rolling-horizon controller, not the MILP itself; see \S\ref{sec:locked-commitments}
+(``Lock-induced infeasibility'') for the workflow.
+
+\subsection*{P.20 — Transit-Time SLA}
+
+For each shipment $k$, let $p = \text{sp}(k) \in P$ be the bound service product
+(Section~\ref{sec:service-products}) and $T_p^{\text{SLA}}$ its transit-time SLA:
+\begin{equation}
+  t_k(d(k)) \;-\; t_k^{\text{rdy,early}} \;\leq\; T_p^{\text{SLA}}
+  \label{eq:P20}
+\end{equation}
+$t_k^{\text{rdy,early}}$ is the cargo-ready time (origin door); the LHS is door-to-door
+transit duration. The constraint binds when $T_p^{\text{SLA}} < T_k^{\text{dead}} - t_k^{\text{rdy,early}}$;
+otherwise the deadline (P.15) is the tighter bound and P.20 is vacuous. Both must
+hold: the effective deadline for door-to-door transit is
+$\min\bigl(T_p^{\text{SLA}},\, T_k^{\text{dead}} - t_k^{\text{rdy,early}}\bigr)$.
+Shipments with no operative SLA carry a service product with $T_p^{\text{SLA}} = \infty$
+(or any value $\geq T_k^{\text{dead}}$), making P.20 vacuous.
+
+P.20 is enforced hard in MVP. Infeasibility from an unmeetable SLA is surfaced as a
+rescue event (Section~\ref{sec:service-products}, ``SLA violation in MVP''),
+not as a generic MILP infeasibility. P1 extension: soft SLA with OTP penalty,
+Section~\ref{sec:deferred}, item~\ref{item:sla-soft-otp}.
+
+\subsection*{P.21 — Domain and Initial Conditions}
+
+Variable types:
 \begin{equation}
   x_{ij}^k, y_{f,u,k}^c, b_{f,k} \in \{0,1\}, \quad
   z_{f,u}^c \in \mathbb{Z}_{\geq 0}, \quad
   C_{f,u,c}, t_k(i) \in \mathbb{R}_{\geq 0}
-  \label{eq:P19}
+  \label{eq:P21-domain}
 \end{equation}
+McCormick auxiliaries from Section~\ref{sec:linearization}: $\zeta_{f,g,u,k}, \xi_{f,g,k} \in \{0,1\}$;
+$\chi_{f,g,k} \in [0,1]$ (continuous --- see \S\ref{sec:linearization}, ``Cross-ULD indicator'').
+
+\paragraph{Initial-condition bound on pickup time (cargo-ready window).}
+For each shipment $k$, the actual pickup time at the origin door is constrained to
+the shipper-offered window:
+\begin{equation}
+  t_k^{\text{rdy,early}} \;\leq\; t_k(o(k)) \;\leq\; t_k^{\text{rdy,late}}
+  \label{eq:P21-pickup-window}
+\end{equation}
+This enforces the cargo-ready window introduced in \S\ref{sec:ground-arc-params} (Eq.~\ref{eq:cargo-ready-window})
+as a hard MILP constraint --- without it, $t_k(o(k))$ would be free in $\mathbb{R}_{\geq 0}$
+and the propagation in P.12 would not anchor against the shipper's window. The bounds
+are both linear in $t_k(o(k))$ and trivial to add. P.20 (SLA) is anchored against the
+parameter $t_k^{\text{rdy,early}}$, not against this decision variable, per the
+operational design (\S\ref{sec:ground-arc-params}, ``Cargo ready window'').
 
 %%--------------------------------------------------------------------
 \section{Objective Function}
@@ -1555,9 +2663,11 @@ Minimize total cost across all shipments:
   & \sum_{k \in K} \sum_{f \in F^k} \text{cost}^{\text{spot}}(k, f) \cdot b_{f,k}
     \tag{spot rate cost} \\
   +\;
-  & \sum_{k \in K} \sum_{f \in F^k} \bigl(\text{FSC}_f + \text{SSC}_f\bigr) \cdot cw_k \cdot \mathbb{1}[k \text{ on } f]
-    \;+\; \text{(THC, AMS — per shipment per arc)}
-    \tag{surcharges} \\
+  & \sum_{k \in K} \sum_{(i,j) \in A_k} \text{surcharge\_cost}(k, i, j) \cdot x_{ij}^k
+    \tag{surcharges --- per-shipment-per-arc, catalog-resolved; \S\ref{sec:surcharge} Path~A} \\
+  +\;
+  & \sum_{f \in F} \text{flight\_uld\_surcharge\_cost}(f)
+    \tag{surcharges --- flight-level \texttt{per\_uld} bases; \S\ref{sec:surcharge} Path~B, Eq.~\ref{eq:flight-uld-surcharge}} \\
   +\;
   & \sum_{k \in K} \sum_{(f,g) \in \text{Hub}(k)} \sum_{u \in U_f \cap U_g} \rho_{f,g,u}^{\text{reULD}} \cdot (1 - \psi_{f,g,u}) \cdot \zeta_{f,g,u,k}
     \tag{rehandling cost --- same-ULD case} \\
@@ -1571,11 +2681,13 @@ the indicator that shipment $k$ uses ULD type $u$ on \emph{both} $f$ and $g$. Th
 contributes only when $\psi_{f,g,u} = 0$ --- i.e., same ULD type on both legs but no
 through-ULD eligibility (e.g., interline pair outside any ULD interchange agreement).
 
-The cross-ULD term uses $\chi_{f,g,k} = x_f^k \cdot x_g^k - \sum_{u} \zeta_{f,g,u,k}$
-(also defined in Section~\ref{sec:linearization}): the indicator that $k$ uses both
-arcs but different ULD types. $\bar{\rho}^{\text{reULD}}_{f,g}$ is the cross-type
-rehandling cost --- typically equal to or slightly higher than the same-type cost,
-since cargo must be re-stuffed into a new ULD shape.
+The cross-ULD term uses $\chi_{f,g,k} = \xi_{f,g,k} - \sum_{u \in U_f \cap U_g} \zeta_{f,g,u,k}$
+(linearized form defined in Section~\ref{sec:linearization}; the term $\xi_{f,g,k}$
+is the McCormick linearization of the product $x_f^k \cdot x_g^k$, also defined
+there): the indicator that $k$ uses both arcs but different ULD types.
+$\bar{\rho}^{\text{reULD}}_{f,g}$ is the cross-type rehandling cost --- typically
+equal to or slightly higher than the same-type cost, since cargo must be re-stuffed
+into a new ULD shape.
 
 The two cases together cover all re-ULDing situations exactly: same-u with $\psi=0$, and
 cross-u (always forced).
@@ -1601,6 +2713,19 @@ $r_c \cdot C_{f,u,c}$, so the optimizer pushes $C_{f,u,c}$ down to the largest b
 constraint, i.e., the maximum of the two right-hand sides. Adds one continuous variable and
 two inequality constraints per (contract, flight, ULD type) triple.
 
+\paragraph{P1 alternative --- disaggregated formulation (deferred).}
+The current formulation aggregates $z_{f,u}^c$ as a count; $C_{f,u,c}$ is a single
+continuous auxiliary per triple. A disaggregated version --- $z_{f,u}^c = \sum_n z^c_{f,u,n}$
+where $n$ indexes individual ULD slots, each $z^c_{f,u,n} \in \{0,1\}$, with a
+per-slot chargeable-weight auxiliary $C^c_{f,u,n}$ and two-sided inequalities ---
+yields a tighter LP relaxation at the cost of $O(\text{alloc}(c, f, u))$ extra
+binaries per (c, f, u). Williams \emph{Model Building} \S10.2 establishes the
+disaggregation-tightens-LP-relaxation result. This refinement is only worth the
+variable-count cost if P.10 turns out to be a binding LP-relaxation ridge in
+production; empirical experience in MCNF routing suggests P.7 (period commitments)
+and P.14 (hub MCT) bind harder than P.10 in typical air-freight instances. Defer
+until LP-gap-source instrumentation post-deployment indicates P.10 dominates.
+
 \subsection{Bilinear Rehandling Cost Linearization}
 \label{sec:lin-rehandling}
 
@@ -1610,48 +2735,113 @@ $y_{f,u,k}^c \cdot y_{g,u,k}^{c'}$ with implicit contract indices $c, c'$; the
 cleaner formulation aggregates over contracts, since a shipment uses at most one
 contract per (flight, ULD type) per (P.9 spot/contract exclusivity).
 
-\paragraph{Same-ULD indicator $\zeta_{f,g,u,k}$.}
-Binary variable: $\zeta = 1$ iff $k$ uses ULD type $u$ on \emph{both} arcs $f$ and $g$,
-across any contract on each.
+\paragraph{Same-ULD indicator $\zeta_{f,g,u,k}$ (for $u \in U_f \cap U_g$ only).}
+Defined only for ULD types compatible with \emph{both} flights at the hub
+($u \in U_f \cap U_g$); for $u$ outside the intersection, the relevant $y$
+variables don't exist and $\zeta$ would collapse trivially to 0 --- so we restrict
+the definition. Binary variable: $\zeta = 1$ iff $k$ uses ULD type $u$ on
+\emph{both} arcs $f$ and $g$, across any contract on each:
 \begin{align}
-  \zeta_{f,g,u,k} \;&\leq\; \sum_{c} y_{f,u,k}^{c} \\
-  \zeta_{f,g,u,k} \;&\leq\; \sum_{c'} y_{g,u,k}^{c'} \\
-  \zeta_{f,g,u,k} \;&\geq\; \sum_{c} y_{f,u,k}^{c} \;+\; \sum_{c'} y_{g,u,k}^{c'} \;-\; 1 \\
-  \zeta_{f,g,u,k} \;&\in\; \{0, 1\}
+  \zeta_{f,g,u,k} \;&\leq\; \sum_{c} y_{f,u,k}^{c} & & \forall\, u \in U_f \cap U_g \\
+  \zeta_{f,g,u,k} \;&\leq\; \sum_{c'} y_{g,u,k}^{c'} & & \forall\, u \in U_f \cap U_g \\
+  \zeta_{f,g,u,k} \;&\geq\; \sum_{c} y_{f,u,k}^{c} \;+\; \sum_{c'} y_{g,u,k}^{c'} \;-\; 1 & & \forall\, u \in U_f \cap U_g \\
+  \zeta_{f,g,u,k} \;&\in\; \{0, 1\} & & \forall\, u \in U_f \cap U_g
 \end{align}
 The upper bounds force $\zeta = 0$ if either side is 0; the lower bound forces
 $\zeta = 1$ if both sides are 1. Standard McCormick AND linearization.
 
 \paragraph{Both-arcs-used indicator $\xi_{f,g,k}$.}
 Binary variable: $\xi = 1$ iff $k$ uses both $f$ and $g$ (regardless of ULD type).
+McCormick linearization of $x_f^k \cdot x_g^k$:
 \begin{align}
   \xi_{f,g,k} \;&\leq\; x_f^k \\
   \xi_{f,g,k} \;&\leq\; x_g^k \\
   \xi_{f,g,k} \;&\geq\; x_f^k + x_g^k - 1 \\
   \xi_{f,g,k} \;&\in\; \{0, 1\}
 \end{align}
+$\xi$ is a named intermediate used in the $\chi$ identity below and in the §9
+objective prose; the variable could be inlined as $x_f^k \cdot x_g^k$ everywhere it
+appears, but the named form keeps the bilinear-linearization layer visible.
 
 \paragraph{Cross-ULD indicator $\chi_{f,g,k}$.}
-Binary variable: $\chi = 1$ iff $k$ uses both arcs but a different ULD type on each.
+Continuous variable in $[0, 1]$: $\chi = 1$ iff $k$ uses both arcs but a different
+ULD type on each.
 \begin{equation}
-  \chi_{f,g,k} \;=\; \xi_{f,g,k} \;-\; \sum_{u \in U_f \cap U_g} \zeta_{f,g,u,k}
+  \chi_{f,g,k} \;=\; \xi_{f,g,k} \;-\; \sum_{u \in U_f \cap U_g} \zeta_{f,g,u,k},
+  \qquad \chi_{f,g,k} \in [0, 1]
 \end{equation}
-$\chi$ is binary because at most one $\zeta_{f,g,u,k}$ can equal 1 (a shipment uses one
-ULD type per flight under MVP; cf.\ deferred item~\ref{item:psi-decision-var} neighborhood).
-$\chi$ enters the objective with positive coefficient (cross-ULD rehandling cost),
-so the solver has no incentive to inflate it.
+$\chi$ is \emph{integer-valued at any integer-feasible solution} because $\xi \in \{0,1\}$
+and $\sum_u \zeta \in \{0, 1\}$ (P.9 forces a shipment to use at most one
+$(u, c)$-combination per flight, so at most one $\zeta_{f,g,u,k}$ can equal 1).
+At the LP relaxation, $\chi$ can be fractional --- this is acceptable because $\chi$
+enters the objective with a positive coefficient (cross-ULD rehandling cost) and the
+solver drives it to 0 unless integrality on $x$, $y$ forces it up. Declaring $\chi$
+as continuous (not binary) avoids a misstatement of variable domain and a redundant
+integrality requirement at the LP root.
 
 \paragraph{Variable count per consecutive hub arc-pair per shipment.}
 $|U_f \cap U_g|$ $\zeta$ variables, $1$ $\xi$ variable, $1$ $\chi$ variable;
 $\approx 5|U|+5$ constraints. Reused by P.14 (same-ULD and cross-ULD MCT cases)
 and by the objective's two rehandling-cost terms.
 
-\subsection{Big-M Tightening}
+\subsection{Big-M Tightening (per-constraint values)}
+\label{sec:bigm-tightening}
 
-The big-M constants in P.11, P.12, P.13, P.14 can be replaced with the tightest valid
-bound: e.g., the maximum possible time span across the planning horizon. Loose big-M values
-weaken the LP relaxation and slow solving. Practical tightening: use $M = T_k^{\text{dead}} - t_k^{\text{rdy}} + \epsilon$
-on time-related constraints.
+Loose big-M values weaken the LP relaxation and slow solving. The naïve horizon-wide
+$M = T_k^{\text{dead}} - t_k^{\text{rdy,early}} + \epsilon$ is correct but typically
+loose by $5\text{--}20\times$ relative to per-constraint tight values. Per Wolsey,
+\emph{Integer Programming} (1998) \S1.7 and Bertsimas--Tsitsiklis \emph{LP Intro}
+\S11, the tight $M$ for an indicator constraint is the maximum amount the constraint
+must be relaxed when the indicator deactivates --- which is constraint-specific, not
+shipment-horizon-wide.
+
+\paragraph{Tight $M$ values used in the model.}
+For each indicator constraint, use the following:
+\begin{itemize}[noitemsep]
+  \item \textbf{P.11 (effective cutoff):}
+        $M^{P11}_{f,k} \defeq \max\!\bigl(0,\; T_k^{\text{dead}} - \text{CO}^*_{f,k}\bigr) + \text{prep\_time}_k + \epsilon$.
+        The constraint $t_k(i) + \text{prep\_time}_k \leq \text{CO}^*_{f,k} + M(1 - x)$
+        needs $M$ large enough that, when $x = 0$, the LHS can reach its maximum
+        $T_k^{\text{dead}} + \text{prep\_time}_k$ and the RHS still accommodates.
+  \item \textbf{P.12 (ground arc propagation):}
+        $M^{P12}_{ij,k} \defeq \tilde{\mu}^{\text{G}}_{ij,k} + \epsilon$.
+        When $x_{ij}^k = 0$, the constraint $t_k(j) \geq t_k(i) + \tilde{\mu} - M$
+        becomes $t_k(j) \geq t_k(i) - \epsilon$, vacuous given non-negativity. The
+        tight $M$ equals the arc's transit time itself, not the horizon span.
+  \item \textbf{P.13 (air arc propagation):}
+        $M^{P13}_f \defeq \text{ETA}_f + \epsilon$.
+        The constraint $t_k(j) \geq \text{ETA}_f - M(1 - x)$ becomes
+        $t_k(j) \geq \text{ETA}_f - M$ when $x = 0$. Since
+        $t_k(j) \geq 0$, $M = \text{ETA}_f$ is the tight bound.
+        (Tighter still: $M = \text{ETA}_f - \tau_k(j)$ where $\tau_k(j)$ is the
+        earliest arrival at $j$ from subgraph construction --- typically a
+        smaller value.)
+  \item \textbf{P.14a, P.14b (hub MCT):}
+        $M^{P14}_{f,g} \defeq \text{MCT}^{\text{reULD}}_{f,g} + \epsilon$ (the longer
+        of the two MCTs is the tight bound for both cases). For P.14a, the
+        deactivator $(2 - \sum_c y^c_{f,u,k} - \sum_{c'} y^{c'}_{g,u,k})$ can reach
+        $2$, so the multiplier on $M$ is at most $2$; the tight $M$ is therefore
+        $\text{MCT}^{\text{reULD}}_{f,g} / 2 + \epsilon$ for that case if the
+        deactivator pattern stays the two-indicator form. For P.14b the
+        deactivator $(1 - \chi_{f,g,k}) \in [0, 1]$, so $M^{P14b} = \text{MCT}^{\text{reULD}}_{f,g} + \epsilon$
+        is tight.
+  \item \textbf{P.19 (locked commitments):}
+        $M$ not applicable --- P.19 fixes variables to committed values
+        (\S\ref{sec:locked-commitments}); no indicator-style $M$ needed (cf.\ T4
+        on inequality vs.\ equality form).
+\end{itemize}
+
+\paragraph{LP relaxation impact.}
+Replacing horizon-wide $M$ with per-constraint tight $M$ typically reduces the LP
+gap on time-binding instances by $30\text{--}50\%$ (per Trespalacios \& Grossmann
+2014 on big-M tightening for indicator constraints). Combined with the disaggregation
+options noted under T3 (deferred) and the cross-ULD $\chi$ formulation (T2), the
+LP root is materially tighter without changing the integer optimum.
+
+\paragraph{Implementation note.}
+Each constraint subsection (P.11, P.12, P.13, P.14a, P.14b) now references its own
+$M^{P\cdot}_{\cdot}$ symbol, not a generic $M$. The values are computed pre-solve
+from shipment and flight parameters and pinned at MILP build time.
 
 \subsection{Spot Rate Per-Shipment Pre-Computation}
 
@@ -1735,8 +2925,31 @@ specific sequence:
   \item \label{item:psi-decision-var} \textbf{Through-ULD as decision variable.} MVP makes $\psi$ a pre-computed
         parameter. P1: promote to decision variable, allowing forwarder-elected re-ULDing
         at compatible hubs for cargo re-sorting.
+  \item \label{item:lock-buyout} \textbf{Contract buyout / lock breaking.} MVP enforces
+        hard locks: arcs in $A_k^{\text{loc}}$ are irrevocable within a solve. P1: allow
+        penalty-paid lock breaks (forwarder pays a cancellation fee to free a locked arc),
+        modeled as a per-arc buyout cost parameter $\kappa_{k,(i,j)}^{\text{break}}$ and a
+        binary break-decision $\beta_{k,(i,j)} \in \{0,1\}$ that releases the lock when
+        $\beta = 1$ at cost $\kappa^{\text{break}}$. Use case: ocean-to-air recovery when a
+        committed ocean booking will miss the deadline and re-booking via air is cheaper
+        than the contract penalty.
+  \item \label{item:sla-soft-otp} \textbf{Soft SLA with OTP penalty.} MVP enforces
+        $T_p^{\text{SLA}}$ hard (P.20); breach $=$ rescue event. P1: introduce slack
+        $\sigma_k \geq 0$ on the SLA constraint and an OTP penalty $\pi^{\text{OTP}}_p$
+        per hour of breach. Objective gains $\sum_k \pi^{\text{OTP}}_{\text{sp}(k)} \cdot \sigma_k$;
+        revised SLA constraint becomes $t_k(d(k)) - t_k^{\text{rdy,early}} - \sigma_k \leq T_p^{\text{SLA}}$.
+        Lets the MILP elect a paid SLA miss when premium-upgrade cost exceeds the OTP
+        penalty. Calibrate $\pi^{\text{OTP}}$ from real shipper-contract penalty schedules
+        (typically \$50--\$500 per shipment per day of late delivery, tiered).
   \item \textbf{Probabilistic transit time objective.} MVP uses deterministic mean transit
         and a hard deadline. P1: extend to $\Pr(\text{arrival} \leq T_k^{\text{dead}}) \geq p$.
+  \item \label{item:probabilistic-clearance} \textbf{Probabilistic clearance dwell with
+        exam-hold probability.} MVP uses a deterministic mean
+        $\delta^{\text{cust}}_k$ (\S\ref{sec:ground-arc-params}). P1: model exam-hold as a
+        Bernoulli event with destination-country-specific probability and conditional
+        dwell distribution (typical: 95--97\% release within hours for pre-filed entries;
+        3--5\% held with 1--3 day distribution). Integrates with the probabilistic transit
+        time objective above.
   \item \textbf{Full 3D bin-packing within ULD.} MVP uses aggregate volume constraint (P.2)
         with $\eta = 0.97$ as a fill-rate proxy. P1: 3D bin-packing model for shipments
         with awkward piece dimensions.
@@ -1754,6 +2967,196 @@ specific sequence:
   \item \textbf{Spot capacity availability uncertainty.} MVP treats spot rate as always
         available. Real spot capacity has day-of-departure availability risk. P1: model
         spot capacity as a stochastic constraint or with explicit booking rejection events.
+  \item \label{item:partial-split-shipment} \textbf{Partial / split shipment across flights
+        (do not re-flag in future critique passes).} The MVP formulation uses a single-path
+        $x_{ij}^k$ binary with flow conservation, so a HAWB cannot be split across two
+        flights. Real ops occasionally splits a large shipment when no single flight can
+        accept the full volume, or when partial-roll occurs. The operational workaround
+        is to split the HAWB into virtual sub-HAWBs at intake (each sub-HAWB routes
+        independently); the MILP is unchanged. P1: introduce native split assignment with
+        a parent-HAWB binding for billing. \textbf{Note for future critique agents:} the
+        absence of split-shipment support in the MILP is an intentional MVP scope decision,
+        not a gap.
+  \item \label{item:cfs-storage-demurrage} \textbf{CFS storage / demurrage cost in the
+        objective.} MVP omits CFS dwell-cost in the objective; the optimizer may prefer
+        a cheaper later flight without seeing the offsetting storage cost at origin or
+        destination CFS. P1: add per-CFS storage rate and free-day parameters and a
+        dwell-cost term in the objective derived from
+        $\max\bigl(0,\, t_k(j_{\text{depart-cfs}}) - t_k(j_{\text{arrive-cfs}}) - \text{cfs\_free\_days}\bigr) \cdot \text{cfs\_storage\_rate} \cdot v_k$.
+        Sourced rate notes (research 2026-05-17): typical CFS storage rates run
+        \$12/CBM/day with \$70/day minimum at major US facilities (Imperial CFS,
+        \url{https://www.imperialcfs.com/IPI/Warehouse}); demurrage post-free-period
+        \$5--15/CBM/day depending on location; free periods 3--5 days export, 5--7
+        days import (FreightAmigo summary,
+        \url{https://www.freightamigo.com/en/blog/logistics/understanding-storage-fees-in-logistics-what-you-need-to-know/}).
+        For a 5 CBM shipment dwelling 5 days past free at \$12/CBM/day = \$300 ---
+        material on a 50-shipment/day book where $\sim$10\% land in storage. The
+        parameter and constraint are sketched out; implementation is deferred to P1.
 \end{enumerate}
+
+%%--------------------------------------------------------------------
+\section{Tractability and Scaling Roadmap}
+\label{sec:scaling-roadmap}
+%%--------------------------------------------------------------------
+
+This section records the tractability levers, decomposition options, and
+production-deployment strategies surfaced by the formulation review (\S\ref{sec:deferred}
+context). None are active model changes; all are P1-or-later, gated on empirical
+solve-time data from production. The intent is to keep the analysis with the model so
+future-you doesn't re-derive it. Citations are inline where the lever maps to an
+established OR result.
+
+\paragraph{Base instance scale estimate (MVP, \(|K|=100\) shipments).}
+With aggressive pre-filtering ($|F^k| \approx 30$ post-filter, $|A^k| \approx 36$
+total arcs per shipment, $\sim$8 hub-pairs per shipment, $|U_f| \approx 3$,
+$|C_f| \approx 2$): $\sim$30K binaries / integers, $\sim$3K continuous,
+$\sim$45--50K constraints (McCormick auxiliaries dominate the row count). HiGHS-comfortable on
+a 16 GB M1 laptop. Expected solve time at 1\% MIP gap: \textbf{15--60s} for $|K|=100$;
+\textbf{1--5 min} for $|K|=300$; \textbf{5--15 min} for $|K|=500$ (without simplifications
+below). Beyond $|K| \approx 750$ single-tenant on laptop hardware, simplifications and
+decomposition become required. Numbers cross-checked against Mittelmann MILP benchmarks
+(\url{https://plato.asu.edu/ftp/milp.html}, updated 2024--2025) and HiGHS performance
+papers (Huangfu \& Hall 2018).
+
+\subsection*{Simplification levers (P1, ordered by impact)}
+
+\begin{enumerate}
+  \item \label{item:scale-y-aggregation} \textbf{Aggregate $y_{f,u,k}^c$ over contracts.}
+        Decompose $y_{f,u,k}^c = y_{f,u,k} \cdot \alpha_{f,u}^c$ where $\alpha_{f,u}^c \in \{0,1\}$
+        picks the contract per (flight, ULD type). Variable count drops from
+        $K \cdot |F^k| \cdot |U_f| \cdot |C_f|$ to $K \cdot |F^k| \cdot |U_f| + |F| \cdot |U_f| \cdot |C_f|$.
+        Estimated $\sim$40--48\% binary reduction at $K=100$--$500$ (per the formulation
+        review). Operationally faithful: one MAWB $\to$ one contract per (flight, ULD).
+        Source: standard fixed-charge MCNF decomposition (Ahuja--Magnanti--Orlin \emph{Network Flows}
+        \S17 on multi-commodity flow assignment); analogous to facility-location reformulation.
+
+  \item \label{item:scale-shipment-aggregation} \textbf{Shipment aggregation into commodity classes.}
+        Merge shipments with identical (origin, destination, service product, $\ctype_k$,
+        $\text{screening\_status}_k$, $\text{lithium\_pi}_k$, ready-date-bucket) and similar
+        $cw_k$ into representative classes with multiplicative weight; solve on classes;
+        disaggregate to individual shipments in post-processing. For a typical tier-2
+        forwarder day with $\sim$50--100 shipments concentrated on 20--30 lanes $\times$
+        5--8 service products $\times$ 3--5 ready buckets: realistic class count
+        $\sim$25--35 from $|K|=100$, giving a $\sim$3--4$\times$ effective scale
+        compression. Source: passenger air OD-aggregation (Belobaba); applied to freight
+        in Powell's dynamic vehicle allocation work and Caplice MIT FreightLab on lane-class
+        aggregation.
+
+  \item \label{item:scale-component-decomposition} \textbf{Component-wise solve on the supply graph.}
+        After subgraph construction, build the supply graph $H$ where shipments are
+        connected if they share any flight, ULD position, or capacity constraint; solve
+        each connected component as an independent MILP. Expected $\sim$3--10 components
+        per tenant batch (TPE-US-East separates from SZX-EU, etc.). Combined with shipment
+        aggregation, $K=500$ split into 5 components of $\sim$100 each, each solved at
+        $\sim$30s under simplifications: $\sim$30s total parallel, $\sim$150s serial.
+        Source: standard MCNF decomposition (Ahuja--Magnanti--Orlin \S17); pattern
+        inherited from the Ocean FCL model in this project.
+
+  \item \label{item:scale-warm-start} \textbf{Warm-start re-solves from prior solution.}
+        Rolling-horizon re-solves overlap heavily with previous solves (only locked
+        prefixes and new shipments change). HiGHS supports MIP warm-start via
+        \texttt{Highs::setSolution}. Previous solve's $x, y, z$ for shipments still in
+        the planning window provide a near-optimal warm start; heuristic seed
+        (single-shipment cheapest-path ignoring shared capacity) for new shipments.
+        Expected $3$--$10\times$ speedup on re-solves vs.\ cold MIP. Source: HiGHS
+        documentation; empirical results in Cplex/Gurobi parallel literature on
+        rolling-horizon problems (Erera et al.\ 2017 service network design).
+
+  \item \label{item:scale-spot-binary-fixing} \textbf{Variable fixing on dominated $b_{f,k}$ spot binaries.}
+        Pre-compute $\text{cost}^{\text{spot}}(k, f)$ vs.\ contract cost $r_c \cdot cw_k$
+        per $(k, f, c)$. Where every contract option is strictly cheaper than spot, fix
+        $b_{f,k} = 0$ pre-solve. For BSA-heavy mid-market forwarders, $\sim$70--80\% of
+        $(k, f)$ pairs have a dominant contract option, eliminating $\sim$70\% of spot
+        binaries at $K=100$. Source: standard variable fixing via reduced-cost dominance.
+
+  \item \label{item:scale-drop-chi} \textbf{Drop $\chi$ cross-ULD distinction (fidelity vs.\ speed tradeoff).}
+        Same-ULD vs.\ cross-ULD rehandling costs differ by $\sim$10--20\% on the
+        $\sim$5\% of routings that are cross-type. Merging
+        $\rho^{\text{reULD}}_{f,g,u}$ and $\bar{\rho}^{\text{reULD}}_{f,g}$ into a single
+        $\bar{\rho}$ eliminates $\xi$ and $\chi$ and one rehandling-cost objective term.
+        Estimated $\sim$800 binaries and $\sim$4K rows out at $K=100$. Cost objective
+        error: $<0.5\%$ on typical instances. Highest yield-per-fidelity-loss
+        simplification.
+
+  \item \label{item:scale-p17-pre-elim} \textbf{Confirm P.17 (ULD physical fit) is pure pre-elimination.}
+        P.17 declares ``this is a pre-processing exclusion, not a runtime constraint.''
+        Verify the implementation removes the $y_{f,u,k}^c = 0$ rows entirely rather
+        than emitting them as redundant constraints to the solver. Potentially $\sim$12K
+        rows eliminated at $K=100$ if half of $(k, u)$ pairs are infeasible by piece
+        dimension. Implementation check, not a model change.
+
+  \item \label{item:scale-mip-gap} \textbf{Production MIP gap $\geq 1\%$, never solve to 0\%.}
+        Freight routing literature (Powell ADP corpus, Topaloglu, Erera) consistently
+        treats $1$--$5\%$ gap as production-acceptable: cost variance from sell-rate
+        negotiation, FX, fuel surcharge volatility, and override behavior dwarfs the
+        optimization gap. Recommended: $1\%$ for premium / SLA-critical batches; $3\%$
+        for standard / multimodal-economy batches. Expected speedup vs.\ exact: $3$--$5\times$
+        on $K=300$, $\sim$$5\times$ on $K=500$. Coordinate with
+        $\varepsilon^{\text{pref}}$ (\S\ref{sec:carrier-policy}) which must be $\geq$
+        the Pass-1 gap (\S T5 in this section's review history).
+\end{enumerate}
+
+\subsection*{Strategy notes (production deployment)}
+
+\begin{enumerate}[resume]
+  \item \label{item:strat-prefilter-instrumentation} \textbf{Pre-filter aggressiveness has 100$\times$ leverage; instrument empirically.}
+        The flight reachability pass applies $\sim$9 predicates (cutoff, deadline, SLA,
+        embargo, lithium, screening, service-product mode/carrier/ac\_type, cargo type,
+        physical fit). Each typically drops 30--60\% of flights; compounded survival
+        rate $\sim$1--5\% post-filter. Pre-filter quality has more leverage than any
+        single solver-tuning change. Required instrumentation: log $|A^k|$ post-filter
+        per shipment for the first $\sim$100 production solves. If survival rate
+        $>5\%$, fix the filter before any other scale work.
+
+  \item \label{item:strat-column-generation} \textbf{Column generation deferred until empirical $>15$ min at production scale.}
+        Dantzig-Wolfe / column generation (pricing subproblem $=$ shortest-path-with-resource-constraints
+        per shipment on $G(N_k, A_k)$ with capacity duals from master) is the classical
+        heavy weapon for large MCNF. Premature at MVP scale; trigger only when monolithic
+        MILP exceeds 15 min on production-typical instances. Source: Desrosiers \& Lübbecke
+        (2005) primer; Powell on dynamic vehicle allocation as the analogous use case.
+
+  \item \label{item:strat-commercial-solver} \textbf{Commercial solver (Gurobi / CPLEX / COPT) transition triggers.}
+        HiGHS handles MVP scale at 1\% gap. Commercial solvers become worth evaluating
+        when (a) per-tenant $|K| > 500$ sustained, (b) re-solve latency budget $<30$s for
+        urgent rescue shipments, or (c) LP relaxation gap on time-binding instances
+        consistently $>10\%$ (Gurobi cuts + branching typically $2$--$5\times$ faster
+        than HiGHS on big-M MCNF per Mittelmann benchmarks). Business case: Gurobi
+        licensing $\sim\$10$K/year/seat justifiable above $\sim\$1$M ARR / 5+ active
+        tenants. Until then, HiGHS plus the simplifications above.
+
+  \item \label{item:strat-v2-mawb-rescale} \textbf{Re-do scale analysis after v2 MAWB restructure.}
+        The MAWB-level restructure (\S\ref{sec:mawb-hawb}, P1 deferred decision-variables
+        rewrite) introduces $h_{k,m}$ HAWB-to-MAWB binaries and re-roots $y$ around $m$
+        instead of $k$. At $|K|=100, |M|\approx 40$, $h$ alone adds $\sim$4K binaries;
+        at $|K|=500, |M|\approx 150$, $h$ adds $\sim$75K binaries. Net effect:
+        $\sim$15--20\% variable-count growth at MVP scale, more at higher $K$. The
+        density-mixing benefit is real (10--30\% cost savings on consolidatable
+        traffic), but the scale numbers above all need recomputing after that change
+        lands.
+
+  \item \label{item:strat-sla-pickup-anchor} \textbf{SLA pickup-time anchor --- operational tradeoff, not a bug.}
+        P.20 (Transit-Time SLA) anchors against the parameter $t_k^{\text{rdy,early}}$,
+        not the decision variable $t_k(o(k))$. Operationally defensible: shipper
+        SLAs are measured from when cargo is offered for pickup, not from when the
+        forwarder elects to dispatch. Side effect: the optimizer is not penalized for
+        deferring pickup to $t_k^{\text{rdy,late}}$ if that buys cheaper downstream
+        slots. Acceptable unless tenant policy requires earliest-pickup discipline; in
+        that case, replace $t_k^{\text{rdy,early}}$ with $t_k(o(k))$ in
+        Eq.~\ref{eq:P20} (still linear).
+\end{enumerate}
+
+\paragraph{Punch list summary.}
+\begin{itemize}[noitemsep]
+  \item \textbf{Ship as-is} if instance size $\leq 100$ shipments / tenant / solve.
+  \item For $100$--$500$ shipments per tenant: implement items~\ref{item:scale-y-aggregation},
+        \ref{item:scale-shipment-aggregation}, \ref{item:scale-component-decomposition},
+        \ref{item:scale-warm-start}, \ref{item:scale-spot-binary-fixing},
+        \ref{item:scale-drop-chi}, \ref{item:scale-mip-gap}.
+  \item Beyond $\sim$750 shipments per tenant: column generation
+        (item~\ref{item:strat-column-generation}) or commercial solver
+        (item~\ref{item:strat-commercial-solver}).
+  \item Pre-filter instrumentation (item~\ref{item:strat-prefilter-instrumentation}) is
+        the first thing to wire up regardless of scale.
+\end{itemize}
 
 \end{document}
