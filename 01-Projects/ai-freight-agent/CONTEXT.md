@@ -1,8 +1,339 @@
 # Project Context
 
-**Last updated:** 2026-05-17 (Session 11 — air model math review complete; ready for user PDF review then LCL)
+**Last updated:** 2026-05-31 (Session 23 — **AIR MODEL APPROVED** + **Phase 2 air component build STARTED**. Air model is the first gated formal model. Then began `src/components/air_graph.py`: produced `docs/design/air_graph_arc_construction_plan.md`, ran a 4-agent critique (spec-fidelity / test-coverage / data-realism / architecture), folded 16 findings into a v2 plan, and landed 3 code slices — (1) air-arc emission with overlapping-emission policy + `flight_arcs` reverse map; (2) origin/dest ground chains (P1–P3, P7–P10) with `:in`/`:out`-split CFS nodes; (3) hub-transit dwell (P5 deconsol / P6 connection) with airport `:in`/`:out` split + estimated `delta_h` data input. Full suite 28 passed, ruff clean. Locked: flat `dict[ArcId,Arc]` store (no networkx), deterministic arc IDs, strict 1→8 predicate order, dwell time = estimated input. `*.key` Keynote files gitignored. Earlier in session — air-model PDF re-review pass. Three substantive changes to `air_freight_routing.tex`: (1) **PWL tardiness grid decision CLOSED** — §16.3 switched from fixed absolute `{0,4,12,36,96}`h to per-HAWB relative even grid `τ̂_{k,j}=α_j(T_k^abs−Δ_k)`, `α={0,.25,.5,.75,1.0}` (J25); (2) orphan `C^pref` bug fixed in §carrier-policy; (3) **Path-B per-ULD surcharge restructured** — `σ^uld` now per-arc-endpoint (build@tail + breakdown@head, once) on `η`, not a per-leg sum, removing through-arc double-count (J26). Full 4,317-line read-through done; per-HAWB cost-attribution aggregate-exactness verified. A separate Claude session's uncommitted work — C.13 BSA-settlement review, new `model/capacity_manager.md` stub, `references/` allotment-contract notes — was committed alongside (user reviewed it independently). **PDF NOT recompiled** — tree PDF is one compile behind the `.tex` and was excluded from the commit.)
+
+## RESUME HERE (next session — 2026-05-31 or later)
+
+**STATE: Air model APPROVED (first gated formal model). Phase 2 air component build STARTED — `src/components/air_graph.py`, 3 slices landed, full suite 28 passed + ruff clean.**
+
+**Primary next action: the per-HAWB subgraph slice (slice 4).** This is the meatiest remaining piece and the one the four-agent critique most reshaped. Build the **two-pass** per-HAWB subgraph in `air_graph.py` per `docs/design/air_graph_arc_construction_plan.md` §4–5:
+- **Pass A — forward-time-window propagation** (settle `[t_lo, t_hi]` per `(node, incoming-arc)` from `O_k`; **pin each admitted air arc's head window to `[ETA_a, ETA_a]`**; union only for destination-reachability, never cutoff admission).
+- **Pass B — strict 1→8 predicate cascade** over settled windows, log first failure as `reject_record(k, a, idx)`. Predicates: 1 lane (pure BFS, no time bound) · 2 cargo_type (∀leg) · 3 embargo (∀leg) · 4 lithium (∀leg) · 5 mode∧carrier∧ac_type · 6 cutoff `t_lo[tail] ≤ CO_a*` **AND** dispatch `t_rdy,early ≤ CO_a* − λ^disp` · 7 dest reachability `≤ T_k^abs` · 8 per-HAWB ULD fit (`A^pu` only).
+- Emit fallback arc (exempt); structured empty-subgraph **warning object** (not a log line); **move structlog → runtime deps here** and sink to stderr/file (FastMCP rule).
+- **Fold in here:** dwell-arc auto-emission at break-capable hubs — `build_hub_dwell` exists, but *which* HAWB transits *which* hub is only known once paths are traced, so wire it into this pass (CFS-H hub → P5 deconsol, else P6 connection).
+
+**Then (slice 5):** Phase-2 MAWB overlay `overlay_mawbs` → `(arc_id, group_key)` per distinct group among an arc's riders; skip co-load + fallback. **Then:** remaining expanded test matrix (plan §6 — C7 split, two-groups-on-through, fallback-excluded-from-shared-MAWB, predicate-7, multi-failure ordering, etc.). **Then:** corrected TPEB integration instance (plan §7).
+
+**Deferred, don't lose:**
+- Per-MAWB-break **cost attribution** for hub dwell (don't charge once-per-HAWB) — flagged in `build_hub_dwell` docstring; resolve in the objective/overlay slice.
+- `model/capacity_manager.md` stub — **TO BE REVIEWED, not approved** (Layer-3 BSA/NAC controller supplying `A_c`, `cap_a`, `δ_c`). Not gated.
+- `docs/critique/00-omitted-findings-index.md` — ~40 deferred air-model findings for a future round.
+
+### Air-model pending edits (carried from `usr_session_notes.md`, triaged Session 23)
+
+- **§4.3 enumeration table** — explicitly enumerate all possible consolidation groupings as a table in the air LaTeX (from 2026-05-24). Small edit, not yet done.
+- **Per-shipment slack metric** — design a per-shipment SLA-buffer metric (P-quantile arrival vs service-tier deadline) with a portfolio roll-up of most-fragile shipments; replaces "confidence" on the SLA dimension; counterfactual-robustness ideas feed in. Design needed (from 2026-05-24).
+- ~~Max tardiness + PWL grid~~ — **CLOSED Session 23 (J25):** per-HAWB relative even grid `α={0,.25,.5,.75,1.0}`.
+
+### Already executed in Session 22 — for context, not action
+
+**Pass A** (+107 lines): BUG-1 `min_flat_breaks` big-M widened to `max(CW^ub, max_b break_b)` (fixes silent ban on IATA round-up case); BUG-2 `cost^MAWB = 0` for equalized BSA; BUG-3 forward-time-window per-outbound admission; TIGHTEN-1 `η ≤ N·z` linkage as C.5-act; C^fallback per-tenant sizing formula replacing $1M default; 3 new walking-skeleton metrics (fractional-x at LP root, per-arc activated-z distribution, fractional fallback usage); P-quantile naive-propagation warning + three-path probabilistic-transit fork in `item:tt-quantile-binding`; ~12 nomenclature additions; `C^pu → A^pu` rename (17 sites); `g` (MIP gap) → `g^mip`.
+
+**Pass B** (+276 lines): per-HAWB cost attribution promoted to MVP with proportional-to-CW rule (multi-line `align` equation `eq:per-hawb-attribution`); per-HAWB tardiness `τ_k^hr` first-class diagnostic; new parameter `λ^disp_k` for truck dispatch backplane with dispatch-feasibility check in §sec:fwd-time-propagation; fallback root-cause attribution (`reject_record(k, a)`, `predicate^dom_k`) in §sec:prefilter + §sec:output-diagnostics; `item:cwlinearizer-interface` deferred with full design sketch + catalog-time validation; NEW §sec:arc-enumeration with overlapping emission policy + TPE→HKG→LAX worked example + Combos A/B + pivot-scope clarification; §sec:through-uld reframed as co-existing constructs not mutually-exclusive alternatives.
+
+**Pass C** (+59 lines): TIGHTEN-2 destination-arrival LB tightened; F2.3 `c^MAWB_fix` scope = "new AWB issued"; F7.2 incumbent-bound spread (later mooted by Pass D); 4 walking-skeleton additions (F4.4, F6.3, F9.3, F12.3); notation cleanup (lifted `chargeable(c)`, removed `K^fb` from sets table, dropped `G`, annotated C.12 placeholder, fixed `eq:flight-uld-surcharge` double-bind, added `T_k^abs` ingestion guard, rewrote pruning-safety prose for per-tenant `C^fallback`); 4 new deferred items (temp poset F3.2, MIQP tardiness F5.3, forecast-aware accumulator F8.3, slot-symmetry breaking F13.2).
+
+**Pass D** (−20 lines): soft-preference layer DROPPED ENTIRELY (user: "this is complete bullshit"). 5-layer cascade → 4-layer. No `C_k^pref`, `ε^pref`, `z*`, `g^mip`, `prefer_ℓ(k)`. No `eq:carrier-pref` or `eq:pass2-obj`. No Pass-1/Pass-2 lexicographic mechanism. No MIP-gap interaction. No "Why lexicographic" justification. §sec:carrier-policy intro rewritten with explicit "why no preference" — volume kickers → rate-card; strategic relationships → BSA negotiations; allocation balancing → equalized accumulator. Single-pass solve paragraph added. Worked example rewritten with hard allow/deny only.
+
+**Pass E** (cosmetic): `\usepackage{float}` added. All 45 tabular envs wrapped in `\begin{table}[H]\centering\caption{…}\label{tab:…}` floats. All bleeding column specs fixed (9 `lll` nomenclature tables → bounded `lp{9cm}p{3.5cm}`; lifecycle states `lp{7.5cm}l` → `lp{6.8cm}p{4.5cm}`; carrier-policy worked example `lp{4cm}l` → `p{3.2cm}p{4.5cm}p{6.5cm}`; all `llp{X}l` parameter tables given bounded Parameter/Symbol/Unit columns). Per-HAWB attribution equation (587pt overfull) converted from one ultra-wide `\underbrace`-chain to multi-line `align` block with per-term `\tag{…}`. PDF compiles cleanly: 69 pages.
+
+### New decisions logged (J20–J24, this session)
+
+- **J20 — Probabilistic transit migration path:** OPEN until P1 promotion. Three structurally distinct paths now named in the deferred item; whoever implements first can no longer silently default to (a).
+- **J21 — CWLinearizer:** design sketch + catalog-time validation in deferred item; implementation lives in data layer.
+- **J22 — BSA accumulator concurrency:** still J3 open-item; revisit when orchestrator is the active workstream.
+- **J23 — Carrier policy simplification:** soft-preference dropped; hard 4-layer cascade only; no Pass 2.
+- **J24 — Real-world Top-5 triage:** 4 of 5 picked for Pass B (per-HAWB cost attribution, per-HAWB tardiness, truck dispatch, fallback root-cause); ~30 others deferred to next round.
+
+### Critique deliverables produced this session
+
+- `docs/critique/06-correctness-notation.md` — 22+ findings (3 BUGs, 2 TIGHTEN, ~17 NOTATION)
+- `docs/critique/07-real-world-considerations.md` — 34 findings (7 CRITICAL, 9 BLOCKING, 14 MATERIAL, 4 EDGE)
+- `docs/critique/08-formulation-goodness.md` — 57 findings (4 REARCHITECT, 7 PROMOTE-EARLIER, ~17 TIGHTEN, ~29 SAFE-TO-DEFER)
+- `docs/critique/00-omitted-findings-index.md` — structured index of every finding NOT executed, grouped by agent + severity, for next-round triage.
 
 ---
+
+## Session 21 archive — RESUME HERE block from end-of-Session-21
+
+(Superseded by Session 22 RESUME HERE block above; kept for traceability.)
+
+**FIRST THING TO EVALUATE on resume.** Max tardiness allowed at destination node (captured in `usr_session_notes.md`). State today:
+- Max tardiness IS defined: $\tau_k \in [0, \max(0, T_k^{\text{abs}} - \Delta_k)]$ in C.14 domain; enforced by destination-reachability pruning in §forward-time-window propagation.
+- Late real-route arrivals in $(\Delta_k, T_k^{\text{abs}}]$ are considered, pay quadratic penalty $W_k \cdot \tau_k^2$, compete against on-time options.
+- **Open issue surfaced this session:** PWL grid for the quadratic linearization is fixed $\{0, 4, 12, 36, 96\}$ hours. Works for tight backstops (PER, ~6-48h max tardiness); breaks for wide backstops (GEN, ~720h max tardiness with 30-day customer-cancellation horizon) — linearization extrapolates linearly past 96h, underestimating the quadratic by ~4× at the upper end. Optimizer becomes too willing to pick very-late real routes over the fallback.
+- **Two candidate fixes pending user decision:** (a) per-HAWB relative grid $\hat\tau_j = \alpha_j \cdot (T_k^{\text{abs}} - \Delta_k)$ with $\alpha \in \{0, 0.05, 0.15, 0.5, 1.0\}$ — spans the actual feasible range; (b) per-service-product tenant-configured grid.
+
+**Status — end of Session 21, 2026-05-27 evening.** Long discussion session (Layer-3 messaging-agent + J19 time-propagation), executed J19 reshape in the air model, executed bloat cleanup pass per user's "doc is too long" directive. User signing off with one new open question to evaluate first thing tomorrow (above). PDF re-review of the post-Session-21 LaTeX is the next gate after the max-tardiness decision.
+
+### Already executed this session (Session 21) — for context, not action
+
+**J19 closed.** Time-propagation reshape committed to the air model. Mechanism = forward-time-window propagation at graph build. C.6, C.7, C.8, C.9, C.11 removed as MILP constraint families. C.10 rewritten as C.10a (destination-arrival definition: $t_k^{D_k^{\text{node}}} = \sum_{a \in \mathcal{A}^{\text{last}}_k} \text{arr\_dest}(k,a) \cdot x_{k,a}$) + C.10b (tardiness vs. soft deadline, quadratic penalty unchanged). Intermediate $t_k^n$ variable family eliminated — only $t_k^{D_k^{\text{node}}}$ survives. Base-scale estimate: continuous variables $\sim$4,500 → $\sim$2,100; constraints $\sim$10,500 → $\sim$8,000. New §forward-time-window propagation added to graph-construction section. Big-M tightening, lin-summary, walking-skeleton telemetry, base-scale estimate, and Open Items P1 #1 (TT-Service quantile binding) all updated for consistency. Recorded in `OPEN_DECISIONS.md` J19 with the full mechanism.
+
+**Layer-3 messaging-agent MVP reshape documented.** New §6 in `docs/design/messaging_agent_capabilities.md` records the discussion outcome: original 6+3 MVP set is misshapen (B1+B4 don't need a chat surface, A6 is half-baked without A1, G1+G2 belongs to Layer-2). Reshaped honest MVP = consent + identity + lifecycle close + cargo-readiness slip + cutoff reminder; B1+B4 ship in planner console; G1+G2 ships in Layer-2 build; A6+A1 paired as the real flagship for later. **Decision: Layer-3 may not be built in MVP at all** — payload math estimates ~5-15% of total afternoon ops time touched by reshaped Layer-3, doesn't earn the buildout cost on its own. Re-evaluate when v2 write capabilities (BSA, rate, policy, embargo, equipment) are ready to bundle.
+
+**Air model bloat cleanup (~180 lines removed).** Deleted: §Consolidation alternatives considered (47 lines), "What is not a variable" paragraph (17 lines), C.7/C.8/C.11 REMOVED stubs, §Mapping from Prior LaTeX (P.x→C.x) (37 lines), §Why consolidation matters economically (20 lines), standalone §Re-ULDing — Operational Mechanics (90 lines — folded by pointing to existing §Through-ULD policy and §1312 ULD interchange subsection), §Excluded from MVP (4 redundant bullets dropped, 5 substantive items folded into Deferred P1 list as new entries: in-transit hub customs, per-HAWB cost attribution, charter/BOR, AWB stock management, time-windowed carrier rules).
+
+### LaTeX state — v3-rev-fallback (Session 20 edits, kept for traceability)
+
+The air model changed structurally this session. Key edits to `model/air_freight_routing.tex`:
+- **Abstract** — carrier-policy cascade clarified (explicit 5-layer + deny-wins formalism); quadratic-tardiness + fallback-arc framing replaces "hard backstop the only hard time bound" language
+- **§1 Problem Statement** — new bullet on fallback-arc feasibility guarantee; tardiness bullet rewritten quadratic + value-coefficient; "What is not a hard constraint" section adds $T_k^{\text{abs}}$ removal
+- **§3 Graph Construction** — NEW subsection `sec:fallback-arc` (full spec); new fallback row in arc-types table
+- **§sec:hawb-params** — $T_k^{\text{abs}}$ redefined as mandatory-finite "latest valid arrival time"; new param rows for $\text{value}_k$, $\mu_k$, $W_k$; new paragraph defining tenant-globals $V^{\text{ref}}$ and $C^{\text{fallback}}$
+- **§sec:prefilter** — predicate 6 renamed "tightening only"; "Empty subgraph" para rewritten (fallback always present, warning logged, no infeasibility branch)
+- **§sec:variables** — new $\text{pen}_k$ variable
+- **§sec:constraints** — recap nomenclature updated; C.10 rewritten for quadratic + PWL; C.11 marked REMOVED; C.14 domain adds $\text{pen}_k$ bound
+- **§sec:objective** — linear tardiness replaced with $\sum \text{pen}_k$; fallback-cost term added; monotonicity invariant updated
+- **§sec:linearization** — NEW subsection `sec:lin-tardiness` with tangent-cut PWL derivation, recommended grid {0, 4, 12, 36, 96}h, cost analysis, summary table row
+- **§sec:p-to-c-map** — P.15 and P.20 rows updated
+- **NEW §sec:output-diagnostics** — reported quantities table, rescue-signal protocol, post-solve invariants, operator presentation
+- **§sec:deferred** — `item:quadratic-tardiness` marked PROMOTED to MVP
+- **§sec:scaling-roadmap** — updated counts (continuous +100 for $\text{pen}_k$; constraints +400 for PWL cuts)
+- **§sec:service-products** — SLA-soft-constraint paragraph rewritten quadratic; $w_p$ row updated
+- **§sec:locked-commitments** — "Pre-MILP feasibility check" → "Pre-MILP reachability check" (early warning, not gate)
+
+Also mirrored to `model/air_graph_construction.md`: new fallback arc row in §3, new step 12 in §5 Phase 1, NEW §10 with full design.
+
+**Carrier-policy cascade abstract clarification (early in session, separate from fallback work):** replaced the jargon line with explicit 5-layer enumeration + "intersect allows, union denies, any deny blocks even when higher layer allows" formalism + cross-reference to `sec:carrier-policy`.
+
+### `usr_session_notes.md` carried items (still pending — user has not triaged)
+
+- §4.3 enumeration table — explicit grouping table in air LaTeX (from 2026-05-24)
+- Per-shipment slack metric — P-quantile arrival vs service-tier deadline; replaces "confidence" as SLA quality measure (from 2026-05-24)
+- **Max tardiness allowed at destination + PWL grid calibration** (new 2026-05-27, the FIRST THING to evaluate above)
+
+### Pending from prior sessions
+
+- User-initiated air model constraints review — user said "I will continue with constraints review" after Session 21 cleanup pass. Resumed only after the max-tardiness question is resolved.
+- Air model PDF re-review post fallback-arc + J19 + quadratic edits (user was mid-§4 when Session 20 ended; Session 21 changed §3 / §sec:constraints structurally — full re-read recommended)
+- Pitch deck slide 14 `[N]/[M]` forwarder pipeline placeholder (Session 19)
+- All §J open items in `OPEN_DECISIONS.md`: J3 orchestrator concurrency design; J5-J13 critique-driven gaps; J18 pitch v7 update with the three new pitch upgrades (consolidation savings %, 4h→90min reframe, active-participant agent capabilities)
+
+### Critique deliverables produced this session (all in `docs/critique/`)
+
+- `01-commercial-viability.md` — automation envelope, pitch reframe
+- `02-consolidation-savings.md` — 7-12% pitch-ready number with sourced backing
+- `03-gap-finder.md` — ~30 findings, severity-ranked
+- `04-persona-test.md` — per-persona fit + cross-persona gaps + "primary user reality check"
+- `05-messaging-agent-prior-art.md` — competitive landscape, empty corner
+- `design/messaging_agent_capabilities.md` — Layer-3 deep dive (26 caps, MVP picks, failure modes, architecture)
+
+---
+
+## Session 19 archive — RESUME HERE block from end-of-Session-19
+
+(Superseded by Session 20 RESUME HERE block above; kept for traceability.)
+
+**Status — end of Session 19, 2026-05-26.** Pitch deck rebuilt end-to-end through a six-step pipeline (v4 narrative reframe → 2 critique agents (VC + forwarder COO) → v5 incorporating critiques → designer agent for modern 2025-26 deck style research → v6 with full design system overhaul → PDF export). Primary deliverables: `pitch_deck/v6_final.pptx` + `v6_final.pdf` (14 slides). Vision lane A locked: "The planning brain for global freight" — infrastructure framing, replaces labor-savings/40→15% headline (unverified, dropped). Scope honest: air consolidation = MVP wedge; roadmap Air → Ocean LCL → Ocean FCL → Trucking → Intermodal explicit and phased (SEED / SERIES A+ / SERIES B+). Market sized off real sources (Armstrong $216B TAM, software $1.5-2B TAM today, 5-yr SAM $4-6B from labor-replacement math, SOM $40-120M base / $200-400M bull). MILP reframed from hedged tradeoff to moat ("explainable, auditable, autonomous-when-earned" + buy-vs-build defense). Tier 2 = seed landing, Tier 1 + Tier 3 = post-traction expansions. Design system: warm cream `#F6F5F0` surface, `#EFEEE8` raised tier, indigo `#4F46E5` accent (was cobalt), Geist Sans + Geist Mono (was Inter; installed via brew), letter-spacing via OpenXML `spc` attribute, asymmetric bento on slide 5, redesigned mock UI on slide 7 (no ASCII), footer wordmark + logomark on every content slide.
+
+**Critique agent verdicts (carry into next round of deck work):**
+- VC (seed/Series A partner persona): "Second meeting, not term sheet." Three structural problems — (1) `[N]/[M]` placeholder on slide 14 is fatal; need 5 named tier-2 forwarder conversations + ideally one signed LOI before sending; (2) 5-phase roadmap on $2.5M / 14mo not credible (now compressed to Air + Ocean LCL in v5/v6); (3) market math hand-waved (now bottom-up build with labor-cost derivation shown in v6).
+- Buyer (tier-2 forwarder COO persona): "Pilot yes, production no." Buyer values **explainability + audit trail, not autonomy** — autonomy framing scares insurance/compliance. Buyer's KPI is **planner hours saved**, not override rate. Math is too clean — must handle allotments/BSAs, cargo-readiness uncertainty, co-loader relationships, DG/lithium, three coupled cutoffs (CFS/flight/dispatch). Buy-vs-build threat from in-house DS teams ($1.5-2M to build 60-70% in-house) is THE REAL COMPETITION, not WiseTech.
+
+**Pitch deck — open items before VC send:**
+1. **Replace `[N] / [M]` forwarder pipeline placeholder on slide 14 with real names + counts.** Single biggest disqualifier per VC critique.
+2. **Design partner outreach** — line up 3–5 named tier-2 forwarder conversations to validate impact metrics (planner FTEs, OTP lift, cost-to-serve reduction). The "THE IMPACT" section on slide 3 still needs validation.
+3. **Keynote font issue (carried)** — user reported Geist/Geist Mono/Helvetica still flagged in Keynote's "Choose which fonts to replace" dialog. Diagnosis path: Font Book → drag `~/Library/Fonts/Geist-*.otf` files in if not auto-registered; OR restart Mac to refresh font caches. Helvetica isn't in pptx XML at all (Keynote inserts as fallback for placeholders) — safe to "(Don't Replace)."
+
+**Air model gate (unchanged from Session 18).** Stage 2 (PDF review of `model/air_freight_routing.tex` v3 → `model/air_freight_routing.pdf`) is still the gating action. Once approved: Stage 2.5 (delete `model/air_milp_spec.md`), then Stage 3a (`src/components/air_graph.py` Phase 1).
+
+**`usr_session_notes.md` carried items (per user, leave in place):**
+- §4.3 enumeration table — explicit grouping table in air LaTeX
+- Per-shipment slack metric — P-quantile arrival vs service-tier deadline; replaces "confidence" as SLA quality measure
+
+**Status — end of Session 18, 2026-05-25.** User stepped out for 10 hours and asked for an uninterrupted deep dive on workflow-vs-AI-vs-agentic-AI scoping. Executed: 4 parallel research subagents (front office / network ops / compliance-customs / exceptions-replanning) + a 4,600-word synthesis. Net effect: the project's MVP LLM-agent scope grew from 2 to 4 capabilities, the 4-bucket workflow/hybrid/AI-novel/MILP framework is now load-bearing, and the **optimization-first positioning is hardened** by F1 of the synthesis (only genuinely under-served wedge). Session-17 positioning disagreement effectively resolved.
+
+**Competitive deep-dive 2026-05-25 (post-strategy-lock):** primary-source research on cargo.one confirmed they are **Bucket B (rate aggregation + per-shipment quoting + booking with RAG/LLM workflow automation), NOT a consolidation-wedge competitor.** Zero overlap with multi-shipment optimization across 15+ sources. The "AI-native OS" Feb–Mar 2026 launch is workflow rebrand + Cargofive ocean rates, not new optimization. Methodology = learned-preference ranking. MCP claim is positioning, not shipped tools. H11 closed. cargo.one is adjacent platform / potential booking complement via MCP. Separate clarification: CargoWise CTO is drayage planning only, competes with secondary surface (drayage/trucking pickup planning) NOT the primary consolidation wedge. Competitive.md row + Attack 1 + Attack 2 updated. Monitoring routine: quarterly check of `jobs.ashbyhq.com/cargo-one` for OR engineer hires as leading indicator that they're moving into Bucket D.
+
+**Third continuation update — same day, evening.** User walked through the four DITL docs in turn and locked five strategic commitments to memory: (1) **Quote desk + consolidation planner = two-pronged primary MVP surface** — same MILP engine, two distinct UIs ([[project-two-pronged-wedge]]); (2) **Intelligence layer above TMS, TMS-agnostic** — adapter interface targets CargoWise → Magaya → GoFreight → Riege ([[project-intelligence-layer-positioning]]); (3) **Density-fit architecture** — assignment problem + ML feasibility predictor + replan-if-below-threshold; reject 3D bin packing ([[project-density-fit-architecture]]); (4) **Customs = integrate, don't build** — four data intersection points (cost, constraints, transit-time feature, replan trigger) ([[project-customs-integrate-dont-build]]); (5) **Persona 4 ≈ Persona 2 at mid-size** — same humans, replan UX = planning UX (updated [[project-core-user-reality]]). Drayage / trucking pickup *planning* = MVP secondary surface (planning work fits project DNA); drayage *dispatcher* (execution) → P1 / Phase 7. KAM and CFS supervisor deprioritized. **Planning vs execution distinction added as scoping principle** (memory `project_planning_vs_execution_boundary.md`): planning surfaces in scope, execution surfaces out of scope or integrated against. System diagram redrawn as five-layer stack: User surfaces → Agent layer → Intelligence components (we build) → Data adapters → External systems (we integrate). `docs/architecture.drawio` replaced with new five-layer stack.
+
+**The 4-bucket framework** ([[project-workflow-vs-ai-buckets]] memory):
+- A. Pure workflow — structured → structured. *Integrate.*
+- B. Hybrid (AI parse → workflow execute) — high vol but commoditized vendor space. *Integrate, except WhatsApp/voice gap.*
+- C. AI agent for low-volume novel reasoning. *Build.*
+- D. Deterministic optimization (MILP/VRP/ML). *Build. Core wedge.*
+
+**MVP LLM-agent capabilities — refined 2 → 4** ([[project-agent-role-taxonomy]] memory updated):
+1. Input parsing — wedge is WhatsApp/voice/partner channel, not email
+2. Ad-hoc query
+3. **Materiality / re-plan-trigger assessment** *(new)*
+4. **Re-plan trade-off explanation** *(new — bridges MILP output to operator)*
+
+**Top 3 product-level findings** (full set F1–F10 in synthesis §2):
+- F1. MILP optimization at mid-size is the only AI capability not commoditized. (Hardens optimization-first stance.)
+- F3. WhatsApp/voice/partner free-text is the only unstructured channel without dense vendor coverage — the project's owned-AI surface. ([[project-unstructured-channel-wedge]] memory.)
+- F8. Materiality assessment ("is this 6h delay material?") is a Bucket C task no incumbent owns; load-bearing for the disruption loop.
+
+**Build sequence unchanged from Session 16.** This session was strategic / scoping work, not LaTeX or code. Stage 2 (PDF review of `model/air_freight_routing.tex` v3) is still the gating action; Stage 3 (Phase-1 `src/components/air_graph.py`) is still the bigger next step.
+
+**Major reframes that landed this session** (now in memory + architecture.md):
+- **Plan-goodness replaces "confidence"** — two orthogonal dimensions (SLA satisfaction + cost reasonableness); soft-plan-then-commit lifecycle; flags as orthogonal dimensions (SLA risk / cost outlier / rate surprise / capacity risk / disruption); commit at `cutoff − tier_safety_margin`; no auto-execute cell. Memory: `project_plan_goodness_reframe.md`.
+- **Agent role scoped down from 5 to 2 for MVP** — input parsing + ad-hoc query; exception triage / customer comms / pattern detection / request decomposition rejected as UI features in disguise or risky LLM apps. Memory: `project_agent_role_taxonomy.md`.
+- **Override rate is the central KPI**, not model accuracy. Trust-degradation tighten 15% → 5–8%. Memory: `project_override_rate_kpi.md`.
+- **Rate sourcing — 5-tier strategy** with WebCargo as MVP aggregator default. Memory: `reference_rate_api_landscape_2026.md`.
+
+**LaTeX edits this session** (additive to Session 16 v3 baseline; PDF review still pending):
+- Screening dropped as consolidation grouping key AND arc-eligibility filter → 24 buckets → 6
+- MAWB fixed-charge term added to objective (~$50/MAWB placeholder)
+- §4.5 (CW density mixing) restructured with full nomenclature table + per-equation explanations
+- §sec:sets migrated into §sec:variables (renamed "Decision Variables, Sets and Indices")
+- Recap nomenclature tables added at top of §sec:constraints, §sec:objective, §sec:linearization
+- `U_a`, `K_a`, `G_a`, `M` definitions expanded; catalog vs solve-specific paragraph added
+- Multi-stop MAWB-arc enumeration policy filed into `model/air_graph_construction.md` §5 Phase 1
+
+**New artifacts created this session:**
+- `architecture.md` (root) — system architecture narrative
+- `OPEN_DECISIONS.md` (root) — comprehensive pending-changes catalog
+- `docs/architecture.drawio` — system diagram
+- `docs/agent-critiques-2026-05-24.md` — round 1 critique outputs verbatim
+- `docs/industry-precedent-research.md` — **flawed; see SESSION_LOG retractions; kept for record**
+- `docs/air-and-lcl-route-planning-research.md` — corrected research
+- `docs/agent-critiques-round2-2026-05-24.md` — round 2 critique outputs verbatim
+- `docs/academic-literature-references.md` — verified academic refs (top 5)
+- `references/` folder — user-added Archetti & Peirano 2020 PDF (the Bergamo case study)
+
+**Infrastructure changes:**
+- `CLAUDE.md` — new Guardrail for `note:` capture; sign-off protocol now 5 steps (added Step 1: session-notes triage)
+- `.gitignore` — `usr_session_notes.md` excluded
+- `usr_session_notes.md` — created; 2 items pending and carried forward: §4.3 enumeration table edit + slack metric design
+
+**End-of-session positioning disagreement — DO NOT re-litigate on resume.** User rejected both "productivity-first reposition" and "doc-AI wedge" framings as narrative-fitting / commoditized. User's position (to verify): **build the optimization product as designed; productivity / interface concerns are implementation detail, not headline.** Tomorrow start from there.
+
+**Status of Session 16 deliverables (unchanged from yesterday):** Stage 2 complete — `model/air_freight_routing.tex` v3 rewritten on the O-D-arc graph with `(arc, g)` MAWB. 3,055 lines (+ today's polish edits), 22 sections. All Session-15 critique fixes baked in (3-inequality `min_flat_breaks`; C.7 removed; `Δ_k` rename; per-MAWB upper-link bounds; per-constraint tight big-M; MCNF supply-form sign convention; etc.). All Session-14 locked decisions baked in (item 3 linear soft tardiness; item 7 IATA next-break-down; item 13-A `cw_k → w_k` fix in C.5b-w; item 15 P.18 removed; item 18 cleanups; Finding S Ch 1 framing + TT-quantile hook). All operational depth preserved verbatim (time-zone, ULD specs, embargo, lithium, screening, locks, service products, carrier policy, surcharges, re-ULDing mechanics).
+
+**Goal:** get the air model working **end-to-end** — graph + MILP — with synthetic shipments and a regression test suite.
+
+### Step-by-step plan
+
+| # | Stage | Deliverable | Tests | Status |
+|---|---|---|---|---|
+| 1 | **Formulation spec** | `model/air_milp_spec.md` — variables, constraints, objective on the O-D-arc graph; folds in items 3, 15, 18, Finding S Ch 1; refreshed Tractability §13 with instrumentation + base-scale estimate + walking-skeleton subset | spec-level: 3-agent critique | **v2 COMPLETE (Session 15)** |
+| 2 | **LaTeX rewrite** | `model/air_freight_routing.tex` v3 rebuilt from spec v2 — wholesale replacement of the per-leg bucket structure; carry-over operational sections preserved; spec deletes after PDF approval | user PDF review | **COMPLETE (Session 16) — awaiting user PDF review** |
+| 2.5 | **Spec deletion** | Delete `model/air_milp_spec.md` (transient artifact, by agreement) | --- | gated on PDF approval |
+| 3a | Graph generator — Phase 1 | `src/components/air_graph.py` — physical graph (nodes, transport / dwell arcs, per-shipment pre-filter with all 8 §4 steps); precomputes per-arc scalars `μ_a` and `CO_a^*` (folds internal MCT + cutoff stack at build) | `tests/components/test_air_graph.py` Phase-1 cases | next after PDF approval |
+| 3b | Graph generator — Phase 2 | MAWB overlay (`g(k)`, MAWB instantiation, co-load skip) | Phase-2 unit tests |
+| 4 | **MILP — walking-skeleton ladder** (per LaTeX v3 / spec §13.3) | | |
+| 4-v1 | Minimal viable | `src/components/air_milp.py` — C.1 flow, C.2 MAWB activation, C.4 CW aggregation, C.5c per-offer cap, C.6 time propagation, C.9 cutoff, C.10 soft tardiness, C.11 hard backstop, C.14 domain. Rate families: **`flat_rate` + `coload_per_kg` only**. No `γ`/`BW`/`η`. ~3 variable families. Tests `x`-binary scaling, C.6 density, LP-gap, big-M tightness. | trivial + infeasibility + density-mixing tests |
+| 4-v2 | Add `min_flat_breaks` | γ + BW + corrected linearization §10.1 (3-inequality form, no `BW_b ≤ CW`) | TACT round-up-to-higher-break case ($800 not $900) |
+| 4-v3 | Add `per_uld_pivot` | η + C.5 + C.5b + C.13 (per_flight + equalized); pre-filter step 8 (HAWB-too-big-for-any-ULD) | BSA pivot binding; allowance overage |
+| 4-v4 | Tractability instrumentation | All 8 metrics from LaTeX §13 / spec §13.1 wired into solve loop output | shadow-mode (no behavior change) |
+| 5 | **Integration** | graph + MILP end-to-end on small instances | `tests/integration/` |
+| 6 | **Test shipments** | 5+ synthetic instances covering direct / hub / consolidation / DGR / VAL / co-load | fixtures in `tests/conftest.py` |
+| 7 | **End-to-end** | full pipeline (instance → graph → MILP → verified output) | `tests/e2e/` |
+| 8 | **Regression** | `uv run pytest` runs the full suite on every change | policy |
+
+**Test plan:** see `TEST_PLAN.md` — philosophy, per-component scenarios, fixtures, regression policy. §10 wires Agent 3's 8-metric walking-skeleton observability suite. CLAUDE.md project rules: no solver/graph mocking; real small instances; solution-value bounds; one happy-path + one infeasibility per module.
+
+### Key docs to read on resume (in order)
+1. **`model/air_freight_routing.tex`** v3 — the rewritten formal model. Start with §1 (Problem Statement), §3 (Graph Construction summary), §4 (MAWB and HAWB — including §4.4 alternatives considered A–F), §9 (Constraints C.1–C.14), §10 (Linearization with the corrected 3-inequality `min_flat_breaks`), §13 (P.x → C.x mapping), §16 (Tractability + walking-skeleton instrumentation).
+2. **`CONTEXT.md`** (this file).
+3. **`model/air_graph_construction.md`** — graph-construction logic the LaTeX sits on. Read §1, §5 (two-phase), §6 (case catalogue), §7 (resolved decisions).
+4. **`model/air_milp_spec_critique.md`** — verbatim 3-agent critique findings (61 total) on the spec. Survives spec deletion; the receipts for what was flagged and why.
+5. **`model/air_review_notes.md`** — review outcomes and design decisions feeding the spec / LaTeX.
+6. **`TEST_PLAN.md`** — testing strategy. §10 has the walking-skeleton observability metrics.
+7. **`SESSION_LOG.md`** — Sessions 14 + 15 + 16 detail.
+8. **`docs/air_graph_construction.drawio`** — multi-shipment graph with CFS and customs nodes.
+
+**Note on `model/air_milp_spec.md`.** Still on disk; **transient** per Session-14/15 agreement. Deletes after the user PDF-reviews `model/air_freight_routing.tex` v3 and accepts it. The verbatim critique receipts in `model/air_milp_spec_critique.md` survive the deletion.
+
+**Next action on resume — pick one:**
+1. **Read `docs/forwarder-operations-analysis/00-synthesis.md`** (~4,600 w) — the executive summary of this session. Then **triage `OPEN_DECISIONS.md §H` (12 new items, H1–H12)** — top 3 needing user input first: H1 (confirm 4-capability agent scope), H4 (WhatsApp in v1 or v2), H11 (cargo.one paid trial before locking agent boundary).
+2. **Compile + review `model/air_freight_routing.tex` v3 PDF.** Still pending from Session 16. On approval: (a) delete `model/air_milp_spec.md`; (b) move to Stage 3.
+3. **Slack metric design** (session note — now informed by synthesis §5: "materiality assessment" is the Bucket C task the slack metric operationalizes on the SLA dimension).
+4. **§4.3 enumeration table** (session note — small LaTeX edit).
+5. **Stage 3 — `src/components/air_graph.py` Phase 1** (physical graph: nodes, all 10 arc types per §3.2 of the LaTeX, per-shipment pre-filter with all 8 predicates from §8) with `tests/components/test_air_graph.py` Phase-1 isolation tests per `TEST_PLAN.md §4.1`. Before writing Phase-1 code: verify the carry-over operational dependencies the graph needs (cutoff stack folded into `CO_a^*`; ULD pool / interchange decisions absorbed at graph build into MAWB-arc emission; in-transit hub customs folded into `δ_a` of deconsol-dwell arc).
+
+### Pending user inputs (non-blocking, carried forward)
+- Item 3 tardiness penalty weights `w_{sp(k)}` — `CALIBRATION NEEDED` placeholders
+- Cost outlier multiplier `N` (Nx-of-lane-median threshold for flagging)
+- Commit-window safety-margin defaults (Express 6h / Standard 12h / Economy 24h proposed)
+- MVP rate aggregator final pick (WebCargo proposed)
+- Final positioning on optimization-first vs anything else (user's frustration at sign-off suggests pure optimization-first; unconfirmed)
+
+### Cross-model TODO (after air-MVP)
+- Apply O-D-arc-graph thinking to LCL/ocean and trucking models.
+- Cross-mode stitching layer.
+- Agent layer / MCP tools.
+- Operator UI.
+
+---
+
+## Session 15 — design decisions (now in `model/air_milp_spec.md` v2)
+
+Two waves of decisions in Session 15: the v1-drafting design choices, then the v1→v2 critique-pass refinements. Both are now folded into spec v2 (which is the current source of truth for Stage 2). Full critique receipts in `model/air_milp_spec_critique.md`.
+
+### Wave A — v1 architecture (during spec drafting)
+
+The 5 design Qs opened with the spec draft, all closed in-session:
+
+- **Flight-level physical capacity (`W_f`, `V_f`) — DROPPED entirely.** The forwarder doesn't know flight physical capacity in any planning sense (other parties' bookings invisible). Real caps that remain:
+  - **C.5** per-contract allotment `N_{a,u}` (BSA-contracted ULD positions per arc per type).
+  - **C.5b** per-ULD physical limits `W_u`, `V_u` (with the item 13-A bug fix `cw_k → w_k`; both weight and volume bounds retained).
+  - **C.5c** per-offer cap `cap_a` / `cap_a^{cl}` where the offer specifies one. TACT/NAC typically uncapped at planning; capacity is request/confirm at booking.
+  - No flight-level coupling across MAWB-arcs. The `arcs(f)` inverse map removed.
+- **Per-ULD volume bound `V_u` — KEPT.** Light/bulky cargo (e.g.\ apparel ~80 kg/m³) binds on volume long before weight.
+- **Surcharges — defer to LaTeX rewrite.** Math unchanged from prior LaTeX §6.7. Path-A additive in `c_a^{handle}`; Path-B per-flight indicator term.
+- **In-transit hub customs (T&E etc.) — data-only on `δ_a`** of the deconsolidation-dwell arc. No new arc type, no new constraints.
+- **Locks — preprocessing, not MILP constraints.** Fully locked HAWB preprocesses out of `K`; partially locked HAWB enters with origin re-pointed + truncated forward subgraph + fixed `t_k^{O_k}`. Lock-break is an **orchestrator decision between MILP runs**; the MILP is lock-agnostic. No `b_k`, no buyout decision variable. `lock-buyout` moved from deferred to excluded.
+
+### Wave B — v1→v2 critique-pass (post 3-agent review, 61 findings)
+
+- **CRITICAL bug fixed — `min_flat_breaks` linearization (spec §7.2).** Previous form had `BW_b ≤ CW` which combined with `BW_b ≥ CW − M(1−γ_b)` forced `BW_{b*} = CW` for the chosen break, then with `BW_b ≥ break_b · γ_b` made any selection with `break_b > CW` infeasible — **banning the IATA round-up-to-higher-break case**. Worked example: 90 kg, breaks `(45, $10/kg)` and `(100, $8/kg)`; IATA = min(10·90, 8·100) = $800; broken spec forced $900. Fix: dropped `BW_b ≤ CW`; `BW_b = max(CW, break_b)` when selected, minimization recovers IATA naturally.
+- **C.7 hub MCT family removed entirely.** All hub MCT absorbed at graph build into `μ_a` (same-MAWB through-connection) or deconsol-dwell arc `δ_a` (cross-MAWB transitions). C.6 time propagation alone suffices.
+- **Notation pass.** Renamed scalar `D_k` (soft deadline) → `Δ_k` (disambiguates from destination node `D_k^{node}`). Added formal declarations for `tail(a)`, `head(a)`, `transit(k,a)`, `A^{cust}`, `A^{MFB}`, `C`, `C^{eq}`, `A_c^{MAWB}`, `r_c`. Formalized `g(k)` as switch on `cargo_class`. Renamed dunnage `δ → ε`.
+- **C.1 flow conservation sign convention** flipped to standard MCNF supply form (outflow − inflow = +1 at source, −1 at sink).
+- **Upper-link bounds added to C.14 domain:** `CW ≤ CW^{ub}_{a,g} · z_{a,g}` (empty-bucket ⇒ zero); per-MAWB `η ≤ N_{a,u}` (tighter than aggregate); `pivot`, `over_c`, `τ_k`, `t_k^n` all get tight upper bounds.
+- **Per-constraint tight big-M formulas** in new §8.1 — `M^{C.6}_{k,a} = M^{C.9}_{k,a} = T_k^{abs} − t_k^{rdy,early}`, `M^{BW}_{a,g} = CW^{ub}_{a,g}`. Per-shipment, not global.
+- **C.3 dropped** as redundant with C.2a (both critique agents confirmed).
+- **C.5b accepted-looseness remark.** Per-MAWB aggregate ULD cap doesn't enforce per-HAWB fit. Added pre-filter step 8 in §4 (HAWB-too-big-for-any-ULD on per-ULD-pivot arcs).
+- **Walking-skeleton ladder.** §13.3 sequences v1/v2/v3 implementation (reflected in Stage 4 table above).
+- **§13 Tractability refreshed** — three concrete forms (`scale-hawb-aggregation` ← `scale-y-aggregation`; `scale-bucket-dominance` ← `scale-option-dominance`; `strat-v2-mawb-rescale` deleted). §13.1 8-metric instrumentation table. §13.2 concrete base-scale estimate (~2,500 binaries at MVP).
+- **Misc cleanups.** Split `c_a^{handle}` → `c_a^{flat} + c_a^{kg}`. `min_chg_a` clarified as per-MAWB. `cap_a` actual-weight per-arc. `legs(a)` and `arcs(f)` pushed out of MILP nomenclature (graph-build only). C.8 dropped (duplicate of C.6 initial condition). `pivot_a,g` → `pivot_{a,g}` brace hygiene. Monotonicity invariant stated at top of §7.
+
+Mapping table §12 fully updated to reflect removals (P.14, plus the implicit numbering gaps from C.3/C.7/C.8 deletion).
+
+---
+
+## Session 14 — locked design decisions (carry into the formulation spec)
+
+**Air model 19-item review COMPLETE.** Locked outcomes (full detail in `model/air_review_notes.md`):
+- **Item 2 (currency)** — MVP = USD canonical, single FX table, convert at solve; no per-run pinning.
+- **Item 3 (soft deadline)** — **LINEAR** tardiness penalty `+ Σ w · τ_k`; quadratic kept as deferred refinement. Weights = `CALIBRATION NEEDED`.
+- **Item 4 (bucket)** — **superseded mid-session by the O-D-arc-graph architecture** (see `air_graph_construction.md`). The per-flight-leg bucket was wrong; MAWB is a per-segment object → `MAWB = (arc, g)`.
+- **Item 4 / BSA cost** — 3 rate families (`rate_family ∈ {flat_rate, min_flat_breaks, per_uld_pivot}`); `settlement_basis ∈ {per_flight, equalized}`; `per_flight` = P.10 pivot; `equalized` take-or-pay = an exogenous per-solve sunk allowance `A_c`, BSA = 2-segment offer (free up to `A_c`, then `r_c`). Hard period-count P.7 removed.
+- **Item 7 (TACT)** — two explicit rate-function families (cumulative vs min-over-flat-breaks); `rate_family` a per-offer catalog attribute.
+- **Item 13 (P.3 bug)** — use `w_k` (actual weight) not `cw_k` (chargeable) in the ULD weight cap. Fix outright.
+- **Item 15 (P.18 removed)** — per-shipment hard budget cap removed entirely (a hard cap can make a committed must-serve shipment infeasible; budget is a quoting-layer concern). Run-total ceiling removed too. P.19 pre-solve check + P.21 domain updated; renumber P.19/20/21.
+- **Item 18** — delete deferred `sla-soft-otp` (superseded by item 3); refresh 3 stale Tractability items; `multi-seg-pu-pwl` softened to "contingency, not assumed" after research (multi-tier per-ULD over-pivot not found as a standard tariff form).
+- **Finding S Change 1** — P.20 soft (covered by item 3) + a quantile hook (`t_k(d(k))` → TT-Service P85–P90 quantile once integrated) + "planning bound, not contractual guarantee" framing. Changes 2 (offload priority into the MILP) and 3 (A2A/D2D + `max_hops` attributes) deferred — recorded as Open Items.
+
+**Air graph construction (Session-14 redesign — the new foundation):**
+- **Three air arc types:** MAWB-arc (forwarder-consolidated, carries MAWB object), co-load arc (per-kg, no MAWB), deconsolidation-dwell arc (at hub `CFS-H`).
+- **Two-phase construction:** Phase 1 = physical graph (nodes + all transport / dwell arcs + per-shipment pre-filter, no MAWB objects); Phase 2 = MAWB overlay (`g(k)` compute, `(arc, g)` MAWB instantiation, co-load arcs skipped).
+- **8 node types:** door, CFS-O, POL, hub, CFS-H, POD, CFS-D, door. `CFS-O/D/H` may be off-airport or on-airport (cartage arc time/cost captures the difference). `CFS-H` exists only at hubs where the forwarder operates a warehouse.
+- **Cartage arcs** `CFS-O → POL` and `POD → CFS-D` (new).
+- **Customs clearance dwell arc** between `CFS-D` and final delivery (per-HAWB `δ_cust_k`; not per-MAWB / per-group).
+- **Consolidation group `g(k)`:**
+  - Consolidable: `g(k) = (cargo_class, screening_status, temperature_regime)`.
+  - Non-consolidable (VAL / HUM / AVI): `g(k) = (cargo_class, HAWB-id)` → singleton → own MAWB.
+  - **Partition by construction** (pairwise disjoint and exhaustive) because `g` is a single-valued function of an attribute tuple. The "no subset" rule is too weak (permits partial overlap); pairwise-disjoint is the correct rule.
+- **DGR coarse:** all DG in one consolidation group; fine-grained pairwise DG segregation is a ULD-layer concern, deferred.
+
+**Cross-model TODO:** ocean FCL `P.4 budget cap` / LCL / trucking share the P.18 defect — revisit on their rework.
+
+---
+
+## Code build — started Session 13 (2026-05-20)
+
+**First code written.** Project scaffolding + walking-skeleton air MILP.
+
+- `pyproject.toml` — uv-managed; deps: highspy, numpy; dev: pytest, ruff, structlog. Python 3.12+. `src/` layout.
+- `src/components/air_milp.py` — walking-skeleton air MILP. Direct flights only, flight-level capacity, flat per-kg rate. Implements simplified P.1 (assignment), P.2/P.3 (capacity), P.15 (deadline pre-filter), P.21 (domain). HiGHS via highspy.
+- `tests/conftest.py` + `tests/components/test_air_milp.py` — 5 isolation tests passing (happy path, cheapest-flight, 2× infeasibility, weight-capacity split).
+- Build sequence for the air MILP: 8 incremental steps in `graph_generator_build_plan.md` Track A.1 — current state is steps 1–2 (skeleton + capacity). Next: time-window layer (P.11–P.13, P.15 full), then hub MCT (P.14), pivot weight (P.10), cargo type/fit (P.16/P.17), service product + carrier policy (P.20), locked commitments (P.19).
+
+**Build plan rewritten v1 → v2** after 5-agent critique. `graph_generator_build_plan.md` is now air-first, three parallel tracks (A: air MILP, B: test harness, C: calibration data infra), honest 14–18 week Phase 1 estimate. Deferred items (M5 demand stream, M6 variable supply, M7 orchestrator, M8 operator UI, M8.5 agent test harness) moved to `graph_generator_build_plan_phase2.md`.
 
 ## Current Phase
 
@@ -13,7 +344,7 @@
 | Model | File | Status | PDF |
 |---|---|---|---|
 | Ocean FCL | `model/ocean_fcl_routing.tex` | Draft v2 | rendered, 677 KB |
-| Air Freight | `model/air_freight_routing.tex` | **Draft v2 — P0 cluster + math review complete (Session 11); awaiting user PDF review** | ~3,162 lines LaTeX (estimated ~55–65 pages once rebuilt); user compiles PDF manually per CLAUDE.md rule |
+| Air Freight | `model/air_freight_routing.tex` | **APPROVED 2026-05-31 (Session 23)** — first gated formal model; Phase 2 air component build unblocked | ~4,300 lines LaTeX, 69 pages; user-compiled + reviewed |
 | Ocean LCL | `model/ocean_lcl_routing.tex` | Draft v1 | 14 pages |
 | Trucking (FTL/PTL/LTL) | `model/trucking_routing.tex` | Draft v1 | 16 pages |
 
@@ -61,10 +392,25 @@ Session 11 launched 3 parallel critique agents on the post-v2b air model: (1) **
 
 ## Immediate next steps (start of next session)
 
-**User is doing a personal PDF review of the air model**, then will continue with LCL model work.
+**User is doing a personal PDF review of the air model post-Session 12 PWL-active rewrite**, plus reviewing the three new docs created 2026-05-19 (`scalability.md`, `SYSTEM.md`, `transit_time_model.md`), plus the doc-reorg proposal in `SYSTEM.md` §11. Then continues with LCL model work.
 
-1. **Air model status:** Draft v2 ready for user review. ~3,162 lines LaTeX; rebuild for personal PDF review will produce ~55–65 pages.
-2. **When user resumes:** they'll pick up either with corrections from their PDF review, or with the LCL model (`model/ocean_lcl_routing.tex`) — which is currently Draft v1 (14 pages, written Session 9, pre-dating the v2b operational additions and the 3-agent math review). The LCL model likely needs the same kind of pass the air model just went through.
+**New docs created in Session 12 (2026-05-18 → 2026-05-19):**
+- `scalability.md` — large-scale solver strategies (decomposition, column generation, matheuristics) + SPPRC pricing-subproblem sketch for the air model. Marked as methodology-level, not approved-formal-model.
+- `SYSTEM.md` — top-level systems / architectural index. Mermaid diagrams for: system architecture, lifecycle state machine, mode-handoff dataflow, FCL end-to-end shipment journey, transit-time-service three-phase architecture. Doc reorg proposal in §11 (propose only, not executed).
+- `transit_time_model.md` — full product spec for the 3-phase Transit Time Service (Quoting / Down-Select / In-Transit ETA). Phase 2 first; Phases 1 and 3 are orchestration layers on top. Per-arc-type LightGBM quantile regression. Composition via Monte Carlo or Gaussian convolution. MCP tool surface defined.
+
+**Doc-reorg executed 2026-05-19 (`SYSTEM.md` §11):**
+- ✓ Promoted `docs/freight_concepts.md` → `freight_concepts.md` (top level; central reference)
+- ✓ Moved `docs/taiwan_market.md` → `appendices/markets/taiwan.md`
+- ✓ Moved `docs/us_market.md` → `appendices/markets/us.md`
+- ✓ Cross-references updated in PRD.md and CONTEXT.md
+- Held: merging `personas_and_tools.md` + `appendices/capabilities.md` (content merge, deferred for user review)
+- Planned for later: add `model/transit_time/` subdirectory when LaTeX models per arc-type land
+
+**Build-sequence implication:** Transit Time Service is on the critical path for component code (Phase 2 of the project build sequence). Every MILP that handles SLAs needs Phase 2 quantile estimates. So `transit_time_model.md` markdown spec needs approval before per-arc-type LaTeX models, which need approval before code.
+
+1. **Air model status:** Draft v2 ready for user review after Session-12 PWL-active rewrite. ~3,400 lines LaTeX. User flagged Section 1 as outdated ("two supply layers" — wrong; reality is many supply types modeled piecewise linear). Session 12 promoted PWL to MVP-active: unified supply-option binary $y_{f,o,k}$ replaces $y_{f,u,k}^c + b_{f,k}$ (latter two kept as derived shorthands); per-shipment options handle TACT/SCR/NAC/GSA-shipment/spot via pre-computed $c_o(cw_k)$; per-ULD-pivot options retain $C_{f,u,c}$ + P.10 for hard BSA / pivot-shape GSA. New §6.7 Supply Option Catalog. §4.7 flipped from "v2 deferred" to "MVP active." Section 1 abstract + Problem Statement + MVP bullets fully rewritten to reflect 5-supply-type catalog, service products + SLA, locked commitments, carrier policy cascade, embargo/lithium/screening gating, cargo-ready window, UTC time-zone. Constraint sweep: P.2, P.3, P.8, P.9, P.10, P.17, P.18, P.19, P.21 + ζ linearization + locked-commitment lifecycle + tractability scale-y-aggregation + scale-option-dominance renamed.
+2. **When user resumes:** corrections from their PDF review, or pivot to LCL model (`model/ocean_lcl_routing.tex`) — currently Draft v1 (14 pages, written Session 9, pre-dating the v2b operational additions, the 3-agent math review, AND the Session-12 PWL-active rewrite). The LCL model likely needs the same kind of pass the air model just went through.
 3. **LCL work — expected scope:** the operational-realism additions from air v2b (service products, locked commitments, screening, surcharge data model, shipment attributes, time-zone convention, CGC by cargo type, cargo-ready window, customs dwell, B/L release type, currency/FX, supply-side lock invalidation, carrier policy cascade) all apply to ocean LCL with mode-specific adjustments. The math correctness + linearization + notation review pattern (3-agent critique) is the recommended next move once LCL operational scope is locked.
 4. **Lesson logged from Session 11:** initial Task-#10 framing as "rolling BSA capacity release" was based on a fabricated tranche schedule. After sourced research (Levin/Nediak/Topaloglu 2012, IATA Net Rates docs, FreightAmigo), retracted and pivoted to spot rate snapshot data model. New memories saved: `feedback_no_fabricated_mechanisms.md`, `feedback_minimal_design_default.md`, `feedback_confirm_before_committing.md`.
 5. **PRD review continuation, Graph Generator LaTeX, Transit Time models, Destination Leg Planner, Rules Engine LaTeX** all still pending after LCL.
@@ -94,6 +440,13 @@ Session 11 launched 3 parallel critique agents on the post-v2b air model: (1) **
 ---
 
 ## What exists
+
+### Top-level systems doc (2026-05-19)
+
+- `SYSTEM.md` — top-level architectural index. Mermaid diagrams for system architecture (now including the simulation environment as a 6th layer), lifecycle state machine, mode-handoff dataflow, FCL end-to-end shipment journey, transit-time-service three-phase architecture. Doc map + reorganization status. References every other doc; cross-link companion to PRD.md (commercial index).
+- `transit_time_model.md` — Transit Time Service product spec (3 phases: Quoting / Down-Select / In-Transit ETA). Build Phase 2 first; Phases 1 and 3 are orchestration layers. Markdown spec pre-approval; LaTeX models per arc-type deferred.
+- `scalability.md` — large-scale solver strategies (decomposition, column generation, matheuristics) + SPPRC pricing-subproblem sketch for the air model. Methodology-level documentation.
+- `graph_generator.md` — graph generator + simulation orchestrator. Four data layers (topology, fixed supply, variable supply, demand stream) + three trigger modes (scheduled, event-driven, UI-driven). Test harness for Phase 1 isolation tests, Phase 1.5 TT MVP, Phase 2 end-to-end, Phase 3 operator-UI flows. Build plan: 5–7 weeks of focused work.
 
 ### PRD and Specialist Files (v0.3 — reorganized 2026-05-16)
 
@@ -176,9 +529,9 @@ The monolith PRD.md (1,666 lines) has been decomposed into 8 specialist files. P
 
 ### New reference docs (`docs/`)
 
-- **`docs/freight_concepts.md`** — Freight domain glossary: HBL/MBL pairing, container lifecycle (16 stages), booking flow, B/L release types, trucking instructions, road consignment note, intermodal rail booking, ULD types and stored fields, chargeable weight formula, surcharge stacks (ocean + air), US customs filings (AMS/ISF/EEI), carrier alliances
-- **`docs/taiwan_market.md`** — Taiwan market analysis: TAM $15–20M / SAM $1.5–5M / SOM $300K–1M ARR; top 20 forwarders with TMS status (Dimerco = proprietary, Morrison = likely CW); Dimerco deep dive (Value Plus System®, API options, IATA ONE Record); competitive software landscape; design partner sequencing (Dimerco #1, Morrison #2, King Freight #3)
-- **`docs/us_market.md`** — US market analysis: TAM $75–160M / SAM $25–50M / SOM $2–8M; major US Tier 2 forwarder list with TMS; US TMS landscape (CargoWise dominant, GoFreight growing); regulatory complexity (ISF/AMS/PGA); sales motion, conference channels (NCBFAA, TPM Long Beach), ACV targets
+- **`freight_concepts.md`** — Freight domain glossary: HBL/MBL pairing, container lifecycle (16 stages), booking flow, B/L release types, trucking instructions, road consignment note, intermodal rail booking, ULD types and stored fields, chargeable weight formula, surcharge stacks (ocean + air), US customs filings (AMS/ISF/EEI), carrier alliances. (Moved from `docs/` to top level 2026-05-19.)
+- **`appendices/markets/taiwan.md`** — Taiwan market analysis: TAM $15–20M / SAM $1.5–5M / SOM $300K–1M ARR; top 20 forwarders with TMS status (Dimerco = proprietary, Morrison = likely CW); Dimerco deep dive (Value Plus System®, API options, IATA ONE Record); competitive software landscape; design partner sequencing (Dimerco #1, Morrison #2, King Freight #3). (Moved from `docs/taiwan_market.md` 2026-05-19.)
+- **`appendices/markets/us.md`** — US market analysis: TAM $75–160M / SAM $25–50M / SOM $2–8M; major US Tier 2 forwarder list with TMS; US TMS landscape (CargoWise dominant, GoFreight growing); regulatory complexity (ISF/AMS/PGA); sales motion, conference channels (NCBFAA, TPM Long Beach), ACV targets. (Moved from `docs/us_market.md` 2026-05-19.)
 
 ### Diagrams (`docs/`)
 - `ocean_fcl_planning_graph.drawio` — FCL planning graph, Shenzhen → Chicago example

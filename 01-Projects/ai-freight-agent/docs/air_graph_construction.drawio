@@ -1,0 +1,229 @@
+<mxfile host="Electron">
+  <diagram id="air_graph_construction" name="Page-1">
+    <mxGraphModel dx="1628" dy="938" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1600" pageHeight="780" math="0" shadow="0">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+        <mxCell id="title" parent="1" style="text;html=1;strokeColor=none;fillColor=none;align=center;fontSize=13;fontStyle=1;" value="Multi-Shipment Air Freight Planning Graph — Physical Graph (Phase 1) with CFS Consolidation + Customs Clearance" vertex="1">
+          <mxGeometry height="22" width="1500" x="50" y="8" as="geometry" />
+        </mxCell>
+        <mxCell id="sub" parent="1" style="text;html=1;strokeColor=none;fillColor=none;align=center;fontSize=9;fontStyle=2;fontColor=#555555;" value="S1: HSZ → DAL   |   S2: KHH → CHI   |   S3: TPE → NYC        Each air arc = one flight leg. Multi-hop = multiple consecutive arcs. Through-flights (same flight number across two arcs) shown in &lt;b&gt;bold&lt;/b&gt; — ULD stays on aircraft. Interline (different carriers at hub) requires re-ULD. Per air_graph_construction.md §5 Phase 1: nodes + physical/transport/dwell arcs; MAWB layer overlaid in Phase 2." vertex="1">
+          <mxGeometry height="34" width="1500" x="50" y="28" as="geometry" />
+        </mxCell>
+        <mxCell id="h_pickup" parent="1" style="text;html=1;strokeColor=none;fillColor=none;align=center;fontSize=9;fontStyle=2;fontColor=#888888;" value="Pickup" vertex="1">
+          <mxGeometry height="16" width="110" x="15" y="68" as="geometry" />
+        </mxCell>
+        <mxCell id="h_ocfs" parent="1" style="text;html=1;strokeColor=none;fillColor=none;align=center;fontSize=9;fontStyle=2;fontColor=#888888;" value="CFS-O / Origin consolidation" vertex="1">
+          <mxGeometry height="16" width="155" x="125" y="68" as="geometry" />
+        </mxCell>
+        <mxCell id="h_oap" parent="1" style="text;html=1;strokeColor=none;fillColor=none;align=center;fontSize=9;fontStyle=2;fontColor=#888888;" value="POL — origin airport" vertex="1">
+          <mxGeometry height="16" width="120" x="280" y="68" as="geometry" />
+        </mxCell>
+        <mxCell id="h_air" parent="1" style="text;html=1;strokeColor=none;fillColor=none;align=center;fontSize=9;fontStyle=2;fontColor=#888888;" value="Air (multi-hop)  —  each arc = one flight leg" vertex="1">
+          <mxGeometry height="16" width="380" x="440" y="68" as="geometry" />
+        </mxCell>
+        <mxCell id="h_dap" parent="1" style="text;html=1;strokeColor=none;fillColor=none;align=center;fontSize=9;fontStyle=2;fontColor=#888888;" value="POD — destination airport" vertex="1">
+          <mxGeometry height="16" width="120" x="820" y="68" as="geometry" />
+        </mxCell>
+        <mxCell id="h_dcfs" parent="1" style="text;html=1;strokeColor=none;fillColor=none;align=center;fontSize=9;fontStyle=2;fontColor=#888888;" value="CFS-D / Destination deconsolidation" vertex="1">
+          <mxGeometry height="16" width="170" x="958" y="68" as="geometry" />
+        </mxCell>
+        <mxCell id="h_customs" parent="1" style="text;html=1;strokeColor=none;fillColor=none;align=center;fontSize=9;fontStyle=2;fontColor=#888888;" value="Customs clearance" vertex="1">
+          <mxGeometry height="16" width="120" x="1140" y="68" as="geometry" />
+        </mxCell>
+        <mxCell id="h_final" parent="1" style="text;html=1;strokeColor=none;fillColor=none;align=center;fontSize=9;fontStyle=2;fontColor=#888888;" value="Final delivery" vertex="1">
+          <mxGeometry height="16" width="120" x="1275" y="68" as="geometry" />
+        </mxCell>
+        <mxCell id="s3o" parent="1" style="ellipse;whiteSpace=wrap;html=1;fillColor=#F8CECC;strokeColor=#b85450;fontColor=#3d1512;fontSize=10;" value="&lt;b&gt;S3&lt;/b&gt;&lt;br&gt;TPE" vertex="1">
+          <mxGeometry height="65" width="65" x="35" y="130" as="geometry" />
+        </mxCell>
+        <mxCell id="s2o" parent="1" style="ellipse;whiteSpace=wrap;html=1;fillColor=#E1D5E7;strokeColor=#9673A6;fontColor=#1a0033;fontSize=10;" value="&lt;b&gt;S2&lt;/b&gt;&lt;br&gt;KHH" vertex="1">
+          <mxGeometry height="65" width="65" x="35" y="305" as="geometry" />
+        </mxCell>
+        <mxCell id="s1o" parent="1" style="ellipse;whiteSpace=wrap;html=1;fillColor=#FFE6CC;strokeColor=#d6b656;fontColor=#3d2b00;fontSize=10;" value="&lt;b&gt;S1&lt;/b&gt;&lt;br&gt;HSZ" vertex="1">
+          <mxGeometry height="65" width="65" x="35" y="480" as="geometry" />
+        </mxCell>
+        <mxCell id="tpe_cfs" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;fontSize=10;fontStyle=1;verticalAlign=middle;align=center;" value="TPE&#xa;CFS-O" vertex="1">
+          <mxGeometry height="60" width="80" x="155" y="190" as="geometry" />
+        </mxCell>
+        <mxCell id="khh_cfs" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;fontSize=10;fontStyle=1;verticalAlign=middle;align=center;" value="KHH&#xa;CFS-O" vertex="1">
+          <mxGeometry height="60" width="80" x="155" y="415" as="geometry" />
+        </mxCell>
+        <mxCell id="tpe" parent="1" style="ellipse;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=11;fontStyle=1;" value="TPE" vertex="1">
+          <mxGeometry height="60" width="65" x="305" y="191" as="geometry" />
+        </mxCell>
+        <mxCell id="khh" parent="1" style="ellipse;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=11;fontStyle=1;" value="KHH" vertex="1">
+          <mxGeometry height="63" width="65" x="305" y="417" as="geometry" />
+        </mxCell>
+        <mxCell id="hkg" parent="1" style="ellipse;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=11;fontStyle=1;" value="HKG" vertex="1">
+          <mxGeometry height="60" width="65" x="560" y="130" as="geometry" />
+        </mxCell>
+        <mxCell id="nrt" parent="1" style="ellipse;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=11;fontStyle=1;" value="NRT" vertex="1">
+          <mxGeometry height="60" width="65" x="560" y="300" as="geometry" />
+        </mxCell>
+        <mxCell id="anc" parent="1" style="ellipse;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=11;fontStyle=1;" value="ANC" vertex="1">
+          <mxGeometry height="60" width="65" x="560" y="480" as="geometry" />
+        </mxCell>
+        <mxCell id="jfk" parent="1" style="ellipse;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=11;fontStyle=1;" value="JFK" vertex="1">
+          <mxGeometry height="60" width="65" x="840" y="130" as="geometry" />
+        </mxCell>
+        <mxCell id="ord" parent="1" style="ellipse;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=11;fontStyle=1;" value="ORD" vertex="1">
+          <mxGeometry height="65" width="65" x="840" y="305" as="geometry" />
+        </mxCell>
+        <mxCell id="lax" parent="1" style="ellipse;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=11;fontStyle=1;" value="LAX" vertex="1">
+          <mxGeometry height="60" width="65" x="840" y="480" as="geometry" />
+        </mxCell>
+        <mxCell id="jfk_cfs" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;fontSize=10;fontStyle=1;verticalAlign=middle;align=center;" value="JFK&#xa;CFS-D" vertex="1">
+          <mxGeometry height="60" width="80" x="975" y="130" as="geometry" />
+        </mxCell>
+        <mxCell id="ord_cfs" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;fontSize=10;fontStyle=1;verticalAlign=middle;align=center;" value="ORD&#xa;CFS-D" vertex="1">
+          <mxGeometry height="60" width="80" x="975" y="305" as="geometry" />
+        </mxCell>
+        <mxCell id="lax_cfs" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;fontSize=10;fontStyle=1;verticalAlign=middle;align=center;" value="LAX&#xa;CFS-D" vertex="1">
+          <mxGeometry height="60" width="80" x="975" y="480" as="geometry" />
+        </mxCell>
+        <mxCell id="jfk_customs" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffe6cc;strokeColor=#d79b00;fontSize=10;fontStyle=1;verticalAlign=middle;align=center;" value="JFK&#xa;Customs" vertex="1">
+          <mxGeometry height="60" width="80" x="1130" y="130" as="geometry" />
+        </mxCell>
+        <mxCell id="ord_customs" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffe6cc;strokeColor=#d79b00;fontSize=10;fontStyle=1;verticalAlign=middle;align=center;" value="ORD&#xa;Customs" vertex="1">
+          <mxGeometry height="60" width="80" x="1130" y="305" as="geometry" />
+        </mxCell>
+        <mxCell id="lax_customs" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffe6cc;strokeColor=#d79b00;fontSize=10;fontStyle=1;verticalAlign=middle;align=center;" value="LAX&#xa;Customs" vertex="1">
+          <mxGeometry height="60" width="80" x="1130" y="480" as="geometry" />
+        </mxCell>
+        <mxCell id="nyc" parent="1" style="ellipse;whiteSpace=wrap;html=1;fillColor=#F8CECC;strokeColor=#b85450;fontColor=#3d1512;fontSize=10;" value="&lt;b&gt;NYC&lt;/b&gt;&lt;br&gt;S3" vertex="1">
+          <mxGeometry height="65" width="65" x="1290" y="125" as="geometry" />
+        </mxCell>
+        <mxCell id="chi" parent="1" style="ellipse;whiteSpace=wrap;html=1;fillColor=#E1D5E7;strokeColor=#9673A6;fontColor=#1a0033;fontSize=10;" value="&lt;b&gt;CHI&lt;/b&gt;&lt;br&gt;S2" vertex="1">
+          <mxGeometry height="65" width="65" x="1290" y="305" as="geometry" />
+        </mxCell>
+        <mxCell id="dal" parent="1" style="ellipse;whiteSpace=wrap;html=1;fillColor=#FFE6CC;strokeColor=#d6b656;fontColor=#3d2b00;fontSize=10;" value="&lt;b&gt;DAL&lt;/b&gt;&lt;br&gt;S1" vertex="1">
+          <mxGeometry height="65" width="65" x="1290" y="480" as="geometry" />
+        </mxCell>
+        <mxCell id="pu_s3_tpecfs" edge="1" parent="1" source="s3o" style="fontSize=8;html=1;" target="tpe_cfs" value="~0.3d">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="pu_s2_khhcfs" edge="1" parent="1" source="s2o" style="fontSize=8;html=1;" target="khh_cfs" value="~0.3d">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="pu_s2_tpecfs" edge="1" parent="1" source="s2o" style="fontSize=8;html=1;dashed=1;" target="tpe_cfs" value="~1d">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="pu_s1_tpecfs" edge="1" parent="1" source="s1o" style="fontSize=8;html=1;" target="tpe_cfs" value="~0.4d">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="cfs_tpe" edge="1" parent="1" source="tpe_cfs" style="fontSize=8;html=1;" target="tpe" value="cartage&#xa;~0.2d">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="cfs_khh" edge="1" parent="1" source="khh_cfs" style="fontSize=8;html=1;" target="khh" value="cartage&#xa;~0.2d">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="air_tpe_jfk" edge="1" parent="1" source="tpe" style="fontSize=8;html=1;strokeColor=#0066cc;" target="jfk" value="CI001/16h">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="air_tpe_ord" edge="1" parent="1" source="tpe" style="fontSize=8;html=1;strokeColor=#0066cc;" target="ord" value="BR012/14h">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="air_tpe_lax" edge="1" parent="1" source="tpe" style="fontSize=8;html=1;strokeColor=#0066cc;" target="lax" value="CI007/12h">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="air_khh_lax" edge="1" parent="1" source="khh" style="fontSize=8;html=1;strokeColor=#0066cc;" target="lax" value="CI033/13h">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="air_tpe_hkg" edge="1" parent="1" source="tpe" style="fontSize=8;html=1;strokeColor=#0066cc;" target="hkg" value="CX564/1.5h">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="air_hkg_jfk" edge="1" parent="1" source="hkg" style="fontSize=8;html=1;strokeColor=#0066cc;strokeWidth=2;" target="jfk" value="&lt;b&gt;CX880/16h&lt;/b&gt;">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="air_hkg_ord" edge="1" parent="1" source="hkg" style="fontSize=8;html=1;strokeColor=#0066cc;" target="ord" value="CX898/14h">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="air_hkg_lax" edge="1" parent="1" source="hkg" style="fontSize=8;html=1;strokeColor=#0066cc;" target="lax" value="CX884/12h">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="air_tpe_nrt" edge="1" parent="1" source="tpe" style="fontSize=8;html=1;strokeColor=#cc0066;" target="nrt" value="JL802/3h">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="air_nrt_jfk" edge="1" parent="1" source="nrt" style="fontSize=8;html=1;strokeColor=#cc0066;" target="jfk" value="JL004/13h">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="air_nrt_ord" edge="1" parent="1" source="nrt" style="fontSize=8;html=1;strokeColor=#cc0066;" target="ord" value="NH112/11h">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="air_nrt_lax" edge="1" parent="1" source="nrt" style="fontSize=8;html=1;strokeColor=#cc0066;" target="lax" value="JL062/10h">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="air_tpe_anc" edge="1" parent="1" source="tpe" style="fontSize=8;html=1;strokeColor=#009933;strokeWidth=2;" target="anc" value="&lt;b&gt;5Y9123 L1 /9h&lt;/b&gt;">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="air_anc_ord" edge="1" parent="1" source="anc" style="fontSize=8;html=1;strokeColor=#009933;strokeWidth=2;" target="ord" value="&lt;b&gt;5Y9123 L2 /7h&lt;/b&gt;">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="air_anc_jfk" edge="1" parent="1" source="anc" style="fontSize=8;html=1;strokeColor=#009933;" target="jfk" value="5Y441/8h">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="air_khh_hkg" edge="1" parent="1" source="khh" style="fontSize=8;html=1;strokeColor=#0066cc;" target="hkg" value="KA831/1.5h">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="dap_dcfs_jfk" edge="1" parent="1" source="jfk" style="fontSize=8;html=1;" target="jfk_cfs" value="cartage&#xa;~0.3d">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="dap_dcfs_ord" edge="1" parent="1" source="ord" style="fontSize=8;html=1;" target="ord_cfs" value="cartage&#xa;~0.3d">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="dap_dcfs_lax" edge="1" parent="1" source="lax" style="fontSize=8;html=1;" target="lax_cfs" value="cartage&#xa;~0.3d">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="dcfs_customs_jfk" edge="1" parent="1" source="jfk_cfs" style="fontSize=8;html=1;strokeColor=#b85450;dashed=1;" target="jfk_customs" value="customs dwell&#xa;δ_cust (per HAWB)">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="dcfs_customs_ord" edge="1" parent="1" source="ord_cfs" style="fontSize=8;html=1;strokeColor=#b85450;dashed=1;" target="ord_customs" value="customs dwell&#xa;δ_cust (per HAWB)">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="dcfs_customs_lax" edge="1" parent="1" source="lax_cfs" style="fontSize=8;html=1;strokeColor=#b85450;dashed=1;" target="lax_customs" value="customs dwell&#xa;δ_cust (per HAWB)">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="customs_nyc" edge="1" parent="1" source="jfk_customs" style="fontSize=8;html=1;" target="nyc" value="TRK/0.3d">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="customs_chi" edge="1" parent="1" source="ord_customs" style="fontSize=8;html=1;" target="chi" value="TRK/0.3d">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="customs_dal" edge="1" parent="1" source="lax_customs" style="fontSize=8;html=1;" target="dal" value="TRK/2d">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="customs_lax_chi" edge="1" parent="1" source="lax_customs" style="fontSize=8;html=1;dashed=1;" target="chi" value="TRK/3d">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="contract_box" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;fontSize=9;verticalAlign=top;align=left;" value="&lt;b&gt;ULD Contract Layers&lt;/b&gt;" vertex="1">
+          <mxGeometry height="320" width="225" x="1370" y="195" as="geometry" />
+        </mxCell>
+        <mxCell id="contract_text" parent="1" style="text;html=1;fontSize=8;align=left;verticalAlign=top;" value="&lt;b&gt;Per air arc&lt;/b&gt; (each flight leg) carries:&#xa;&#xa;1.  &lt;b&gt;Contract ULD allocation&lt;/b&gt;&#xa;     • Hard BSA: take-or-pay every flight&#xa;     • Soft BSA: cancellable per flight&#xa;     • Per-flight cap: ULDs ≤ alloc(c,f,u)&#xa;     • Period cap: Σ ULDs ≤ alloc(c,T)&#xa;     • Pivot weight floor (min charge)&#xa;&#xa;2.  &lt;b&gt;Spot rate-card&lt;/b&gt;&#xa;     • IATA weight breaks&#xa;       N → +45 → +100 → +300 → +500 → +1000&#xa;     • No capacity cap at planning&#xa;     • Higher rate, full flexibility&#xa;&#xa;&lt;b&gt;ULD types&lt;/b&gt;:&#xa;     LD3   4.5 m³ / 1,587 kg&#xa;     LD7   11.1 m³ / 4,626 kg&#xa;     PMC   7.5 m³ / 6,804 kg&#xa;     AKE   4.5 m³ / 1,497 kg&#xa;&#xa;Fill rate cap: η ≈ 0.97 of CBM" vertex="1">
+          <mxGeometry height="295" width="215" x="1380" y="215" as="geometry" />
+        </mxCell>
+        <mxCell id="leg_box" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#aaaaaa;" value="" vertex="1">
+          <mxGeometry height="180" width="1340" x="35" y="580" as="geometry" />
+        </mxCell>
+        <mxCell id="leg_shipments" parent="1" style="text;html=1;fontSize=8;align=left;verticalAlign=middle;" value="&lt;b&gt;Shipments:&lt;/b&gt;  &lt;font color=&#39;#b85450&#39;&gt;● S3: TPE → NYC&lt;/font&gt;   &lt;font color=&#39;#9673A6&#39;&gt;● S2: KHH → CHI&lt;/font&gt;   &lt;font color=&#39;#d6b656&#39;&gt;● S1: HSZ → DAL&lt;/font&gt;        Each shipment&#39;s origin/destination share color.  Blue ellipse nodes = shared airport supply capacity.  &lt;font color=&#39;#d6b656&#39;&gt;Yellow CFS nodes&lt;/font&gt; = consolidation / deconsolidation warehouses (forwarder-operated or on-airport).  &lt;font color=&#39;#d79b00&#39;&gt;Orange Customs nodes&lt;/font&gt; = post-clearance state at destination." vertex="1">
+          <mxGeometry height="28" width="1320" x="45" y="588" as="geometry" />
+        </mxCell>
+        <mxCell id="leg_arcs" parent="1" style="text;html=1;fontSize=8;align=left;verticalAlign=middle;" value="&lt;b&gt;Air arcs:&lt;/b&gt;  Each arc = one flight leg.  &lt;font color=&#39;#0066cc&#39;&gt;Blue&lt;/font&gt; = same-carrier arc (within an airline&#39;s network)   &lt;font color=&#39;#cc0066&#39;&gt;Red/pink&lt;/font&gt; = interline (different carriers, must re-ULD at hub)   &lt;font color=&#39;#009933&#39;&gt;Green&lt;/font&gt; = freighter route (5Y/Atlas Air).  &lt;font color=&#39;#b85450&#39;&gt;Red dashed&lt;/font&gt; = dwell arc (customs clearance, deconsol)." vertex="1">
+          <mxGeometry height="28" width="1320" x="45" y="616" as="geometry" />
+        </mxCell>
+        <mxCell id="leg_through" parent="1" style="text;html=1;fontSize=8;align=left;verticalAlign=middle;" value="&lt;b&gt;Through-flights:&lt;/b&gt;  Bold arcs = same flight number across multiple legs (same aircraft, technical stop). Example: 5Y9123 TPE→ANC→ORD is one flight in two legs (L1, L2). ULD stays on aircraft — no rehandling at intermediate stop, just refueling/crew change. Saves hub MCT (minimum connect time) and rehandling cost." vertex="1">
+          <mxGeometry height="32" width="1320" x="45" y="644" as="geometry" />
+        </mxCell>
+        <mxCell id="leg_uld" parent="1" style="text;html=1;fontSize=8;align=left;verticalAlign=middle;" value="&lt;b&gt;Arc labels:&lt;/b&gt;  Air = carrier+flight#/duration  (CI=China Airlines, BR=EVA, CX=Cathay, KA=Cathay Dragon, JL=JAL, NH=ANA, 5Y=Atlas Air freighter)   Ground = duration (or carrier/duration for trucking)   Customs = δ_cust per HAWB (per import declaration; independent of MAWB or group g)." vertex="1">
+          <mxGeometry height="28" width="1320" x="45" y="676" as="geometry" />
+        </mxCell>
+        <mxCell id="leg_cfs" parent="1" style="text;html=1;fontSize=8;align=left;verticalAlign=middle;" value="&lt;b&gt;CFS&lt;/b&gt; (Container Freight Station): consolidation warehouse — &lt;b&gt;CFS-O&lt;/b&gt; at origin builds HAWBs into ULDs / MAWBs; &lt;b&gt;CFS-D&lt;/b&gt; at destination breaks them down. May be off-airport (forwarder&#39;s own) or on-airport (airport-operated, e.g.\ HKG SuperTerminal). &lt;b&gt;CFS-H&lt;/b&gt; (not shown above; see §5 hub variant) exists only at hubs where the forwarder operates a warehouse — needed for cases B3/C6/C7." vertex="1">
+          <mxGeometry height="36" width="1320" x="45" y="704" as="geometry" />
+        </mxCell>
+        <mxCell id="leg_customs" parent="1" style="text;html=1;fontSize=8;align=left;fontColor=#b85450;" value="&lt;b&gt;Customs clearance dwell:&lt;/b&gt;  Per-HAWB (each import entry filed separately) — not per-MAWB, not per-group g. Time varies by importer-of-record, commodity / HS code (PGA / FDA / USDA may flag), exam selection. Export-side filing folds into the POL effective cutoff CO_f (no separate origin-customs arc)." vertex="1">
+          <mxGeometry height="24" width="1320" x="45" y="740" as="geometry" />
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>

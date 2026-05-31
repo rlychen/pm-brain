@@ -93,6 +93,64 @@ If a file you are about to write or edit would contain any banned term, stop and
   edits and stop. Do not run `pdflatex` or any other compile step. The user compiles
   manually and reviews the rendered PDF themselves.
 
+- **User session notes — capture, do not act.** When a user message starts with
+  `note:` (case-insensitive, must be the first non-whitespace token of the message),
+  the user is recording an observation for end-of-session review, **not** requesting
+  action. Behavior:
+    1. Append the note verbatim to `usr_session_notes.md` at the project root
+       (create the file if it does not exist), prefixed with an ISO timestamp:
+       `- [YYYY-MM-DD HH:MM] {note text}`.
+    2. Acknowledge in one short line ("noted" or equivalent). Do **not** search,
+       edit, plan, or otherwise act on the note's content.
+    3. If the same message contains other content after the note (a question or
+       task), handle that part normally — but treat the note itself as inert
+       capture.
+  `usr_session_notes.md` is gitignored / not committed (it is user-private
+  scratch). The end-of-session sign-off protocol reviews and clears it.
+
+- **End-of-session sign-off protocol.** Triggered only by an explicit sign-off from
+  the user ("wrap up", "we're done", "ok bye", "sign off", "end of session", or
+  equivalent). NOT triggered automatically at end of substantive work. When triggered,
+  execute in order:
+    1. **Review `usr_session_notes.md`** — if the file exists and is non-empty,
+       show its contents to the user and wait for them to triage. The user decides
+       what becomes a SESSION_LOG entry, a CONTEXT update, a new memory record, a
+       future task, or simply discarded. After triage, **clear the file** (truncate
+       to empty) so the next session starts fresh. If the file does not exist or is
+       empty, skip this step.
+    2. **Update `SESSION_LOG.md`** — extend the current session's entry with where
+       we left off, the next action on resume, and any pending user inputs.
+    3. **Update `CONTEXT.md`** if state materially changed — refresh the `RESUME
+       HERE` block, the Stage table, the locked-decisions sections; consolidate any
+       duplicated blocks accumulated during the session.
+    4. **Sync the Obsidian vault** — mirror the same scope as
+       `~/.claude/projects/-Users-richard-Projects-ai-freight-agent/memory/feedback_vault_sync.md`
+       (PRD, CONTEXT, SESSION_LOG, spec / LaTeX models, key markdown docs) to
+       `~/Documents/PM-Brain/01-Projects/ai-freight-agent/`. Update the
+       `feedback_vault_sync.md` `last_synced` date.
+    5. **Git commit and push.** Stage specific files (never `git add .`). Commit
+       message follows the existing pattern: `Session N — brief summary of what
+       changed`. Before pushing, **verify the remote repo is still private**:
+       run `gh repo view --json visibility -q .visibility` and confirm it returns
+       `PRIVATE`. If it returns `PUBLIC` (or anything other than `PRIVATE`),
+       **STOP. Do not push.** Surface a loud warning to the user
+       ("⚠️  Repo visibility is X, not PRIVATE — pushing would leak code. Pausing
+       sign-off. Run `gh repo edit --visibility private` or fix in GitHub UI,
+       then re-trigger sign-off."). Push only after visibility is confirmed
+       `PRIVATE`. If no remote is configured at all, surface a one-line warning
+       ("no remote configured; local commit only — set up a remote for
+       off-machine backup") and do **not** treat it as a failure. Once a remote
+       exists, push must succeed before sign-off is considered complete.
+  Sign-off is not complete until all five steps land. If any step fails, surface
+  the failure to the user and pause — do not silently skip.
+
+- **Never add admin collaborators to the GitHub repo without the user's
+  explicit confirmation.** Only the owner / admins can change repo visibility,
+  so keeping the admin set to one person (the user) makes accidental or
+  unauthorized visibility flips structurally impossible from any other party.
+  If collaborators are added, grant `Read` or `Write` — never `Admin` — unless
+  the user explicitly approves admin scope for a specific person.
+
 ## Data sources
 
 Real network topology + synthetic commercial parameters. Document data provenance

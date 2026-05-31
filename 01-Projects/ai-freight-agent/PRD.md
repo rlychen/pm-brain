@@ -193,9 +193,9 @@ The PRD has been decomposed into specialist files by change frequency and concer
 | **`appendices/competitive.md`** | Differentiation opportunities (7 gaps in all TMS platforms), competitive landscape (16 companies), industry-validated patterns, market gaps, adversarial position assessment, moat analysis, attack scenarios | Competitive positioning, feature prioritization |
 | **`model/ocean_fcl_routing.tex`** | Formal MILP formulation for Ocean FCL routing — Draft v2 | Mathematical model review, solver implementation |
 | **`Research.md`** | Deep competitive research: 33 sites, 14 companies, May 2026. Full company profiles, sites visited. | Competitive intelligence detail |
-| **`docs/freight_concepts.md`** | Freight domain glossary: HBL/MBL, container lifecycle, booking flow, B/L types, trucking instructions, intermodal rail, ULD management, surcharges, customs | Domain knowledge reference for engineering and product team |
-| **`docs/taiwan_market.md`** | Taiwan market analysis: TAM $15–20M / SAM $1.5–5M / SOM $300K–1M, top 20 forwarders, TMS adoption, Dimerco deep dive, design partner sequencing | Taiwan go-to-market and design partner planning |
-| **`docs/us_market.md`** | US market analysis: TAM $75–160M / SAM $25–50M / SOM $2–8M, major US forwarders, TMS landscape, regulatory complexity (ISF/AMS/PGA), go-to-market approach | US go-to-market, sales motion, conference channels |
+| **`freight_concepts.md`** | Freight domain glossary: HBL/MBL, container lifecycle, booking flow, B/L types, trucking instructions, intermodal rail, ULD management, surcharges, customs | Domain knowledge reference for engineering and product team |
+| **`appendices/markets/taiwan.md`** | Taiwan market analysis: TAM $15–20M / SAM $1.5–5M / SOM $300K–1M, top 20 forwarders, TMS adoption, Dimerco deep dive, design partner sequencing | Taiwan go-to-market and design partner planning |
+| **`appendices/markets/us.md`** | US market analysis: TAM $75–160M / SAM $25–50M / SOM $2–8M, major US forwarders, TMS landscape, regulatory complexity (ISF/AMS/PGA), go-to-market approach | US go-to-market, sales motion, conference channels |
 
 ---
 
@@ -322,7 +322,7 @@ For time-sensitive bookings, the 2-second optimizer wins the vessel slot that th
 | **SOM (5-year)** | **$5M–$20M ARR** | **$2M–$8M ARR** | **$300K–$1M ARR** |
 | **Customers to hit SOM** | 100–300 | 50–150 | 10–20 |
 | **Competitive density** | Moderate | Moderate + GoFreight incumbency | Low — no routing optimizer present |
-| **Detailed analysis** | This document | [`docs/us_market.md`](docs/us_market.md) | [`docs/taiwan_market.md`](docs/taiwan_market.md) |
+| **Detailed analysis** | This document | [`appendices/markets/us.md`](appendices/markets/us.md) | [`appendices/markets/taiwan.md`](appendices/markets/taiwan.md) |
 
 **US sizing note:** The $127.7B IBISWorld US figure includes domestic freight brokerage (trucking). The international forwarding portion relevant to our product is ~$35–40B. Using only the international segment for the US TAM derivation.
 
