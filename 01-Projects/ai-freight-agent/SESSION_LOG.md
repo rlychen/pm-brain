@@ -2,6 +2,99 @@
 
 ---
 
+## 2026-06-02 (Session 25 — Air MILP slice M2: C.4 chargeable-weight density mixing + flat_rate bucket cost + C.5c cap)
+
+**Trigger.** "slice M2" after reviewing the full M2–M6 roadmap. Built M2 of `src/components/air_milp.py` — the slice where consolidation starts paying.
+
+**Landed in `air_milp.py`:**
+- **C.4 density mixing** (`_build_c4_density`, tex sec:cw-density-mixing): continuous `CW[a,g]` per MAWB candidate; lower bounds `CW ≥ (1+ε)Σ w_k·x` (C.4a+c) and `CW ≥ Σ v_k·167·x` (C.4b+d) with `Wt/Wv` inlined into the bounds (their equality defs only feed C.4c/d); upper-link `CW ≤ CW^ub·z` (Eq. cw-ub, empty-bucket⇒0). `CW^ub = (1+ε)Σ max(w_k, v_k·167)`. Created for **all** `(a,g)∈M` (the universal family M3/M4 also bill against).
+- **flat_rate bucket cost** (`_build_flat_bucket_cost`, tex sec:lin-bucket): aux `c[a,g]≥0` with `c ≥ min_chg·z` and `c ≥ m·CW`; objective uses `c`. Only generated for `FLAT_RATE` arcs with a catalog entry; min_flat_breaks/per_uld bill in M3/M4.
+- **C.5c per-offer cap** (`_build_c5c_caps`, Eq. C5c): `Σ_{k∈K_a} w_k·x ≤ cap_a` over all riders, when the flat offer specifies a cap.
+- **`RateCatalog.flat: dict[ArcId, FlatRate(m, min_chg, cap)]`**; `MilpParams.dunnage_eps=0.05`; `AirSolution.mawb_chargeable_weight` (CW at optimum for active MAWBs).
+- **Monotonicity post-solve assert** (`_assert_cw_invariant`, tex sec:objective / TEST_PLAN §10): for billed flat MAWBs (`m>0`), recompute `max(Wt,Wv)` from the integer routing and assert `CW` is pinned to it; a miss = a negative-coefficient-on-CW modeling bug, surfaced loudly.
+
+**Tests:** +6 (`test_air_milp.py`), value-checked: flat bucket single HAWB (650), min_chg floor (250), **density mixing CW=283.9 < per-HAWB sum 400.4**, **consolidation-beats-separation** (shared 1-MAWB 1669.5 < split 2-MAWB 2302.0 via distinct temperature), dunnage uplift (+50 at ε=0.05), C.5c cap forces fallback (cap 150→1 fallback, 250→0). **air_milp 13 passed; full suite 79 passed; ruff clean across src/tests/data.**
+
+**Observed (now correct):** consolidation pays — two HAWBs on a shared MAWB density-mix their chargeable weight (dense cargo absorbs light cargo's volumetric slack) and beat separate MAWBs. M1's "optimizer prefers direct legs" caveat is resolved for the flat family.
+
+### Slice M3 — min_flat_breaks (IATA next-break-down round-up) (2026-06-02, same session)
+
+**Landed in `air_milp.py`:**
+- **min_flat_breaks bucket cost** (`_build_min_flat_breaks_cost`, tex sec:lin-bucket): per MFB MAWB, break selector `γ_{a,g,b}` (binary) + bucket weight `BW_{a,g,b}` (continuous [0, M^BW]). Constraints: `Σ_b γ_b = z` (exactly one break iff active); `BW_b ≤ M^BW·γ_b`; `BW_b ≥ break_b·γ_b`; `BW_b ≥ CW − M^BW·(1−γ_b)`. **No `BW_b ≤ CW`** (would ban the round-up case). `M^BW = max(CW^ub, max_b break_b)` — the `max_b break_b` widening is load-bearing (BUG-1, Eq. bigm). Objective gets `Σ_b rate_b·BW_b` (returned as `mfb_terms`).
+- **`RateCatalog.min_flat_breaks: dict[ArcId, list[Break(threshold, rate)]]`**; new `Break` dataclass (`B_a` ordered ascending).
+- **Billing validation reworked** (`_assert_cw_invariant` → `_validate_billing` + `_routed_cw`): the old assert read the `CW` *variable*, which is solver-dependent (CW floats when bucket cost is locally flat — min-charge floor binding, or a break floor above CW). Now recompute `CW = max(Wt,Wv)` **from the realized integer routing** and assert each family's *realized* cost equals its closed form (flat: `max(min_chg, m·CW)`; MFB: `min_b rate_b·max(CW, break_b)`). Robust + directly validates billing. `mawb_chargeable_weight` now reports the routing-derived CW (always correct).
+
+**Tests:** +5 — round-up-to-higher-break ($800 not $900: 90kg, breaks (45,$10)(100,$8); total 950), stay-at-lower-break ($500: 50kg; total 650), weight-dominated above all breaks ($3200: 400kg; total 3350), MFB-family-without-catalog-entry (no bucket cost, total 150), density-mixing-lowers-break-cost (shared CW 283.9, breaks (250,$5)(300,$4) → $1200; total 1450). **air_milp 18 passed; full suite 84 passed; ruff clean across src/tests/data.**
+
+**Next: slice M4 — `per_uld_pivot` + BSA allotment.** Integer `η_{a,g,u}`, `pivot_{a,g}`, `over_c`. C.5 allotment cap `Σ_g η ≤ N_{a,u}`, C.5-act `η ≤ N·z`, C.5b per-ULD `W_u`/`V_u`, C.5c-uld per-offer cap. C.13 BSA settlement: `per_flight` pivot (`r_a·max(CW, π_a·Ση)` via C.13b-1/b-2) vs `equalized` accumulator (`A_c`, `r_c·over_c`, cost^MAWB=0). Catalog: ULD/BSA tables (`N_{a,u}`, `W_u`, `V_u`, `π_a`, `r_a`, settlement basis, `A_c`). Then M5 (tardiness PWL), M6 (surcharges + full objective). **Deferred, don't lose:** per-MAWB-break cost attribution for hub dwell (objective slice); plan-§6 construction micro-cases; `model/capacity_manager.md` stub review.
+
+### M4 schema discussion (end of Session 25) — DECISION OPEN, deep-dive deferred to next session
+
+After M3, opened the M4 data-model decision (M4 introduces a **BSA contract entity** + **ULD-type catalog**, not just per-arc rate fields). Walked the user through three schema options with a shared CX-BSA-out-of-HKG numeric scenario (per_flight = $6000 via pivot floor; equalized = $1500 via allowance overage). Surfaced and corrected a **conceptual conflation**: the user's "pre-buy ULDs, free up to pivot, pay above" merges two opposite-direction levers — **pivot `π`** (per-ULD *minimum charge*, per_flight branch, makes you pay for empty space) vs **allowance `A_c`** (take-or-pay sunk threshold, equalized branch, the actual "free up to X"). Bridge: `A_c ≈ pre-bought-positions × π`, pooled across the contract's arcs.
+
+**User signed off asking for detailed notes to deep-dive next session.** All three options, the full numeric walkthroughs, and the pivot-vs-allowance clarification are captured verbatim in **`docs/design/air_milp_m4_bsa_schema_options.md`** (NEW). Decision NOT made. Drafter's lean recorded in the doc: Opt 3 (per_flight only) now → Opt 1 (contract entity) for M4b; counter-consideration noted if equalized is MVP-pitch-core.
+
+**Next action on resume (in order):** (1) user reads `docs/design/air_milp_m4_bsa_schema_options.md` and picks a schema option; (2) only then build M4 against the chosen schema. Do NOT start M4 code before the schema is chosen.
+
+---
+
+## 2026-06-01 (Session 24 — Air graph slice 4: per-HAWB subgraph pre-filter, two-pass propagation + 1→8 cascade)
+
+**Trigger.** "where did we left off" → resumed from Session 23 RESUME HERE. Built **slice 4** of `src/components/air_graph.py` (the meatiest remaining piece).
+
+**Decision (asked first, schema commitment).** Predicates 2–5 (cargo-type / embargo / lithium / service-product) map to model sections not yet built as components. Chose **minimal inline flags** (over injected-callables / full-inline-semantics): lean per-leg flags on `Leg` (`ac_type`, `cargo_caps`, `lithium_ok`, `embargoed_cargo`) + per-HAWB attrs on `Hawb` (`cargo_type`, `has_lithium`, `air_allowed`, `allowed_carriers`, `allowed_ac_types`, time/dispatch/fit fields). air_graph owns the 1→8 cascade over them via small pure functions; the real embargo/lithium/carrier engines stay deferred and will populate these flags. First-attempt question was rejected so I'd explain the decision plainly first — user then picked minimal inline flags.
+
+**Landed in `air_graph.py`:**
+- New: `AcType` StrEnum; `HawbId`/`GroupKey` aliases. Extended `Leg`/`Hawb`/`Offer`/`AirScalars` with the minimal-flag + time/fit fields (all defaulted → physical-graph fixtures unchanged). `AirScalars` now carries `legs` (per-leg predicate seam) + ULD caps.
+- `fallback_arc(hawb, cost)` (P11): direct O→D, transit = `T_abs − ready_early`, cost = `C^fallback`; always in A_k, predicate-exempt.
+- **Two-pass subgraph** `build_hawb_subgraph(...)`: Pass A `_propagate_forward` (earliest feasible arrival, cutoff+dispatch gating, **air-arc head reset to ETA** = scheduled-arrival fix) + `_latest_to_dest` (backward DP for predicate-7 dest reachability); Pass B `_first_failing_predicate` strict 1→8, first-failure `RejectRecord`. Candidacy = tail forward-reachable from O_k. Predicate 1 = topological lane (BFS both ends, time-agnostic) — split from predicate 7 (time) per R4. `CO_a* = cutoff_raw − prep_time`.
+- Diagnostics contract: `RejectRecord`, `PrefilterWarning` (empty real-arc subgraph → structured warning, not exception → routes via fallback), `SubgraphResult`. `build_subgraphs(...)` folds per-HAWB fallback arcs into the augmented store.
+- **structlog → runtime dep** (moved in pyproject; R11). Local wrapped logger sinks JSON to **stderr** (FastMCP rule); rejections logged at debug (suppressed by INFO filter), empty-subgraph at warning. Verified stdout stays clean.
+
+**Tests:** +16 (`tests/components/test_air_graph.py`): happy-path admit, fallback scalars, predicate-1 no-lane, predicate-7-not-lane, each of predicates 2–8 individually, dispatch-feasibility λ^disp, cutoff boundary inclusive (≤), two first-failure-ordering cases, empty-subgraph warning, `build_subgraphs` fallback-folding. **air_graph 39 passed; full suite 44 passed; ruff clean.**
+
+### Slice 5 — Phase-2 MAWB overlay + full `AirGraph` contract (2026-06-01, same session)
+
+Confirmed the approved `g(k)` from the tex (sec:g-of-k), NOT the construction-doc §4.2 (screening was dropped — `project_air_screening_decision`): consolidable {GEN,DGR,PER} → `(cargo_class, temperature)`; non-consolidable {VAL,HUM,AVI} → `(cargo_class, hawb_id)` singleton.
+
+**Landed in `air_graph.py`:**
+- `temperature` field on `Hawb` (subdivides PER groups). `CONSOLIDABLE_CLASSES`. `group_key(hawb) -> GroupKey` rendering the tuple to a stable string (`"GEN:ambient"`, `"VAL:k9"`).
+- `Mawb` dataclass `(arc_id, group, members)` — `members` = candidate riders `K_a ∩ g⁻¹(group)` (actual membership resolved by MILP `x_{k,a}`).
+- `build_riders(subgraphs)` → `K_a`. `overlay_mawbs(arcs, subgraphs, hawbs)` → one MAWB per distinct group on each `carries_mawb` air arc; co-load + fallback skipped.
+- `AirGraph` output contract (plan §4) + `build_air_graph(offers, hawbs, gateways, *, fallback_cost)` end-to-end pipeline (physical → subgraphs → overlay → packaged contract: arcs, subgraphs, riders, mawbs, flight_arcs, rejections).
+
+**Tests:** +14 — group_key (consolidable/singleton), C1 consolidation (1 MAWB/3 members), C3 two groups, PER temperature split, C4 VAL singletons, C5 co-load (no MAWB, riders still tracked), fallback excluded, partition property (exhaustive + disjoint), two-groups-on-through-arc, 3 parametrized eligible families, direct `overlay_mawbs` skips co-load+fallback, `build_air_graph` contract fields. **Full suite 58 passed; ruff clean.**
+
+### Slice 6 — hub-dwell auto-emission (P5/P6) wiring + isolation tests (2026-06-01, same session)
+
+Closed the carried gap: the join-loop that auto-emits hub-transit dwell arcs.
+- `airport_code(node)`, `Hub` config dataclass (`code`, `is_cfs_h`, `dwell_h`, `dwell_cost`), `candidate_hub_codes(arcs)` = airports that are both an air-arc head and an air-arc tail (R7: through/multi-stop arcs carry the hub *internally*, so their only graph head is the final dest → never a candidate), `build_hub_dwells(arcs, hawbs, hubs)` = one per-HAWB dwell arc per configured candidate hub (P5 if CFS-H else P6). Wired `hubs=` (keyword, defaulted None → no change to existing callers) through `build_physical_graph` and `build_air_graph`. Emit-then-prune: a dwell a HAWB never transits is dropped by the pre-filter (tail not forward-reachable).
+- +7 isolation tests: P5 deconsol on connection path, P6 when not CFS-H, **R7 through-arc → no candidate hub / no dwell**, candidate detection requires both ends, per-HAWB dwell arcs, mixed P5+P6 coexist, **C7 deconsol-divergence** (two GEN HAWBs share TPE→HKG, peel to LAX vs ORD → upstream MAWB carries both, each downstream carries one).
+
+### Slice 7 — TPEB realistic integration instance (plan §7) (2026-06-01, same session)
+
+`data/synthetic/tpeb_air_instance.py` (new `data/` package): `build_tpeb_instance() -> TpebInstance(offers, hawbs, gateways, hubs, fallback_cost)`. Real topology/carriers (TPE/PVG/HKG → LAX/ORD, ANC tech stop, CI/BR/CX/CV/MU, HKG=CFS-H), synthetic commerce. 13 air offers spanning all rate families (CI min_flat_breaks w/ overlapping direct+segments+through; BR flat; CX per_uld_pivot BSA; CV multi-stop single-flight via ANC; 5J co-load; MU PVG direct+HKG feeder; CI→CX bilateral interline through). 12 HAWBs = the §4.2 8-group worked set assigned O-D + realistic densities. Provenance documented at point of use (real-network vs synthetic).
+- `tests/components/test_air_graph_tpeb.py` — 6 integration assertions: every HAWB has a real route + fallback (0 fallback-only); ≥3 origin-diverse (TPE+PVG) HAWBs transit HKG CFS-H (actual: 8 HAWBs across both origins); overlapping emission (direct + through coexist); per-flight coupling (CI segment + through share `CI:TPEHKG`); VAL singleton MAWB + GEN consolidation; tech-stop folded internally (no ANC dwell).
+- **Assembled graph sanity:** 83 arcs (13 air, 12×{pickup/customs/delivery/deconsol-dwell/fallback}, gateway CFS/cartage), 38 MAWB candidates, HKG the only candidate hub.
+
+**Full suite 71 passed; ruff clean across src/tests/data.**
+
+**Air component (`air_graph.py`) is now feature-complete for construction:** physical graph + ground chains + hub dwells + two-pass pre-filter + MAWB overlay + full `AirGraph` contract, unit-gated + integration-validated.
+
+### Slice M1 — air MILP walking skeleton over `AirGraph` (2026-06-01, same session)
+
+**Scoping decisions (asked first — high-cost interface commitment):** (1) **replaced** the pre-model `air_milp.py` stub (Shipment/Flight/P.x, incompatible with the approved `x_{k,a}`/`z_{a,g}` formulation) — old stub + its 5 tests removed, the stale `air_happy_path` fixture cleared from `tests/conftest.py`; (2) rates live in a **separate `RateCatalog`** (keyed by arc id) passed to `solve()`, keeping the graph topology-only; (3) **walking-skeleton-first** M1, billing layered later.
+
+**Landed in `air_milp.py` (full rewrite over `AirGraph`):** `solve(air_graph, hawbs, rates, params) -> AirSolution`. Variables `x[k,a]` (∀ a∈A_k), `z[a,g]` (∀ (a,g)∈M); **C.1** flow conservation (per HAWB, per node; b=+1/−1/0), **C.2a/b** MAWB linkage, **C.14** binary domain. Routing-only objective: non-air arc `ground.cost·x` (ground/dwell/**fallback** handling) + co-load `m_a^cl·cw_k·x` + MAWB fixed-charge `c^MAWB_fix·z`. `RateCatalog` (coload only for now), `MilpParams` (mawb_fix=50), `AirSolution` (status/total_cost/routes/active_mawbs/fallback_hawbs). HiGHS silenced (FastMCP). MAWB-eligible air arcs carry **no variable freight cost yet** (M2).
+
+**Tests:** rewrote `test_air_milp.py` — 7 tests, value-checked against hand-computed bounds: trivial air-vs-fallback (cost=150), no-real-arc→fallback (cost=C^fallback), 2-HAWB consolidation into 1 MAWB (cost=250), C.1 connected O→D path reconstruction, co-load per-kg (cost=700, no MAWB), fixed-charge param sensitivity, TPEB integration solve (OPTIMAL, 0 fallback, 11 MAWBs, cost≈10,095). **Full suite 73 passed; ruff clean.**
+
+**Observed (correct for M1):** optimizer prefers direct single-leg arcs over the through-HKG connection — with 0 variable freight on MAWB arcs, the hub deconsol dwell (260) is pure added cost. "Consolidation pays" is a CW-density-mixing effect → arrives in M2.
+
+**Next: slice M2 — C.4 chargeable-weight density-mixing + flat_rate bucket cost.** Adds `CW_{a,g}`, `Wt/Wv` aggregates (C.4a–d inequalities, monotonicity invariant), flat_rate bucket `cost^MAWB = m_a·CW` (+ min_chg/cap) on MAWB-eligible flat arcs, `CW^ub` big-M. This is where consolidation starts paying. Then M3 min_flat_breaks, M4 BSA, M5 tardiness PWL, M6 surcharges. **Deferred, don't lose:** per-MAWB-break cost attribution for hub dwell (objective slice); plan-§6 construction micro-cases (A4a/b, B-series, 3-stop); `model/capacity_manager.md` stub review.
+
+---
+
 ## 2026-05-31 (Session 23 — Air model PDF re-review: PWL grid decision closed + full read-through + 2 bug/structure fixes)
 
 **Trigger.** User doing the PDF re-review of `model/air_freight_routing.tex` from Session 22's RESUME-HERE list. Asked for the critical sections to focus an hour on (with PDF page numbers), then drove three substantive changes. Note: a *separate* Claude session had already landed uncommitted work on top of Session 22 — the C.13 BSA-settlement review, a new `model/capacity_manager.md` design stub, and two `references/` allotment-contract files (Gupta 2008 / Amaruchkul 2018). User confirmed they reviewed that other work; it is committed alongside this session's edits.
