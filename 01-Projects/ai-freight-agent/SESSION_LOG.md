@@ -320,6 +320,42 @@ After M3, opened the M4 data-model decision (M4 introduces a **BSA contract enti
 
 ---
 
+## 2026-06-02 (Session 25 — Air MILP slice M2: C.4 chargeable-weight density mixing + flat_rate bucket cost + C.5c cap)
+
+**Trigger.** "slice M2" after reviewing the full M2–M6 roadmap. Built M2 of `src/components/air_milp.py` — the slice where consolidation starts paying.
+
+**Landed in `air_milp.py`:**
+- **C.4 density mixing** (`_build_c4_density`, tex sec:cw-density-mixing): continuous `CW[a,g]` per MAWB candidate; lower bounds `CW ≥ (1+ε)Σ w_k·x` (C.4a+c) and `CW ≥ Σ v_k·167·x` (C.4b+d) with `Wt/Wv` inlined into the bounds (their equality defs only feed C.4c/d); upper-link `CW ≤ CW^ub·z` (Eq. cw-ub, empty-bucket⇒0). `CW^ub = (1+ε)Σ max(w_k, v_k·167)`. Created for **all** `(a,g)∈M` (the universal family M3/M4 also bill against).
+- **flat_rate bucket cost** (`_build_flat_bucket_cost`, tex sec:lin-bucket): aux `c[a,g]≥0` with `c ≥ min_chg·z` and `c ≥ m·CW`; objective uses `c`. Only generated for `FLAT_RATE` arcs with a catalog entry; min_flat_breaks/per_uld bill in M3/M4.
+- **C.5c per-offer cap** (`_build_c5c_caps`, Eq. C5c): `Σ_{k∈K_a} w_k·x ≤ cap_a` over all riders, when the flat offer specifies a cap.
+- **`RateCatalog.flat: dict[ArcId, FlatRate(m, min_chg, cap)]`**; `MilpParams.dunnage_eps=0.05`; `AirSolution.mawb_chargeable_weight` (CW at optimum for active MAWBs).
+- **Monotonicity post-solve assert** (`_assert_cw_invariant`, tex sec:objective / TEST_PLAN §10): for billed flat MAWBs (`m>0`), recompute `max(Wt,Wv)` from the integer routing and assert `CW` is pinned to it; a miss = a negative-coefficient-on-CW modeling bug, surfaced loudly.
+
+**Tests:** +6 (`test_air_milp.py`), value-checked: flat bucket single HAWB (650), min_chg floor (250), **density mixing CW=283.9 < per-HAWB sum 400.4**, **consolidation-beats-separation** (shared 1-MAWB 1669.5 < split 2-MAWB 2302.0 via distinct temperature), dunnage uplift (+50 at ε=0.05), C.5c cap forces fallback (cap 150→1 fallback, 250→0). **air_milp 13 passed; full suite 79 passed; ruff clean across src/tests/data.**
+
+**Observed (now correct):** consolidation pays — two HAWBs on a shared MAWB density-mix their chargeable weight (dense cargo absorbs light cargo's volumetric slack) and beat separate MAWBs. M1's "optimizer prefers direct legs" caveat is resolved for the flat family.
+
+### Slice M3 — min_flat_breaks (IATA next-break-down round-up) (2026-06-02, same session)
+
+**Landed in `air_milp.py`:**
+- **min_flat_breaks bucket cost** (`_build_min_flat_breaks_cost`, tex sec:lin-bucket): per MFB MAWB, break selector `γ_{a,g,b}` (binary) + bucket weight `BW_{a,g,b}` (continuous [0, M^BW]). Constraints: `Σ_b γ_b = z` (exactly one break iff active); `BW_b ≤ M^BW·γ_b`; `BW_b ≥ break_b·γ_b`; `BW_b ≥ CW − M^BW·(1−γ_b)`. **No `BW_b ≤ CW`** (would ban the round-up case). `M^BW = max(CW^ub, max_b break_b)` — the `max_b break_b` widening is load-bearing (BUG-1, Eq. bigm). Objective gets `Σ_b rate_b·BW_b` (returned as `mfb_terms`).
+- **`RateCatalog.min_flat_breaks: dict[ArcId, list[Break(threshold, rate)]]`**; new `Break` dataclass (`B_a` ordered ascending).
+- **Billing validation reworked** (`_assert_cw_invariant` → `_validate_billing` + `_routed_cw`): the old assert read the `CW` *variable*, which is solver-dependent (CW floats when bucket cost is locally flat — min-charge floor binding, or a break floor above CW). Now recompute `CW = max(Wt,Wv)` **from the realized integer routing** and assert each family's *realized* cost equals its closed form (flat: `max(min_chg, m·CW)`; MFB: `min_b rate_b·max(CW, break_b)`). Robust + directly validates billing. `mawb_chargeable_weight` now reports the routing-derived CW (always correct).
+
+**Tests:** +5 — round-up-to-higher-break ($800 not $900: 90kg, breaks (45,$10)(100,$8); total 950), stay-at-lower-break ($500: 50kg; total 650), weight-dominated above all breaks ($3200: 400kg; total 3350), MFB-family-without-catalog-entry (no bucket cost, total 150), density-mixing-lowers-break-cost (shared CW 283.9, breaks (250,$5)(300,$4) → $1200; total 1450). **air_milp 18 passed; full suite 84 passed; ruff clean across src/tests/data.**
+
+**Next: slice M4 — `per_uld_pivot` + BSA allotment.** Integer `η_{a,g,u}`, `pivot_{a,g}`, `over_c`. C.5 allotment cap `Σ_g η ≤ N_{a,u}`, C.5-act `η ≤ N·z`, C.5b per-ULD `W_u`/`V_u`, C.5c-uld per-offer cap. C.13 BSA settlement: `per_flight` pivot (`r_a·max(CW, π_a·Ση)` via C.13b-1/b-2) vs `equalized` accumulator (`A_c`, `r_c·over_c`, cost^MAWB=0). Catalog: ULD/BSA tables (`N_{a,u}`, `W_u`, `V_u`, `π_a`, `r_a`, settlement basis, `A_c`). Then M5 (tardiness PWL), M6 (surcharges + full objective). **Deferred, don't lose:** per-MAWB-break cost attribution for hub dwell (objective slice); plan-§6 construction micro-cases; `model/capacity_manager.md` stub review.
+
+### M4 schema discussion (end of Session 25) — DECISION OPEN, deep-dive deferred to next session
+
+After M3, opened the M4 data-model decision (M4 introduces a **BSA contract entity** + **ULD-type catalog**, not just per-arc rate fields). Walked the user through three schema options with a shared CX-BSA-out-of-HKG numeric scenario (per_flight = $6000 via pivot floor; equalized = $1500 via allowance overage). Surfaced and corrected a **conceptual conflation**: the user's "pre-buy ULDs, free up to pivot, pay above" merges two opposite-direction levers — **pivot `π`** (per-ULD *minimum charge*, per_flight branch, makes you pay for empty space) vs **allowance `A_c`** (take-or-pay sunk threshold, equalized branch, the actual "free up to X"). Bridge: `A_c ≈ pre-bought-positions × π`, pooled across the contract's arcs.
+
+**User signed off asking for detailed notes to deep-dive next session.** All three options, the full numeric walkthroughs, and the pivot-vs-allowance clarification are captured verbatim in **`docs/design/air_milp_m4_bsa_schema_options.md`** (NEW). Decision NOT made. Drafter's lean recorded in the doc: Opt 3 (per_flight only) now → Opt 1 (contract entity) for M4b; counter-consideration noted if equalized is MVP-pitch-core.
+
+**Next action on resume (in order):** (1) user reads `docs/design/air_milp_m4_bsa_schema_options.md` and picks a schema option; (2) only then build M4 against the chosen schema. Do NOT start M4 code before the schema is chosen.
+
+---
+
 ## 2026-06-01 (Session 24 — Air graph slice 4: per-HAWB subgraph pre-filter, two-pass propagation + 1→8 cascade)
 
 **Trigger.** "where did we left off" → resumed from Session 23 RESUME HERE. Built **slice 4** of `src/components/air_graph.py` (the meatiest remaining piece).
