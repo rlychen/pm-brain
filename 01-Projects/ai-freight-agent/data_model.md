@@ -137,6 +137,8 @@ Routing decisions for two shipments on the same string in the same month are cou
 
 **Graph decomposition for batch solving:** When routing a batch of N shipments, the demand-supply graph can be decomposed before the MILP solve. Two shipments are independent if they share no feasible supply arcs — no common carrier service legs or carrier allocation pools. Independent subsets form disconnected components in the demand-supply intersection graph and are solved separately. This decomposition reduces MILP problem size and enables parallelism. Example: TPEB and FEWB commodities always decompose into independent subproblems.
 
+**Physical schedule substrate (Session 27).** The conceptual arcs above are materialized as a physical `schedule_legs` table (base) + per-mode detail tables (`air_flight_legs`, `ocean_sailing_legs`, `trucking_linehaul_legs`), with on-demand trucking as a leadtime arc (`trucking_ondemand_arcs`), LCL as a sailing overlay (`lcl_consol_legs`), and tendered 3P moves as `rate_card_lanes`. Capacity lives in the per-mode detail tables (air is 2D: weight + volume/ULD). See SQL in §3.3 and the rationale in `synthetic_data_contract.md`.
+
 ---
 
 ## 2. Rolling Horizon Planning
@@ -284,24 +286,200 @@ CREATE TABLE carrier_allocations (
     remaining_teu           INT NOT NULL               -- decremented at booking firm-up
 );
 
+-- Air BSA contract parent (M4 schema decision D1, Opt 1 — Session 27). Groups multiple
+-- air_uld_allocations rows under one contract so an `equalized` allowance pools across the
+-- contract's lanes (cross-lane sum: chargeable(c) = Σ over the contract's allocation rows).
+-- Without this parent, a per-lane allowance double-counts. `per_flight` contracts need no
+-- pooling — allowance_kg / overage_rate_per_kg are NULL for them.
+CREATE TABLE bsa_contracts (
+    id                      UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    tenant_id               UUID NOT NULL REFERENCES organizations(id),
+    carrier_id              UUID NOT NULL REFERENCES carriers(id),
+    settlement_basis        TEXT NOT NULL,              -- per_flight|equalized
+    allowance_kg            NUMERIC,                    -- A_c: pre-paid sunk block, pooled across lanes (equalized only)
+    overage_rate_per_kg     NUMERIC,                    -- r_c: rate charged on weight above A_c (equalized only)
+    rate_per_kg             NUMERIC,                    -- r_a: per_flight settlement rate (was on air_uld_allocations; Session 31 D4)
+    pivot_kg                NUMERIC,                    -- π: per-ULD min billable weight, per_flight floor (moved here Session 31)
+    period_start            DATE NOT NULL,
+    period_end              DATE NOT NULL
+);
+
 -- Air ULD contracted capacity per carrier/schedule
 -- Analogous to ocean BSA: forwarder pre-commits ULD positions on a carrier schedule
 -- at a contracted rate; optimizer fills these before going to spot rate card.
+-- This is the PRODUCTION grain — a contract is negotiated per lane × departure-window. The
+-- SIM (src/scenario_db.py, Session 31) MATERIALIZES each window into concrete legs and re-keys
+-- the allocation to the per_uld_pivot OFFER (offer_id) it covers, so the sim row drops
+-- origin/destination_airport + departure_days + effective_from/to (collapsed into the
+-- materialized offer/leg set) and reaches the physical leg via offer_legs. The Postgres adapter
+-- re-derives the windowed form from the offer set on the swap.
+-- Session 31 D4: rate (r_a) and pivot moved to the bsa_contracts parent (rate_per_kg / pivot_kg);
+-- physical ULD caps (W_u/V_u) live on the uld_types reference table, not per allocation.
 CREATE TABLE air_uld_allocations (
     id                      UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     tenant_id               UUID NOT NULL REFERENCES organizations(id),
     carrier_id              UUID NOT NULL REFERENCES carriers(id),
-    uld_type                TEXT NOT NULL,              -- LD3|LD7|PMC|AKE
-    -- LD3: 4.5 m³ / 1,587 kg  LD7: 11.1 m³ / 4,626 kg
-    -- PMC: 7.5 m³ / 6,804 kg  AKE: 4.5 m³ / 1,497 kg
-    origin_airport          TEXT NOT NULL,              -- IATA airport code
+    uld_type                TEXT NOT NULL REFERENCES uld_types(code),  -- LD3|LD7|PMC|AKE; caps on uld_types
+    origin_airport          TEXT NOT NULL,              -- IATA airport code (production grain; sim materializes)
     destination_airport     TEXT NOT NULL,
-    departure_days          TEXT[] NOT NULL,            -- e.g. ['MON', 'FRI']
+    departure_days          TEXT[] NOT NULL,            -- e.g. ['MON', 'FRI'] (production grain; sim materializes)
     effective_from          DATE NOT NULL,
     effective_to            DATE NOT NULL,
     ulds_per_departure      INT NOT NULL,               -- how many ULDs contracted per flight
-    contracted_rate_per_kg  NUMERIC NOT NULL,           -- all-in contracted rate (includes FSC/SSC)
-    remaining_ulds          INT NOT NULL                -- decremented at booking firm-up
+    remaining_ulds          INT NOT NULL,               -- decremented at booking firm-up
+    contract_id             UUID REFERENCES bsa_contracts(id)  -- D1: groups lanes for equalized pooling (NULL = standalone)
+    -- NOTE: contracted_rate_per_kg + pivot_kg removed (Session 31 D4) -> bsa_contracts parent.
+);
+
+-- ── Physical schedule / capacity substrate (D2 Opt A — Session 27) ───────────
+-- Base table for the three scheduled, capacitated modes (air flight, ocean sailing,
+-- trucking linehaul). Capacity is deliberately NOT on the base — it lives in the per-mode
+-- detail tables because air is 2D (weight AND volume/ULD bind independently). Fixed/contracted
+-- supply (carrier_allocations, air_uld_allocations) and floating supply (spot_rate_quotes)
+-- draw against a leg's detail-table capacity.
+CREATE TABLE schedule_legs (
+    id                      UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    tenant_id               UUID NOT NULL REFERENCES organizations(id),
+    mode                    TEXT NOT NULL,              -- air|ocean|truck_linehaul
+    carrier_id              UUID REFERENCES carriers(id),
+    origin_node             TEXT NOT NULL,              -- IATA / LOCODE / node id
+    destination_node        TEXT NOT NULL,
+    etd                     TIMESTAMPTZ NOT NULL,
+    eta                     TIMESTAMPTZ NOT NULL,
+    ingestion_source        TEXT DEFAULT 'manual',      -- push_api|manual|demand_generator (provenance)
+    external_id             TEXT,
+    created_at              TIMESTAMPTZ DEFAULT NOW(),
+    UNIQUE (tenant_id, external_id)
+);
+
+-- Per-mode detail: air flight leg. 2D capacity (weight + volume/ULD) first-class.
+CREATE TABLE air_flight_legs (
+    schedule_leg_id         UUID PRIMARY KEY REFERENCES schedule_legs(id),
+    flight_no               TEXT,
+    aircraft_type           TEXT,
+    cap_weight_kg           NUMERIC NOT NULL,
+    cap_volume_cbm          NUMERIC NOT NULL,
+    cap_uld                 JSONB,                      -- {LD3: n, PMC: m, ...} position counts by type
+    cfs_cutoff              TIMESTAMPTZ,
+    flight_cutoff           TIMESTAMPTZ,
+    dispatch_cutoff         TIMESTAMPTZ
+);
+
+-- ── Air commercial + ground layer (Session 31) ──────────────────────────────
+-- The air optimizer routes priced OFFERS over the physical leg substrate, not raw legs. An
+-- offer is one priced O→D carriage product (ONE offer = ONE rate; a lane surfaces many offers —
+-- spot/contract/promo/consol/carrier-vs-GSA — each a separate row). The rate STRUCTURE folds onto
+-- the offer (rate_json); the per-offer C.5c weight ceiling is cap_kg; per_uld_pivot offers price
+-- via bsa_contracts (rate_json NULL). ArcId = "AIR:{offer_id}".
+CREATE TABLE offers (
+    offer_id                UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    tenant_id               UUID NOT NULL REFERENCES organizations(id),
+    carrier                 TEXT NOT NULL,              -- marketing carrier of the (through-)AWB
+    rate_family             TEXT NOT NULL,              -- flat_rate|min_flat_breaks|coload_per_kg|per_uld_pivot
+    origin                  TEXT NOT NULL,              -- IATA, = first leg origin
+    destination             TEXT NOT NULL,              -- IATA, = last leg destination
+    cutoff                  TIMESTAMPTZ,                -- raw max(DCO,AMS,ICS2,ACI); HAWB-agnostic
+    uld_max_weight_kg       NUMERIC,                    -- per-ULD cap (per_uld_pivot scope)
+    uld_max_volume_cbm      NUMERIC,
+    rate_json               JSONB,                      -- rate structure; NULL for per_uld_pivot (BSA)
+    cap_kg                  NUMERIC,                    -- C.5c per-offer actual-weight ceiling; NULL=uncapped
+    regime                  TEXT                        -- soft|peak provenance (not a 2nd rate)
+);
+
+-- Offer→leg chain: a direct offer = 1 leg, a through offer = 2+ (overlapping emission).
+CREATE TABLE offer_legs (
+    offer_id                UUID NOT NULL REFERENCES offers(offer_id),
+    seq                     INT NOT NULL,               -- leg order within the offer
+    schedule_leg_id         UUID NOT NULL REFERENCES schedule_legs(id),
+    PRIMARY KEY (offer_id, seq)
+);
+
+-- Origin/dest gateway ground config: CFS↔airport cartage + CFS build-up/deconsol dwell.
+CREATE TABLE gateways (
+    code                    TEXT PRIMARY KEY,           -- IATA gateway airport
+    on_airport              BOOLEAN NOT NULL,
+    cartage_h               NUMERIC NOT NULL,
+    cartage_cost            NUMERIC NOT NULL,
+    cfs_dwell_h             NUMERIC NOT NULL,
+    cfs_handling_cost       NUMERIC NOT NULL
+);
+
+-- Hub ground config: connection/tech-stop dwell + minimum connection time.
+CREATE TABLE hubs (
+    code                    TEXT PRIMARY KEY,           -- IATA hub airport
+    is_cfs_h                BOOLEAN NOT NULL,           -- consolidation hub vs plain tech stop
+    dwell_h                 NUMERIC NOT NULL,           -- time cargo sits (advances the clock)
+    dwell_cost              NUMERIC NOT NULL,
+    mct_h                   NUMERIC NOT NULL            -- min connection time: feasibility threshold (≠ dwell_h)
+);
+
+-- ULD physical-cap reference (global; the C.5b weight/volume caps). air_uld_allocations holds
+-- contracted POSITIONS, this holds the per-type CAPS.
+CREATE TABLE uld_types (
+    code                    TEXT PRIMARY KEY,           -- LD3|LD7|PMC|AKE
+    -- LD3: 4.5 m³ / 1,587 kg  LD7: 11.1 m³ / 4,626 kg  PMC: 7.5 m³ / 6,804 kg  AKE: 4.5 m³ / 1,497 kg
+    w_kg                    NUMERIC NOT NULL,           -- W_u effective payload (C.5b-w)
+    v_cbm                   NUMERIC NOT NULL            -- V_u usable volume (C.5b-v)
+);
+
+-- Per-mode detail: ocean sailing leg. TEU-slot capacity; cfs_cutoff present for the LCL overlay.
+CREATE TABLE ocean_sailing_legs (
+    schedule_leg_id         UUID PRIMARY KEY REFERENCES schedule_legs(id),
+    vessel                  TEXT,
+    voyage_number           TEXT,
+    service_string          TEXT,                       -- ties to carrier_allocations.string_code
+    cap_teu                 INT NOT NULL,
+    cy_cutoff               TIMESTAMPTZ,                -- FCL container-yard cutoff
+    cfs_cutoff              TIMESTAMPTZ                 -- earlier LCL consolidation cutoff
+);
+
+-- Per-mode detail: trucking scheduled linehaul (point-to-point). Trailer cube + weight.
+CREATE TABLE trucking_linehaul_legs (
+    schedule_leg_id         UUID PRIMARY KEY REFERENCES schedule_legs(id),
+    cap_cube_cbm            NUMERIC NOT NULL,
+    cap_weight_kg           NUMERIC NOT NULL,
+    cutoff                  TIMESTAMPTZ
+);
+
+-- On-demand trucking: NOT a scheduled leg (no ETD). Departs decision_time + leadtime_h;
+-- procure-as-needed at a rate. The optimizer chooses it against scheduled linehauls.
+CREATE TABLE trucking_ondemand_arcs (
+    id                      UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    tenant_id               UUID NOT NULL REFERENCES organizations(id),
+    carrier_id              UUID REFERENCES carriers(id),
+    origin_node             TEXT NOT NULL,
+    destination_node        TEXT NOT NULL,
+    leadtime_h              NUMERIC NOT NULL,           -- order-ahead lead time (e.g. 12h, 24h)
+    transit_h_mean          NUMERIC NOT NULL,
+    transit_h_sigma         NUMERIC,
+    rate                    NUMERIC NOT NULL
+);
+
+-- LCL consolidation overlay: rides an ocean sailing leg. Forwarder (as NVOCC) buys containers
+-- on the sailing, resells CBM/kg inside. Earlier CFS cutoff than the FCL CY cutoff.
+CREATE TABLE lcl_consol_legs (
+    id                      UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    tenant_id               UUID NOT NULL REFERENCES organizations(id),
+    sailing_leg_id          UUID NOT NULL REFERENCES ocean_sailing_legs(schedule_leg_id),
+    cfs_cutoff              TIMESTAMPTZ,
+    cap_cbm                 NUMERIC NOT NULL,
+    cap_kg                  NUMERIC NOT NULL
+);
+
+-- Rate-card lane: the terminal-abstract / 3P-tender supply. Carrier routes internally (LCL-style);
+-- we hold a node-to-node rate + transit estimate, never an internal path. This is the supply_ref
+-- target for ABSTRACT route legs we tender out and will not refine to concrete.
+CREATE TABLE rate_card_lanes (
+    id                      UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    tenant_id               UUID NOT NULL REFERENCES organizations(id),
+    carrier_id              UUID REFERENCES carriers(id),
+    mode                    TEXT NOT NULL,              -- truck|air|ocean
+    origin_node             TEXT NOT NULL,
+    destination_node        TEXT NOT NULL,
+    service_level           TEXT,
+    rate                    NUMERIC NOT NULL,
+    transit_h_mean          NUMERIC NOT NULL,
+    transit_h_sigma         NUMERIC
 );
 
 -- Individual shipment (one per cargo movement request)
@@ -316,6 +494,20 @@ CREATE TABLE shipments (
     cargo_kg                REAL,
     cargo_ready_date        DATE,
     delivery_deadline       DATE,
+    -- ── Air sim / 2-FLEX demand attributes (Session 30 promotion) ──────────────
+    -- Introduced by backtest_methodology.md, flexibility_model.md (2-FLEX), and
+    -- scenario_io_and_replay.md §4. These are demand-side, set at generation and
+    -- FROZEN at t=0 (the methodology's non-anticipativity contract). The sim
+    -- materializes the TIMESTAMPTZ time columns as REAL hour-offsets in scenario.db
+    -- (same dialect adaptation as UUID→TEXT); the deadlines are model symbols below.
+    -- NOTE: `tier` here is the DEMAND tier (the TierSpec key, frozen source). It is
+    -- distinct from routes.tier (a per-plan echo) and booking_promise.tier (the
+    -- once-at-tender frozen promise) — three legitimately different copies.
+    tier                    SMALLINT,                  -- service tier 1|2|3 = EXPRESS|STANDARD|DEFERRED; TierSpec key
+    known_at                TIMESTAMPTZ,               -- demand-arrival / reveal time; reveal-view key (known_at ≤ sim_clock)
+    tender_at               TIMESTAMPTZ,               -- irreversible physical-tender lock (CFS receipt); after this a booking can't be reshuffled
+    effective_deadline_at   TIMESTAMPTZ,               -- Δ_k: OTP/predicate-9 binding deadline = min(T_dead, T_SLA); T_SLA = ready + min_transit + sla_offset(tier)
+    backstop_deadline_at    TIMESTAMPTZ,               -- T_dead: optional per-HAWB shipper-contractual backstop; NULL when none bites (then Δ_k = T_SLA)
     service_level           TEXT DEFAULT 'standard',
     status                  TEXT DEFAULT 'unrouted',
     -- unrouted|soft_planned|firm_deadline|firm_planned|in_transit|destination_planning|delivered
@@ -330,18 +522,30 @@ CREATE TABLE shipments (
     UNIQUE (tenant_id, external_id)                    -- dedup push_api ingestion
 );
 
--- Routing decision — one to three candidates (cheapest/fastest/reliable) per shipment
+-- A planning session (Session 27). One run plans one or more shipments and emits route versions.
+CREATE TABLE planning_runs (
+    id                      UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    tenant_id               UUID NOT NULL REFERENCES organizations(id),
+    trigger_type            TEXT NOT NULL,              -- automated|manual
+    initiated_by_user_id    UUID REFERENCES users(id),  -- the human who triggered; NULL for automated runs
+    run_at                  TIMESTAMPTZ DEFAULT NOW(),  -- sim_clock time of the run
+    scope                   JSONB,                      -- subset selection (lanes / shippers / shipment ids)
+    created_at              TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- Routing plan-of-record for a shipment. APPEND-ONLY + VERSIONED (Session 27): each planning run
+-- INSERTs a NEW row (never UPDATE). A shipment is planned many times over its life (~10); each new
+-- route becomes the incumbent. `is_current` flags the single active plan; prior versions are
+-- retained as history. The version sequence (by created_at) with route_legs est-vs-act is the
+-- L3/L4 estimate-vs-actual corpus. Legs promoted out of JSONB into route_legs (below).
 CREATE TABLE routes (
     id                      UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     tenant_id               UUID NOT NULL REFERENCES organizations(id),
     shipment_id             UUID NOT NULL REFERENCES shipments(id),
-    route_type              TEXT,                       -- cheapest|fastest|reliable
-    status                  TEXT DEFAULT 'candidate',
-    -- candidate|soft|firm
-    -- candidate: pre-computed alternative (cheapest/fastest/reliable) not yet selected
-    -- soft: agent-selected tentative plan; can be replanned
-    -- firm: committed to carrier; this leg is locked
-    plan_type               TEXT DEFAULT 'soft',       -- soft|firm (for the selected route)
+    planning_run_id         UUID REFERENCES planning_runs(id),   -- which run produced this version
+    is_current              BOOLEAN DEFAULT TRUE,      -- exactly one TRUE per shipment; new plan flips prior to FALSE
+    route_type              TEXT,                       -- informational only (cheapest|fastest|reliable); not a multiplicity axis
+    plan_type               TEXT DEFAULT 'soft',       -- soft|firm (overall plan state)
     total_cost_usd          NUMERIC,
     transit_days_p50        REAL,
     transit_days_sigma      REAL,                       -- path-level sigma from Monte Carlo
@@ -350,11 +554,10 @@ CREATE TABLE routes (
     risk_level              TEXT,                       -- low|high
     tier                    SMALLINT,                   -- 1|2|3
     otp_risk_days           REAL,
-    legs                    JSONB,                      -- ordered list of legs
-    solver_output           JSONB,                      -- full MILP solution
-    firm_deadline_at        TIMESTAMPTZ,               -- mirrors shipment.firm_deadline_at; when this route must firm
+    solver_output           JSONB,                      -- full MILP solution (per-leg detail in route_legs)
+    firm_deadline_at        TIMESTAMPTZ,               -- when this route must firm
     firmed_at               TIMESTAMPTZ,               -- when route became firm
-    created_at              TIMESTAMPTZ DEFAULT NOW()
+    created_at              TIMESTAMPTZ DEFAULT NOW()  -- version key (latest = incumbent)
 );
 
 -- Per-leg carrier booking
@@ -371,6 +574,34 @@ CREATE TABLE bookings (
     voyage_number           TEXT,
     etd                     TIMESTAMPTZ,
     eta                     TIMESTAMPTZ
+);
+
+-- Legs of one route version (promoted from routes.legs JSONB — Session 27). Each leg carries its
+-- resolution (abstract vs concrete), firmness, the supply it binds to, and BOTH estimated and
+-- actual transit/cost. resolution × firmness are ORTHOGONAL: ABSTRACT+FIRM = tendered to a 3P at a
+-- rate card (carrier routes internally, no path of ours); CONCRETE+EXECUTED = a specific scheduled
+-- leg that ran. "Fully planned" = every leg concrete-bound OR terminal-abstract, not "all concrete".
+-- The est/act columns across versions are the L3/L4 corpus seed.
+CREATE TABLE route_legs (
+    id                      UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    tenant_id               UUID NOT NULL REFERENCES organizations(id),
+    route_id                UUID NOT NULL REFERENCES routes(id),
+    seq                     SMALLINT NOT NULL,          -- order within the route
+    from_node               TEXT NOT NULL,
+    to_node                 TEXT NOT NULL,
+    mode                    TEXT NOT NULL,              -- air|ocean|truck_linehaul|truck_ondemand|dwell|...
+    resolution              TEXT NOT NULL,              -- ABSTRACT|CONCRETE
+    firmness                TEXT NOT NULL,              -- PLANNED|FIRM|EXECUTED
+    supply_ref_type         TEXT,                       -- schedule_leg|ondemand_arc|rate_card_lane|NULL
+    supply_ref_id           UUID,                       -- polymorphic FK to the table named by supply_ref_type
+    carrier_id              UUID REFERENCES carriers(id),
+    est_transit_h           NUMERIC,                    -- at plan time (TT model + rates)
+    est_cost                NUMERIC,
+    act_transit_h           NUMERIC,                    -- realized; NULL until executed
+    act_cost                NUMERIC,
+    act_arrival_at          TIMESTAMPTZ,
+    booking_id              UUID REFERENCES bookings(id),  -- execution-side link, set when leg firms
+    UNIQUE (route_id, seq)
 );
 ```
 
@@ -483,6 +714,25 @@ Shipments enter the platform through three channels:
 | Demand Generator | `demand_generator` | Dev/test only. Generates synthetic but realistic shipment batches on a schedule per `demand_generator_configs`. Not exposed in production. |
 
 All three modes insert into the same `shipments` table with `status = unrouted`. The routing agent treats them identically.
+
+The Demand Generator's input contract is `demand_generator_configs` (dev/test only; the generator is a data source, not a schema — it writes provenance-tagged rows into the same production tables. See `synthetic_data_contract.md`):
+
+```sql
+CREATE TABLE demand_generator_configs (
+    id                      UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    tenant_id               UUID NOT NULL REFERENCES organizations(id),
+    name                    TEXT NOT NULL,
+    seed                    INT NOT NULL,               -- deterministic reproducibility / replay
+    date_range_start        DATE NOT NULL,
+    date_range_end          DATE NOT NULL,
+    lanes                   JSONB NOT NULL,             -- origin/destination pairs in scope
+    volume_dist             JSONB,                      -- cbm/kg distribution params per lane
+    arrival_rate            JSONB,                      -- shipment arrival-process params (per lane/day)
+    service_level_mix       JSONB,                      -- {economy: p, standard: p, express: p}
+    mode_mix                JSONB,                      -- {ocean_fcl: p, ocean_lcl: p, air: p, ...}
+    created_at              TIMESTAMPTZ DEFAULT NOW()
+);
+```
 
 ## 4. Policy Rules and Snapshots
 
@@ -665,6 +915,8 @@ The snapshot captures `rule_ids = [rule-tnt-blk-001, rule-shp-ln-042, rule-ln-pr
 ## 5. Spot Rate Snapshots
 
 Spot/free-sale rates are time-varying market data. Captured periodically (typical: hourly for air, daily for ocean) into immutable snapshots; each routing run binds to the snapshot it consulted for reproducibility, the same pattern as Policy Rules in §4.
+
+> **Session 31 reconciliation (air sim).** This snapshot/quote model is the production *ingestion-side* capture. In the air backtest sim (`src/scenario_db.py`), each captured spot quote is materialized as an `offers` row carrying its rate inline (`rate_json` + `cap_kg`, `regime` provenance) — one offer = one rate — so the sim has **no `spot_rate_quotes` table**; rates live on offers. The Postgres swap reconstructs offers from snapshot quotes at ingest.
 
 ### 5.1 What is and is not stored
 

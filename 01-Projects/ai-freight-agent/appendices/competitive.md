@@ -44,7 +44,7 @@ The following seven capabilities are absent from every major TMS platform (Blue 
 
 | Company | Core AI capability | Autonomy level | Key gap vs. this project |
 |---|---|---|---|
-| **cargo.one** | Multimodal (air + ocean) carrier matching and booking recommendation, MCP-connected, three deployment modes (Co-pilot / Supervised / Autonomous), acquired Cargofive (ocean rates, Feb 2026), launched "AI-native multimodal OS" (Feb 2026), €17M+ March 2026 round, 4M ocean trade lanes | Supervised-to-Autonomous (well-designed trust ramp) | No MILP — intelligent matching, not constraint-optimal routing. **Nearest peer and fastest-moving threat.** |
+| **cargo.one** | Multimodal (air + ocean) **rate aggregation + per-shipment quoting + booking** with RAG/LLM workflow automation, MCP-positioning (no published tool surface as of May 2026), three deployment modes (Co-pilot / Supervised / Autonomous), acquired Cargofive (ocean rates, Feb 2026), launched "AI-native multimodal OS" (Feb 2026 — workflow rebrand + ocean rate substrate, not new optimization), €17M+ March 2026 round, 4M ocean trade lanes, 30,000 forwarder users, 19 of top-20 large forwarders use them for air booking | Supervised-to-Autonomous (well-designed trust ramp for booking flow) | **Methodology = learned-preference ranking + LLM document workflows, NOT MILP. Processes one quote / one booking at a time — no multi-shipment optimization.** Zero overlap with consolidation surface confirmed by deep-dive primary-source research 2026-05-25 (15+ sources, no mentions of consolidation grouping, MAWB vs co-load, container fill, hub-vs-direct, BSA budgeting, DG segregation, or any OR vocabulary). **Adjacent platform / potential booking complement via MCP, not a consolidation-wedge competitor.** |
 | **project44** | Decision Intelligence Platform; Autopilot (launched May 2026) — no-code visual workflow canvas, trigger-based agent execution, pre-built templates, conditional branching, audit log; nearly 1M agent communications in 2025 | Autonomous within policy (progressive trust model) | Visibility and procurement focus; not multimodal routing with allocation constraint modeling |
 | **Pando Pi** | 5 agents: procurement, transportation planning, finance/AP, insights, freight audit | Claims high autonomy; mechanics unpublished | Logistics LLM claims; no formal optimization model published |
 | **Shipsy AgentFleet** | 5 named agents (Clara, Astra, Atlas, Nexa, Vera) for CX, tracking, freight forwarding ops, last-mile, analytics; 8 documented guardrails | 94.2% autonomous task resolution — most detailed published guardrail model | Last-mile focus; not ocean FCL multimodal |
@@ -60,7 +60,7 @@ The following seven capabilities are absent from every major TMS platform (Blue 
 | **Wisor.ai** | Ignite inbox agent: RFQ → quote in 60 seconds | Autonomous for quoting | Commercial/quoting only; no operational planning |
 | **DSV / Tango** | In-house AI platform replacing CargoWise for DSV (world's largest forwarder post-Schenker acquisition, 150,000+ employees). Stated goal: $6B DKK in AI/tech savings by 2030. "AI Factory" for reusable ML services. Not sold externally. | Internal / not a product | Will not buy external routing SaaS. If Tango succeeds, other Tier 1 forwarders validate the build-don't-buy thesis. **Removes Tier 1 from TAM.** |
 | **Optimal Dynamics** | ADP (Approximate Dynamic Programming, Warren Powell / Princeton) for trucking dispatch and planning. Series C from Koch Disruptive Technologies ($90M+). Solves high-dimensional sequential decisions under uncertainty — the same problem class as rolling horizon re-planning. | Autonomous for trucking planning | Trucking-only today. If they expand to ocean / multimodal, they arrive with better mathematical foundations and existing carrier relationships than a startup building from scratch. |
-| **WiseTech / CargoWise** | 24 of top 25 global forwarders. Dec 2025 Value Pack restructuring explicitly includes Container Transport Optimization (CTO) and AI workflow tooling. Current CTO focus: port-to-door container drayage, not end-to-end multimodal. AI assistant (Ace): conversational + HS classification. | Advisory (current); CTO deployment underway | Captive data asset + 17,000 forwarder clients. Heuristic routing module bundled into existing platform = dominant "good enough" attack. **Timeline: 18–24 months.** |
+| **WiseTech / CargoWise** | 24 of top 25 global forwarders. Dec 2025 Value Pack restructuring explicitly includes Container Transport Optimization (CTO) and AI workflow tooling. **CTO scope = port-to-door container drayage planning only — NOT end-to-end multimodal or consolidation.** AI assistant (Ace): conversational + HS classification. | Advisory (current); CTO deployment underway for drayage | Captive data asset + 17,000 forwarder clients. **Current CTO competes with this project's *secondary* surface (drayage / trucking pickup planning), NOT the primary consolidation-planner wedge.** If CTO extends to multimodal consolidation in future Value Pack releases, becomes primary-wedge threat — that's the watch condition. Current scope: secondary-surface overlap. **Timeline to multimodal extension: 18–24 months if it happens.** |
 | **project44** | Decision Intelligence Platform; Intelligent TMS (2025) covering FTL/LTL/ocean/air/intermodal from single UI; Autopilot (May 2026) — no-code visual workflow canvas, trigger-based agent execution; 1,000+ carrier integrations; 4.1% cost reduction in early adopters | Autonomous within policy (progressive trust) | Methodology not disclosed (almost certainly heuristic, not MILP). Distribution and integration depth far exceed a startup's 24-month runway. |
 | **DecisionBrain** | French OR/AI company; MILP-based logistics optimization with hybrid heuristic/exact approaches; enterprise logistics clients; TMS optimization modules | Enterprise delivery | Technically credible MILP alternative. Could be white-labeled or acquired by a TMS incumbent to close the optimization gap overnight. |
 
@@ -233,7 +233,8 @@ But this requires: enough override volume to learn from, correct attribution (ov
 
 ## C.8 Moat Analysis
 
-*Honest assessment of defensibility over the first 36 months.*
+*Honest assessment of defensibility over the first 36 months. Moat mechanics organized
+around the four-layer value gradient are detailed in [`product_thesis.md §3`](../product_thesis.md).*
 
 ### What does NOT hold as a moat
 
@@ -258,21 +259,21 @@ But this requires: enough override volume to learn from, correct attribution (ov
 
 ## C.9 Three Attack Scenarios (18–36 Months)
 
-### Attack 1: cargo.one adds MILP-based ocean routing (12–18 months)
+### Attack 1: cargo.one adds multi-shipment consolidation optimization (12–18 months)
 
-**Mechanism:** cargo.one has four million ocean trade lanes, existing carrier rate feeds, a booking execution layer, fresh funding (€17M+, March 2026), and the capital to hire 2–3 OR engineers. Their current methodology is matching + automation, not MILP. But they have the data foundation and customer relationships.
+**Mechanism:** cargo.one has four million ocean trade lanes, existing carrier rate feeds, a booking execution layer, fresh funding (€17M+, March 2026), and the capital to hire 2–3 OR engineers. Their current methodology is RAG + learned-preference ranking + LLM workflow automation, not MILP. But they have the data foundation and customer relationships.
 
 **Impact if it happens:** They arrive with superior distribution, existing carrier rate feeds, and a booking execution layer we don't have. MILP becomes a feature comparison, not a category distinction. Their sales motion: "same optimization, plus you can actually book through us."
 
-**Probability:** Medium-high. They are explicitly positioning as a multimodal AI OS. The missing piece (MILP formulation) is the cheapest part of the stack to acquire.
+**Probability — revised 2026-05-25: Medium-low (was medium-high).** Deep-dive primary-source research (15+ sources, May 2026) found zero mentions of consolidation, multi-shipment optimization, MILP, or any OR vocabulary across cargo.one's product surface, blog, press, customer case studies, or trade-press coverage. The Feb–Mar 2026 AI-OS launch is a workflow-automation rebrand + ocean rate substrate — not a new optimization product. They are silent on every consolidation/optimization concept; that silence is itself evidence. **Leading indicator to monitor: their Ashby job board for OR engineer / optimization hires.** None visible today (page is JS-only; manual eyeball needed).
 
-### Attack 2: WiseTech bundles routing optimization in CargoWise Value Packs (18–24 months)
+### Attack 2: WiseTech extends CargoWise CTO from drayage to multimodal consolidation (18–24 months)
 
-**Mechanism:** WiseTech ships a routing optimization module — heuristic-based, not MILP, but functionally adequate for 80% of FCL use cases — inside CargoWise in 2027. Existing CargoWise customers get it at low incremental cost via their outcome-based Value Pack billing.
+**Mechanism — revised 2026-05-25:** WiseTech's currently-shipping Container Transport Optimization (CTO) covers drayage planning only (port-to-door container drayage). The 2027 attack scenario is them extending CTO to multimodal routing + consolidation inside CargoWise Value Packs. Existing CargoWise customers would get it at low incremental cost via outcome-based Value Pack billing.
 
-**Impact if it happens:** The sales objection in every enterprise deal becomes "why not just use what's already in CargoWise?" Customers would be paying twice — for CargoWise (now with routing) and for us. This is not hypothetical: WiseTech explicitly named Container Transport Optimization in their December 2025 product announcements, and eliminated 2,000 roles to fund the transition.
+**Impact if it happens:** The sales objection in every enterprise deal becomes "why not just use what's already in CargoWise?" Customers would be paying twice — for CargoWise (now with multimodal routing) and for us. This is the primary-wedge threat scenario. **Note: current CTO scope is secondary-surface (drayage planning) overlap only — see the WiseTech / CargoWise row in C.2.**
 
-**Probability:** High. WiseTech has the engineering budget, the captive data asset, and the distribution. The only uncertainty is timeline — 18 months is possible, 24 months is likely.
+**Probability:** Medium-high for *some* multimodal extension within 24 months. WiseTech has the engineering budget, the captive data asset, and the distribution. They eliminated 2,000 roles to fund the AI transition. The uncertainty is scope: heuristic FCL routing in 18 months is plausible; full multimodal consolidation in 24 months is more speculative.
 
 ### Attack 3: Tier 1 forwarder productizes internal tool (18–36 months)
 

@@ -1,4 +1,4 @@
-At the start of every session: read CONTEXT.md, SESSION_LOG.md, and any approved LaTeX models under `model/` (in that order).
+At the start of every session: read BUILD_STATUS.md, CONTEXT.md, SESSION_LOG.md, and any approved LaTeX models under `model/` (in that order). BUILD_STATUS.md is the canonical built/remaining tracker — read it first for current position and what's next.
 
 Update SESSION_LOG.md continuously as work progresses — add a new entry at the top each session, update it when direction changes, and record where we left off before the session ends.
 
@@ -123,12 +123,19 @@ If a file you are about to write or edit would contain any banned term, stop and
     3. **Update `CONTEXT.md`** if state materially changed — refresh the `RESUME
        HERE` block, the Stage table, the locked-decisions sections; consolidate any
        duplicated blocks accumulated during the session.
-    4. **Sync the Obsidian vault** — mirror the same scope as
+    4. **Refresh `BUILD_STATUS.md`** — the canonical built/remaining tracker. **Full
+       rewrite, not append**: bring "current position," the gates-cleared and
+       component-status tables, the near-term task list, the quality state, the
+       deferred/parked list, and the calendar in line with reality as of this session;
+       **delete anything stale and keep it clean.** (Placed before the sync/commit steps
+       so the refresh is actually captured in the commit — git push must remain last.)
+    5. **Sync the Obsidian vault** — mirror the same scope as
        `~/.claude/projects/-Users-richard-Projects-ai-freight-agent/memory/feedback_vault_sync.md`
-       (PRD, CONTEXT, SESSION_LOG, spec / LaTeX models, key markdown docs) to
+       (PRD, CONTEXT, SESSION_LOG, BUILD_STATUS, spec / LaTeX models, key markdown docs) to
        `~/Documents/PM-Brain/01-Projects/ai-freight-agent/`. Update the
        `feedback_vault_sync.md` `last_synced` date.
-    5. **Git commit and push.** Stage specific files (never `git add .`). Commit
+    6. **Git commit and push.** Stage specific files (never `git add .`; include
+       `BUILD_STATUS.md`). Commit
        message follows the existing pattern: `Session N — brief summary of what
        changed`. Before pushing, **verify the remote repo is still private**:
        run `gh repo view --json visibility -q .visibility` and confirm it returns
@@ -141,7 +148,7 @@ If a file you are about to write or edit would contain any banned term, stop and
        ("no remote configured; local commit only — set up a remote for
        off-machine backup") and do **not** treat it as a failure. Once a remote
        exists, push must succeed before sign-off is considered complete.
-  Sign-off is not complete until all five steps land. If any step fails, surface
+  Sign-off is not complete until all six steps land. If any step fails, surface
   the failure to the user and pause — do not silently skip.
 
 - **Never add admin collaborators to the GitHub repo without the user's

@@ -177,6 +177,29 @@ Full standalone rail optimization (shipper-to-consignee by rail without the ocea
 
 ---
 
+### 3.6 Primary User Surfaces (MVP scope)
+
+Locked 2026-05-25 (Session 18 third continuation) after walking through `docs/forwarder-operations-analysis/day-in-the-life/`. The project's MVP user-surface scope is **two prongs sharing one engine**:
+
+**Prong 1 — Quote desk (customer-facing).** Inbound RFQ (email / portal / WhatsApp / voice) → cost-to-serve enumeration over all feasible paths × eligible supply sources → quote = cost-to-serve + margin function (+ competitor signal where available). High-volume, measurable ROI, in-door wedge. Maps to Persona 1 (front office / commercial).
+
+**Prong 2 — Consolidation planner (internal-facing).** Pipeline of confirmed bookings → MILP solves P1–P5 (grouping, MAWB vs co-load, hub vs direct, cutoff window, compatibility segregation) → published build plan per gateway per day. No incumbent product at mid-size — academic confirmation in [ScienceDirect 2018 air-cargo load-planning review](https://www.sciencedirect.com/science/article/abs/pii/S0377221718306180). Defensibility wedge. Maps to Persona 2 (network ops). Persona 4 (exceptions / re-planning) is the same human in reactive mode; replan UX = planning UX with firm commitments locked.
+
+Both prongs invoke the same intelligence stack: MILP optimizer + transit time estimator + capacity manager + rules engine + graph constructor + density-fit feasibility ML predictor. See `architecture.md` §11 for the five-layer system diagram.
+
+**Surface ordering for everything else:**
+
+- **Drayage / trucking pickup planning = MVP secondary surface.** Route sequencing (VRPTW) + appointment booking + carrier allocation across drayage panel + acceptance-probability priors fed to the planning MILP. Planning work — fits the project's DNA. **Drayage dispatcher** (real-time tender cascade, driver SMS, chassis-flip coordination, gate-time monitoring) is *execution* work — moved to P1 / Phase 7. The planning vs execution distinction is load-bearing: planning surfaces in scope; execution surfaces either out of scope or integrated against. See memory `project_planning_vs_execution_boundary.md`.
+- **KAM = deprioritized.** Judgment-heavy work (relationships, executive trade-offs, account growth). Possible AI surfaces (auto-QBR, at-risk-account flagging, cross-sell signal, account briefing) are amplification not displacement. After MVP.
+- **CFS supervisor = consciously not addressed.** GHA-owned labor, physical judgment calls. Density-fit packing handled inside the consolidation planner's MILP (assignment + ML feasibility, not 3D bin packing — see `architecture.md` §11 and memory `project_density_fit_architecture.md`), not as a separate UI.
+- **Customs persona = integrate-don't-build.** Partner-integration boundary, not a user surface. Every customs AI task is commoditized (HS: Avalara, Zonos, 3CE; doc parse: Expedock, ABBYY; screening: Sayari, Kharon, Descartes Visual Compliance; DG: IATA DG AutoCheck; e-B/L: WaveBL); LCB attestation is legally non-delegable; jurisdictional surface area is enormous. Four data intersection points: (1) cost component for quoting, (2) hard constraints in graph (DG/screening segregation), (3) stochastic feature in transit time estimator (P(customs hold)), (4) event trigger for replan (hold events).
+
+**Architectural positioning.** The system sits as an intelligence layer **above the TMS**, not as a TMS replacement. TMS-agnostic by design — adapter interface to CargoWise (priority 1), Magaya, GoFreight, Riege. Four TMS gaps the project fills: path-based cost-to-serve optimization, stateful shipment graph + model-derived ETA, capacity-aware quoting / BSA budgeting, cross-mode multimodal stitching. None of these are in any TMS by design.
+
+**Related memory:** `project_two_pronged_wedge.md`, `project_intelligence_layer_positioning.md`, `project_density_fit_architecture.md`, `project_customs_integrate_dont_build.md`, `project_core_user_reality.md`.
+
+---
+
 ## 4. Document Map
 
 The PRD has been decomposed into specialist files by change frequency and concern. This document is the strategic index.
@@ -184,6 +207,7 @@ The PRD has been decomposed into specialist files by change frequency and concer
 | File | Contents | When to read |
 |---|---|---|
 | **`PRD.md`** (this file) | Executive summary, problem statement, modes in scope, differentiation requirements, open questions | Strategic framing; always start here |
+| **`product_thesis.md`** | Durable product thesis: the four-layer value gradient (planner → replan loop → capacity controller → market intelligence), where the savings actually are (replan), moat mechanics (data flywheel, two cold-starts, encoded domain judgment), build sequencing, deck/GTM positioning | Long-arc strategy and moat; source the deck's moat slide pulls from |
 | **`agent_design.md`** | AI-native design philosophy, autonomy model, confidence tiers, guardrails, deployment modes, routing triggers, agent capabilities, agent architecture (LangGraph, hierarchical pattern, HITL, capability registry) | Agent behavior, trust model, architecture decisions |
 | **`data_model.md`** | Supply and demand model, graph G(N,A), arc schemas, container specs, string allocation, rolling horizon planning, customer and tenant entity model (SQL schemas, user roles, shipment lifecycle) | Data structures, database schema, graph formulation |
 | **`ui_spec.md`** | Look and feel, color system, typography, screen inventory, persona views, agent action feed, mobile philosophy, wireframes (6 screens), interaction design decisions, agent reasoning transparency | UI/UX design, frontend implementation |
