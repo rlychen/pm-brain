@@ -221,3 +221,120 @@ at the peak cell, size `R` for CI half-width `< L2/4`); M-B8 (pre-register the r
 M-B9 (report the `known_at` distribution; state fixed-N as an L2-deflating simplification); + scope caveats
 (disruption-recovery is the larger real driver — run the §6 recourse sensitivity before claiming the air thesis
 *fully* proven; ready-time / customs-hold variance zeroed by the deterministic-headline scope).
+
+## 13. Capacity & pricing refinement — independent network-supply model (APPROVED v4, Session 35, 2026-06-13)
+
+**Status: APPROVED (Session 35).** Governing for the F1 build. Supersedes D-A10, D-A12 (fallback),
+D-A18–D-A21; adds D-A23, D-A24. Three critique rounds folded (v1 circular-supply → v2 → v3 → v4); final
+convergence verdict APPROVE-WITH-MINOR-EDITS, edits applied.
+
+**Framing (corrects two v0.1 errors).** (1) κ as a single global scalar with contracted-always-cheaper is
+too narrow. (2) More fundamentally, **supply must NOT be derived from the realized demand** — that is
+circular and erases the supply/demand mismatch the optimizer exists to resolve. A forwarder buys contracted
+blocks **ahead**, on forecast and carrier relationships; today's actual cargo does not match. The mismatch
+— idle cheap capacity on some lanes, spill on others — **is** the problem, and the source of replan value.
+Supply is generated **independently of demand**, across the whole network; the optimizer routes cargo to
+wherever the contracted / spot / fallback mix is cheapest.
+
+**The network & demand — D-A24 (LOCKED, S35): region→region routing is committed scope.** The lane grid =
+(origin gateways × dest gateways); each lane carries its daily flights. A HAWB is **region-O → region-D**
+(e.g. Shanghai-area → LA-area): its **origin airport, dest airport, lane, and flight are optimizer
+decisions**, driven by a **per-airport trucking-cost matrix** (cost from the HAWB's true pickup/delivery
+point to each candidate origin/dest airport) + air price + capacity. **This is a committed scope expansion**,
+not optional — the fixed-lane (`DEMAND_LANES`, single origin/dest per HAWB) model is retired. The build
+carries three mandatory pieces: **(1)** a per-airport trucking-cost matrix on the HAWB (replacing the single
+`pickup_cost`/`delivery_cost` scalars); **(2)** **multi-origin/multi-dest subgraph construction** — each
+HAWB's subgraph spans every candidate origin×dest airport pair in its regions, with airport-pair-specific
+arc IDs; **(3)** a **tractability re-check** at instance size before the κ×α sweep is trusted. F1 does not
+proceed on fixed lanes.
+
+**Three supply sources per flight.**
+| source | capacity | price |
+|---|---|---|
+| **contracted** (BSA) | **integer ULD positions `N_f`** (take-or-pay), drawn | contracted base rate, per-ULD pivot (C.13) |
+| **spot** | **chargeable-weight cap** (drawn) — new per-arc CW-sum constraint | base rate × `m`, `m` ~ two-sided band |
+| **fallback** | unlimited | **1.5 × the worst realistic spot route** (route-based, not a single rate) |
+
+**Decisions — APPROVED (supersede D-A10, D-A18, D-A20, D-A21; amend D-A12; the v1/v2 `cap_a`/SE/`peak_demand`
+machinery is WITHDRAWN):**
+
+- **D-A18 (rev v4) — supply is an independent INTEGER network draw.** Per-flight contracted capacity =
+  **integer ULD positions**, drawn from its **own `supply` RNG sub-stream, never reading the demand draw**
+  (new stream — F8; today allotment sizes ride the `rates` stream, which must change so κ/α don't couple to
+  rate draws). Knobs: **(a) κ = network tightness** — `total_N = round(E[Σ_k SE_k] / κ)`, where
+  **`E[Σ SE_k]` is the analytic mean of standalone slot consumption `SE_k = max(w_k/1500, v_k/4.5)`** over the
+  cargo density-mix distribution — a **closed-form constant** (reads zero demand draws → CRN), and the
+  explicit **no-consolidation upper bound** on slot demand (consolidation only lowers true slots, so κ is a
+  conservative tightness). **(b) concentration α** — per-flight counts ~ `Multinomial(total_N, p)`,
+  `p ~ Dirichlet(α)` (low α lumpy → severe local mismatch even at κ=1; high α even). Per-lane/flight tightness
+  **emerges** from random supply vs where demand lands. **At proof scale `total_N` is small (~10 over dozens
+  of flights), so κ is swept on a COARSE INTEGER LADDER, not a smooth continuum** — the smooth (κ,α) plane is
+  a forwarder-scale property (§11 stress test). Headline reported on the (κ,α) plane. **Under D-A24, κ indexes
+  NETWORK tightness only** — where the mismatch actually bites is an *emergent* (α × per-airport trucking
+  matrix) property, so the tractability re-check must report **per-airport binding-rate**, not a network
+  average that hides slack airports. **Also report realized post-consolidation occupancy** alongside each κ
+  label (since `E[Σ SE_k]` is the *no-consolidation upper bound*, a cell labeled κ=1 is actually *looser* than
+  unit-tight after consolidation — a conservative bias that understates L2, never inflates it). `[CAL]` κ
+  ladder, α, the supply distribution.
+
+- **D-A19 (rev v4) — two-sided spot (capped); fallback = 1.5× worst-spot-route.** Each flight carries a
+  **spot capacity** (drawn cap) at rate = base × `m`, `m` from the sourced two-sided band (~0.85 soft … ~1.18
+  peak; memory `reference_air_spot_contract_ratio`), drawn from the supply stream. The spot cap is a **new
+  explicit per-arc constraint `Σ_k cw_k·x_{k,a} ≤ cap^spot_a`** summed over the arc's riders — **NOT** a
+  reuse of C.5c (which caps *actual* weight and assumes a per-group CW var that coload spot offers do not
+  build); it bills on `cw_k` exactly as coload already does. **Fallback** is unlimited at
+  **`1.5 × [top-spot-rate · CW_k · max-air-legs + the HAWB's full ground/trucking chain]`** — 1.5× the *worst
+  realistic spot route*, where **`max-air-legs` is graph-derived** (`max` over HAWBs of the air-leg count in
+  `A_k`, computed from the built graph — not a literal `2`, which D-A24's expanded grid could under-bound) —
+  so it **dominates every real route's total cost** (a single-rate `1.5×` would not
+  dominate a circuitous multi-leg+trucking route), while staying well-conditioned (no $40k/$1M). **Amends
+  D-A12** (which locked `2× worst-feasible-route` → now `1.5× worst-spot-route`). Feasibility comes from the
+  fallback arc, not infinite spot — killing the "dump on cheap infinite spot" trivialization that would zero
+  reshuffle value at high α.
+
+- **D-A20 / D-A21 — WITHDRAWN.** Integer ULD positions mean the **existing C.5 / C.5b two-dimensional
+  allotment is the contracted-capacity gate as-is**: `Σ w_k x ≤ 1500·η`, `Σ v_k x ≤ 4.5·η`, `η ≤ N_f`. It
+  already rations **weight and volume together**, so the original "weight-only kg cap can't ration volume"
+  defect (an artifact of the continuous C.5c approach) **dissolves**. No SE constraint, no `cap_a`, no
+  suppress-C.5b, no occupancy floor. The κ knob is simply the **drawn integer `N_f`** per flight, replacing
+  `n_uld = max(1, round(2·scale))`. **CW stays only in billing** (C.13b), unchanged. **Invariant (F7):**
+  `BsaContract.cap == {}` for all contracts in the headline scenario — the weight-only `C.5c-uld` secondary
+  cap must never be populated on a contracted arc (asserted in the generator + a test), so the withdrawn
+  machinery cannot leak back.
+
+- **D-A23 (keep) — M₀ is a competent single-pass baseline.** M₀ **optimally consolidates each cycle's
+  newly-revealed HAWBs under a deterministic tie-break order `(tender_at, tier, shipment_id)`** but never
+  disturbs prior-cycle commitments; M₁ may reshuffle the whole open book. So `L2 = C(M₀) − C(M₁)` measures
+  **cross-cycle reshuffling (= replanning)**, not within-batch consolidation a naive greedy would leave on
+  the table; the deterministic tie-break keeps `C(M₁') == C(M₀)` exact (D-A11), not contaminated by
+  path-dependence. **Report the fraction of draws with L2 = 0** as a diagnostic (if large, the arrival
+  permutation — not the engine — is driving the result). *(Sharpens §4 / D-A11.)*
+
+- **D-A10 (rev v4) — dedicated control cell retired; the sweep's loose corner is GATED as the null.** No
+  separately-constructed control instance. Instead the **abundant-capacity × even-supply × early-arrival
+  corner of the (κ,α,λ) sweep — already computed — carries a pre-registered pass condition: `|L2| < CI`
+  there** (a regime where replan must NOT help). That restores falsifiability at **zero extra construction**.
+  The regret floor `C(π_hind) ≤ C(M₁)` (D-A13) is retained but **only as a labeled integration self-check** —
+  it holds **by construction** (π_hind has the superset full-information feasible set), so it catches *bugs*,
+  not a false thesis, and is **not** the falsifiability guard. Directional credibility additionally reads off
+  the full (κ,α,λ) sweep shape.
+
+**Unchanged invariants.** D-A16 frozen-across-arms applies to the **drawn integer network capacity vector** —
+**bit-identical across `H₀/M₀/M₁/M₁'/π_hind`**, computed once in generation, persisted, read-only (no arm
+recomputes it). D-A12 reshuffle decomposition (with the fallback amendment above). CRN **three-stream
+separation (demand / supply / rates each own RNG sub-stream)** — varying κ or α must leave the demand draw
+**byte-identical** (hard-gated test). **Consolidation coherence (F5, B1=A):** every MAWB-candidate arc is a
+**single physical airport-pair flight** (arc IDs airport-pair-specific, never region-level), and every rider
+reaches that arc's tail airport via a **priced trucking arc** — asserted by an invariant/test, so region→region
+routing can't consolidate cargo that departs different airports onto one MAWB.
+
+**Build implication for F1.** *Generator:* independent integer network-supply draw (κ + α multinomial, **own
+`supply` RNG stream**); per-airport trucking matrix + region-O→D demand + multi-O/D subgraphs (B1=A); capped
+spot (per-arc CW-sum constraint, rate = base × m) + fallback @ 1.5× worst-spot-route; density-mix cargo;
+retire `capacity_scale` / `n_uld`-as-κ; namespace arc keys (airport-pair-specific). *MILP:* **reuse C.5/C.5b
+as the contracted gate** (feed the drawn integer `N_f`; assert `BsaContract.cap=={}`); add the **spot
+per-arc CW-sum cap** (new constraint, not C.5c); route-based fallback pricing; region routing in graph-gen.
+*Tests:* supply independent of demand (vary κ/α ⇒ demand byte-identical); capacity vector frozen across arms;
+C.5b binds correctly in 2D; spot CW cap binds; fallback dominates every real route; M₀ deterministic; **loose
+corner `|L2|<CI` gate**; consolidation-coherence invariant; tractability at region→region size; static path
+byte-identical.

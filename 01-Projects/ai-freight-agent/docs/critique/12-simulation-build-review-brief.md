@@ -238,17 +238,43 @@ non-CRN axis.
 
 ## § Numeric walkthroughs (F1 / F2 / F3)
 
-> **⚠ CLARITY TODO (revisit S34).** The user reviewed the explanation below and found it **still not
-> clear enough** — rewrite tomorrow with clearer, more step-by-step worked examples (and likely a
-> diagram for F2's through-lane case). The numbers here are correct and are the record to build the
-> clearer version from. Substrate/config values used: 30 HAWBs, 6 lanes, 7 days; HAWB weight ~
-> triangular(50, 1200, 300) → mean ≈ 517 kg; LD3 = 1500 kg; book-lead `B ∈ [24, 72]`h
-> (mean 48 ± 24); `cx_hkg_lax` dep 28 / cutoff 28; `cx_hkg_ord` dep 30 / cutoff 28; `mu_pvg_hkg`
-> dep 12 / cutoff 14; `mu_pvg_lax` dep 18 / cutoff 14.
+### Shared picture — what the proof measures, and where each finding breaks it
 
-### F1 — κ is quantized (can't tighten/loosen smoothly)
+The replan-savings proof sweeps a 2-D grid of scenarios and, in every cell, reports **one number**:
 
-`n_uld = max(1, round(2.0 * capacity_scale))`, Python `round` = round-half-to-even:
+```
+   L2  =   C(M₀)    −    C(M₁)
+         no-replan      open-book
+         (greedy pin)   re-optimize
+```
+
+The grid's two axes:
+
+- **κ (capacity tightness)** — how scarce the contracted slots are relative to demand. Slack → tight.
+- **λ (arrival lateness)** — how late, relative to the cutoff, demand is revealed to the planner.
+
+The claim under test: **L2 grows as capacity tightens (↑κ) and as demand reveals later (↑λ), and L2 ≈ 0
+when capacity is abundant.** Each of the three BLOCKING findings breaks one piece of that machinery:
+
+| Finding | What it breaks | One-line symptom |
+|---|---|---|
+| **F1** | the **κ axis** | capacity moves in integer-ULD jumps → no smooth dial, no reachable binding *or* abundant cell |
+| **F2** | the **λ / timing axis** | `known_at` anchored to the wrong cutoff → reveal-to-tender lead `B` mis-measured (~14h on through lanes) |
+| **F3** | the **decision rule** on L2 | even on a clean grid, a trivially-small L2 "passes" and a rigged-favorable L2 can be the headline |
+
+All numbers below use the S33 substrate: **30 HAWBs, 6 lanes, 7 days**; HAWB weight ~ triangular(50, 1200, 300)
+→ mean ≈ **517 kg**; one LD3 ULD = **1500 kg**; book-lead `B ∈ [24, 72]`h (mean 48 ± 24).
+
+---
+
+### F1 — the κ axis is quantized: capacity can't be tightened or loosened smoothly
+
+**Claim.** Slot capacity is set by an integer ULD count, `n_uld = max(1, round(2.0·capacity_scale))`
+(`air_generator.py::_build_rate_catalog`). That integer is the *only* knob on the κ axis, and it has three
+defects that compound.
+
+**Step 1 — see the quantization.** Python's `round` is round-half-to-even, so the `capacity_scale` knob lands
+on capacity in lumpy 1500 kg steps:
 
 | `capacity_scale` | `2·scale` | `round` | `n_uld` | cap/day |
 |---|---|---|---|---|
@@ -259,45 +285,131 @@ non-CRN axis.
 | 1.0 | 2.0 | 2 | 2 | 3000 kg |
 | 1.5 | 3.0 | 3 | 3 | 4500 kg |
 
-- **Dead zone:** `capacity_scale` 0.3→0.7 changes nothing (1 ULD), then a 1500 kg jump at 0.75 → the
-  L2-vs-κ curve is a step artifact.
-- **No binding cell at this demand:** default `scale=1.0` → 3000 kg/day, but HKG lanes see ~0.7 HAWB/day
-  at ~517 kg. To *bind* 3000 kg needs ~6 HAWBs on one CX departure; at 0.7/day ≈ never. Even the 1500 kg
-  floor needs ~3 same-day. So capacity is ~always slack regardless of the knob.
-- **Fix (continuous κ = demand ÷ slots):** if 3 HAWBs target `cx_hkg_lax#d2` totaling 1,600 kg, set
-  `cap_a = peak_demand / κ`: κ=1.0→1,600 kg (exactly binding); κ=0.8→1,280 (oversubscribed, 320 kg spills);
-  κ=2.0→3,200 (slack = negative control). Continuous, monotone, placeable.
+**Step 2 — defect (a), dead zones.** Sweeping `capacity_scale` 0.3 → 0.7 changes *nothing* (still 1 ULD, 1500
+kg); then it jumps a full 1500 kg at 0.75. An L2-vs-κ curve built on this knob is a step function — flat, flat,
+cliff. That's an artifact of integer rounding, not a tightness response.
 
-### F2 — `known_at` anchored to the wrong / degenerate cutoff
+**Step 3 — defect (b), floored at 1.** `max(1, …)` means you can never go below one ULD = 1500 kg/day. You
+cannot ration capacity into a genuinely binding regime at the resolution the sweep needs.
 
-`known_at = cutoff(d*) − B`; `L_cut = dep − cutoff` is load-bearing.
+**Step 4 — defect (c), demand never reaches even the floor.** Each HKG lane sees ≈ 30 ÷ 6 ÷ 7 ≈ **0.7 HAWB/day**
+at ~517 kg. To fill one ULD (1500 kg) needs ~3 HAWBs on the *same* departure; at 0.7/day that essentially never
+happens. So at default `scale=1.0` (3000 kg/day) capacity is wildly slack — and even at the 1500 kg floor it's
+still slack. **There is no reachable binding cell, and no way to separate "abundant" (the negative control) from
+"tight" — the entire κ axis collapses to one regime.**
 
-**(a) Degenerate substrate cutoffs.**
-- `mu_pvg_hkg`: dep 12, cutoff 14 → `L_cut = −2h` (cutoff *after* departure — impossible).
-- `cx_hkg_lax`: dep 28, cutoff 28 → `L_cut = 0` (zero lead) — and `_target_offer` picks this BSA offer as
-  `d*`, so an HKG→LAX HAWB gets `known_at = max(0, 28 − B)`, B∈[24,72] → `known_at ∈ [0, 4]`h, anchored to a
-  zero-lead cutoff.
+**The fix — define κ as a continuous ratio, then size capacity to hit it.** Make κ a real dial,
+`κ = peak concurrent demand ÷ contracted slots`, and size the slots from the demand the generator actually
+produced:
 
-**(b) Wrong cutoff for through lanes.** A PVG→ORD HAWB:
-- `_origin_offers_by_day` keys on origin PVG → `{mu_pvg_lax, mu_pvg_hkg}`, both cutoff 14, neither contracted
-  → `d*` cutoff = **14** → `known_at = 14 − B`.
-- But it routes PVG→HKG (`mu_pvg_hkg`) → HKG dwell → **HKG→ORD on the CX BSA** (`cx_hkg_ord`, cutoff **28**).
-  The scarce-capacity decision fires at **28**.
-- So reveal-to-binding-decision lead = `28 − known_at`, but `B` was drawn against 14 → **`B` understated by
-  14h** for through lanes; λ compresses toward the origin, not the binding, cutoff.
-- **Fix:** cutoff `= dep − L_cut` (L_cut>0, e.g. 4h → `cx_hkg_lax` cutoff 24, `mu_pvg_hkg` cutoff 8); anchor
-  `d*` to the binding contracted leg (CX HKG→ORD cutoff), not the earliest origin offer.
+> **Worked example.** Suppose 3 HAWBs target the `cx_hkg_lax#d2` departure, totaling **1,600 kg**. Set
+> `cap_a = peak_demand / κ`:
+> - κ = 1.0 → cap = 1,600 kg → **exactly binding** (demand == capacity)
+> - κ = 0.8 → cap = 1,280 kg → **oversubscribed**: 320 kg must spill to spot/roll (a tight cell)
+> - κ = 2.0 → cap = 3,200 kg → **slack** → the negative-control cell that must show L2 ≈ 0
 
-### F3 — no symmetric, pre-registered null (can't demonstrably fail)
+κ is now continuous, monotone, and placeable anywhere on the axis. `n_uld` survives only as a physical billing
+integer, decoupled from κ. (`BsaContract.cap` / `FlatRate.cap` are already plumbed through persist/load — they're
+just never set.)
 
-- **Loose rule lets junk through:** suppose peak-cell `L2_reshuffle = $1,200`, 95% CI `[$300, $2,100]`,
-  `C(M₀) = $90,000`. CI excludes 0 → "passes" today. But that's 1.3% (lower bound 0.3%) — trivial. With a
-  pre-registered floor `τ = 2% of C(M₀) = $1,800`, it **fails** ($300 < $1,800) → "thesis unsupported."
-- **Favorable knobs need a guard:** independent (headline, D-A9) `L2 = $800` vs coupled (upper bracket)
-  `L2 = $5,000`. Nothing structurally stops reporting the $5,000.
-- **Fix → D-A17:** negative control must show `|L2| < CI` at abundant κ (else *reject the build*); peak cell
-  must show CI lower bound `> τ` AND reshuffle-share ≥50% (else *thesis unsupported*); `L2(κ)` monotone;
-  `cell_role` field with `tier_coupled_arrival=True ⇒ role=upper_bracket` (bars the favorable number from the
-  headline).
-- **Dependency chain:** F3 needs F1 (no "peak cell" without a real κ axis); F1's binding cell needs F4
-  (load the capacitated lanes). Sequence: **F1 → F4 → F2 → F3/D-A17**.
+---
+
+### F2 — the cutoff anchor is broken: `B` is measured against the wrong clock
+
+**Claim.** The whole arrival stream hangs off one equation:
+
+```
+   known_at  =  cutoff(d*)  −  B
+```
+
+`known_at` is when the planner first sees the HAWB; `B` is the reveal-to-cutoff lead — the **information-timing
+lever the proof sweeps** (it's what λ compresses). So *which cutoff* `d*` anchors to decides what `B` actually
+measures. Two things are wrong.
+
+**Facet (a) — the substrate cutoffs are degenerate.** A cutoff must precede its departure
+(`L_cut = dep − cutoff > 0`). The S33 substrate violates this:
+
+| offer | dep | cutoff | `L_cut = dep − cutoff` | problem |
+|---|---|---|---|---|
+| `mu_pvg_hkg` | 12 | 14 | **−2h** | cutoff *after* departure — impossible |
+| `cx_hkg_lax` | 28 | 28 | **0h** | zero lead — and `_target_offer` picks this BSA as `d*` |
+
+For an HKG→LAX HAWB, `d* = cx_hkg_lax` (cutoff 28), so `known_at = max(0, 28 − B)` with B∈[24,72] →
+`known_at ∈ [0, 4]`h. The HAWB is "revealed" essentially at t=0, against a zero-lead cutoff — there's no
+meaningful lead window for λ to compress.
+
+**Facet (b) — through lanes anchor to the wrong cutoff** (the load-bearing one). Walk a **PVG→ORD** HAWB
+through both clocks:
+
+```
+          d* anchors HERE                         binding decision HERE
+          (origin cutoff)                         (hub BSA cutoff)
+                │                                         │
+   t=0          │ 14                            28        │ 30
+    ●───────────┼──────────────────────────────┼─────────┼────────▶  time (h)
+    │           │                              │         │
+ known_at    mu_pvg_hkg                  cx_hkg_ord    cx_hkg_ord
+ = 14 − B    cutoff = 14                 cutoff = 28   dep = 30
+             (PVG origin offer)          (HKG→ORD BSA = the scarce slot)
+
+  route:  PVG ──mu_pvg_hkg──▶ HKG ──dwell──▶ HKG ──cx_hkg_ord──▶ ORD
+                (spot leg)                        (CONTRACTED, capacitated)
+```
+
+Step by step:
+
+1. `_origin_offers_by_day` keys `d*` on the **origin gateway, PVG** → candidates `{mu_pvg_lax, mu_pvg_hkg}`,
+   both cutoff **14**, neither contracted. So `d*` cutoff = 14 → `known_at = 14 − B`.
+2. But the HAWB routes PVG→HKG→ORD, and the **scarce contracted capacity it competes for is the CX HKG→ORD BSA,
+   cutoff 28.** That's where the irreversible tender / slot decision actually fires.
+3. So the real reveal-to-binding-decision lead is `28 − known_at`, yet `B` was drawn against **14** → **`B` is
+   understated by 14h** for through lanes, and λ compresses toward the *origin* cutoff, not the binding one.
+
+**The fix.**
+- Derive every cutoff as `cutoff = dep − L_cut` with a sourced forwarder-consol `L_cut > 0` (e.g. 4h →
+  `cx_hkg_lax` cutoff 24, `mu_pvg_hkg` cutoff 8). Methodology §10 already specifies this form; the substrate
+  (`tpeb_air_instance.py` ~L146–183) doesn't honor it.
+- Anchor `d*` to the HAWB's **binding contracted leg** (the CX HKG→ORD cutoff), not the earliest origin offer.
+  Extend the pass-2 `earliest_arrival` call to also return the binding air arc on the min-arrival path, and
+  anchor to *its* cutoff.
+
+---
+
+### F3 — the null isn't symmetric or pre-registered: the test can't demonstrably fail
+
+**Claim.** D-A10's null ("the peak-cell L2 CI straddles 0") can't do its job, in two distinct ways — both let
+junk through.
+
+**Failure 1 — a trivially small L2 "passes."** The current rule is one-sided: it only asks "does the CI exclude
+0?", with no floor on *how big* L2 must be.
+
+> **Worked example.** Peak cell measures `L2_reshuffle = $1,200`, 95% CI `[$300, $2,100]`, against
+> `C(M₀) = $90,000`.
+> - **Today:** CI excludes 0 → "passes." But $1,200 is **1.3% of cost** (CI lower bound 0.3%) — commercially
+>   meaningless.
+> - **With a pre-registered floor** `τ = 2% of C(M₀) = $1,800`: the test asks "is the CI *lower bound* > τ?" →
+>   `$300 < $1,800` → **fails → thesis unsupported.** That's the test doing its job.
+
+**Failure 2 — a rigged-favorable L2 can be published as the headline.** The favorable knobs
+(`tier_coupled_arrival=True`, `lambda_compress` stacking) are reachable from the same generator call, with
+nothing structurally stopping a coupled/compressed cell from being reported *as* the headline.
+
+> **Worked example.** The independent draw (the D-A9 headline) gives `L2 = $800`. Turning on tier-coupling
+> (EXPRESS-late / DEFERRED-early — a deliberately favorable arrival shape) gives `L2 = $5,000`. Nothing today
+> bars reporting the $5,000 as "the air replan savings." D-A9 is honored only by a *default value*, not by
+> structure.
+
+**The fix → fold as D-A17 (a symmetric, pre-registered null).** Pre-register *both* tails before running:
+
+- **Negative control** (abundant-κ cell): must show `|L2_reshuffle| < CI` — capacity is slack, replanning can't
+  help. If it shows savings → **reject the build** (the sim is manufacturing value).
+- **Positive claim** (peak cell): CI **lower bound > τ** (pre-registered min effect size, e.g. 2% of C(M₀))
+  **AND** reshuffle-share ≥ 50%. Else → **thesis unsupported.**
+- **Monotonicity:** `L2_reshuffle(κ)` non-increasing in κ (tighter ⇒ more savings).
+- **`cell_role` guard:** add `cell_role ∈ {negative_control, peak, headline, upper_bracket}` to `ArrivalConfig`,
+  persist it to `config.json`, and assert at scenario-write time that `tier_coupled_arrival=True ⇒
+  role=upper_bracket` — so the favorable number is *structurally barred* from being the headline.
+
+**Why the fold order is F1 → F4 → F2 → F3.** F3's "peak cell" and "negative control" presuppose a real κ axis
+(F1) with capacitated lanes carrying enough demand to bind (F4); only then is the cutoff/timing de-biasing (F2)
+meaningful; and D-A17's decision rule is written against that fixed grid.

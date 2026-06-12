@@ -1,6 +1,6 @@
 # BUILD STATUS — AI Multimodal Freight Routing Agent
 
-**Last refreshed:** 2026-06-10 (Session 33 — λ arrival-stream generator + 2-FLEX BUILT; 4-agent build critique run)
+**Last refreshed:** 2026-06-13 (Session 35 — F1 REDESIGN: independent network-supply model + region→region routing; `arrival_only_replan_methodology.md` §13 APPROVED v4. No code.)
 
 **How to use this doc.** The canonical dashboard of the full plan: what is built, what is
 left. **Read it first on session start.** **Refreshed FULLY at every sign-off — a full
@@ -14,34 +14,29 @@ CONTEXT.md (RESUME HERE).
 
 - **Strategy:** go vertical on **AIR** to the **replan-savings proof** (the load-bearing number in
   `product_thesis.md`); the substrate it forces into existence is reused by every mode.
-- **Phase:** 2 (Component Builds), air slice.
-- **Just finished (Session 33):** the **λ arrival-stream generator + 2-FLEX**, in four green slices
-  (191 passed, ruff clean): (1) **2-FLEX core** `src/components/flexibility.py` (`Tier` / single-source
-  `TierSpec` / `classify` / `cw_flex`, ordering invariants at import); (2) **daily substrate**
-  `build_tpeb_daily(D=7)` (tiles TPEB offers at 24h, `build_tpeb_instance` untouched); (3) **λ arrival
-  stream** `air_generator.py` Part B (`ArrivalConfig`/`generate_arrival_instance`/`HawbArrival`; `d*`
-  cutoff-anchored `known_at`; tier-derived `Δ_k` via new `air_graph.earliest_arrival`; headline lateness
-  tier-INDEPENDENT, D-A9); (4) **persistence** (`scenario_io` arrival columns + `write_arrival_scenario`;
-  reveal view works). Then ran the **methodology-§11 4-agent BUILD critique → `docs/critique/12`**.
-- **Critique-12 result:** soundness core CLEAN in code (D-A9 / D-A13 walk≡scalar / no lookahead / no
-  double-spend / CRN). **3 convergent BLOCKING** (F1 κ-axis still the retired integer ULD count; F2 cutoff
-  anchor broken; F3 no symmetric null → D-A17) + MATERIAL (F4 only 2/6 lanes capacitated & demand-starved;
-  F5 `cw_flex` t=0 persistence gap; F6 DEFERRED slack manufactures flexibility) + MINOR (F7 tractability;
-  F8 `t_dead_prob` CRN). **No code fixes applied yet** — paused for user go.
-- **▶ Next: (a) rewrite the F1/F2/F3 numeric walkthroughs clearer** (user found them unclear — `docs/critique/12`
-  § Numeric walkthroughs), **then (b) fold F1 → F4 → F2 → F3/D-A17** (gates 2c) → build 2c replay loop.
-- **Honest calendar to the air proof:** ~12–16 working sessions remaining.
-- **Quality:** **191 passed, ruff clean** (2026-06-10). ~5.3K real component LOC.
+- **Phase:** 2 (Component Builds), air slice — about to start **F1** against the **redesigned** proof
+  methodology (`arrival_only_replan_methodology.md` §13 v4, APPROVED S35).
+- **Just finished (Session 35 — no code):** a user-requested pre-F1 critique turned into a **ground-up redesign
+  of the proof's supply/demand model** (4 critique rounds; §13 written v1→v4, approved). Two reversals: the
+  original F1 (weight-only `cap_a = peak_demand/κ`) **can't ration volume-limited cargo** AND was **circular**
+  (built supply from the demand it generated). New model: **supply generated independently of demand across the
+  network** (integer ULD positions; κ=network tightness + α placement; mismatch IS the value source) +
+  **region→region routing LOCKED (D-A24)**.
+- **▶ Next (F1, redesigned):** build the independent network-supply draw (κ+α integer multinomial on a new
+  `supply` RNG stream) + CRN test FIRST (fail-fast), then region→region multi-O/D subgraphs + per-airport
+  trucking matrix, then the spot CW-cap + route-based fallback MILP changes. **The old "continuous κ" F1 and the
+  S34 Wave-2 `[CAL]` knobs are SUPERSEDED.**
+- **Honest calendar to the air proof:** ~13–18 working sessions remaining (F1 is now bigger — region→region is a
+  scope expansion; then 2c replay + arms + scorer + Stage 3).
+- **Quality:** **193 passed, ruff clean** (2026-06-11; unchanged S35 — no code touched).
 
 ---
 
 ## Open items awaiting user
 
-- **Go-ahead on the critique-12 fold** (the only thing paused). Sequence proposed: rewrite F1/F2/F3 clearer →
-  F1 continuous-κ dial (κ = peak-concurrent-demand ÷ contracted slots) → F4 capacitate an origin-diverse lane
-  (`FlatRate.cap` is plumbed, unset) + `lane_mix` knob + M-B5 roll option → F2 cutoff `= dep − L_cut` & anchor
-  `d*` to the binding contracted leg → F3 → methodology **D-A17** (τ effect-size floor + `cell_role` guard).
-  F1/F2 are directional (they change how the load-bearing instance is built) — confirm before implementing.
+- **None blocking.** §13 v4 approved as governing. F1 `[CAL]` to source later (not blocking the build): κ ladder,
+  α concentration grid, the supply distribution, the spot two-sided multiplier band, the density mix, the
+  per-airport trucking matrix values.
 
 ---
 
@@ -50,15 +45,34 @@ CONTEXT.md (RESUME HERE).
 | Gate | Item | Status |
 |---|---|---|
 | Phase-0 | PRD | ✓ approved |
-| G-LaTeX | Air optimizer model (`model/air_freight_routing.tex`) | ✓ approved (edited S29; PDF not recompiled) |
-| G-Method | **Arrival-only replan methodology** (`model/arrival_only_replan_methodology.md` v0.1) | ✓ approved (S32 — governing) |
+| G-LaTeX | Air optimizer model (`model/air_freight_routing.tex`) | ✓ approved (PDF one compile behind; stale on retired predicate-9 — tex-reconcile deferred) |
+| G-Method | **Arrival-only replan methodology** (`model/arrival_only_replan_methodology.md`) | ✓ approved — **v0.1 (S32) + §13 v4 capacity/supply refinement (S35)** |
 | G-Method | Backtest methodology (`model/backtest_methodology.md` v0.5) | ✓ approved |
 | G-Method | Air transit-time (`model/air_transit_time.md` v0.3) | ✓ approved (air deterministic `s=0`) |
 | G-Method | Flexibility model 2-FLEX (`model/flexibility_model.md` v0.3) | ✓ approved |
 | G-Method | Scenario IO & replay (`docs/design/scenario_io_and_replay.md` v0.2 +S31 hash-pin) | ✓ approved |
 | G-Method | Human heuristic H₀ (`model/human_planning_heuristic.md`) | ✓ spec approved (not built) |
-| G-Isolation | Air graph + MILP + transit-time (2b) + generator (2a) + scenario_db + scenario-IO + **2-FLEX + λ arrival stream** | ✓ passed |
+| G-Isolation | Air graph + MILP + 2b + generator(2a) + scenario_db/IO + 2-FLEX + λ arrival stream | ✓ passed (pre-redesign) |
 | G-LaTeX | Ocean FCL / LCL / Trucking models | ☐ drafted, NOT approved |
+
+---
+
+## §13 v4 — the governing F1 design (APPROVED S35)
+
+- **Supply ⟂ demand.** Per-flight contracted capacity = **integer ULD positions**, drawn from a NEW `supply` RNG
+  sub-stream, never reading demand. **κ** = network tightness (`total_N = round(E[Σ SE_k]/κ)`, `E[Σ SE_k]` =
+  analytic no-consolidation slot mean `max(w/1500,v/4.5)` — closed-form, zero demand coupling). **α** = Dirichlet
+  concentration; per-flight ~ `Multinomial(total_N, Dirichlet(α))`. Per-lane tightness EMERGES. κ a coarse
+  integer ladder at proof scale.
+- **D-A24 (LOCKED) — region→region routing.** Origin/dest airport + lane + flight = optimizer decisions via a
+  per-airport trucking matrix + multi-O/D subgraphs + tractability re-check. Fixed-lane `DEMAND_LANES` retired.
+- **Contracted gate = existing 2D C.5/C.5b** (feed integer `N_f`); the original volume defect dissolves. D-A20/21
+  (SE/cap_a/suppress-C.5b) WITHDRAWN. CW billing only; assert `BsaContract.cap=={}`.
+- **3 supply sources/flight:** contracted (C.5b) / spot (NEW per-arc `Σ cw_k·x ≤ cap^spot`, two-sided price
+  base×m) / fallback (1.5× graph-derived worst-spot-route; amends D-A12).
+- **Falsifiability:** loose corner of (κ,α,λ) sweep gated `|L2|<CI`; regret floor = self-check only. **M₀ (D-A23)**
+  = competent single-pass baseline (deterministic within-cycle consolidation, pins priors). Report L2=0 fraction +
+  per-airport binding-rate + post-consolidation occupancy.
 
 ---
 
@@ -68,19 +82,20 @@ Legend: ✓ done · ◐ in progress · ☐ not started · ⏸ deferred
 
 | Component | Phase | Status | Notes / pointer |
 |---|---|---|---|
-| Air graph generator (`src/components/air_graph.py`) | 2 | ✓ | construction + integration-validated; `order_route`; **+S33 `earliest_arrival`** (A_k^min edge) |
-| Air MILP optimizer (`src/components/air_milp.py`) | 2 | ✓ | M1–M6; solver seed pin, empty-book guard, hash-stable column order |
-| Synthetic generator — air 2a (`data/synthetic/air_generator.py`) | 2 | ✓ | `AirInstance` + `write_scenario`; **+S33 Part B λ arrival stream** (`ArrivalConfig`/`generate_arrival_instance`/`write_arrival_scenario`) |
-| **2-FLEX (`src/components/flexibility.py`)** | 2 | ✓ | **NEW S33** — Tier/TierSpec/derive_deadline/classify/cw_flex; +23 tests. `flex_k`/`cw_flex` t=0 wiring still deferred (F5) |
-| **Daily substrate (`build_tpeb_daily`)** | 2 | ✓ | **NEW S33** — D=7 tiling; +6 tests |
+| Air graph generator (`src/components/air_graph.py`) | 2 | ◐ | built + S34 fixes; **F1 will add region→region multi-O/D subgraphs + airport-pair-specific arc keys (D-A24)** |
+| Air MILP optimizer (`src/components/air_milp.py`) | 2 | ◐ | M1–M6 built; **F1 adds spot per-arc CW-cap constraint + route-based fallback; contracted gate REUSES C.5/C.5b (feed integer N_f)** |
+| Synthetic generator — air (`data/synthetic/air_generator.py`) | 2 | ◐ | built; **F1 rewrites supply path: independent integer network draw (κ+α multinomial, new `supply` stream); region-O→D demand + per-airport trucking matrix; density mix; capped two-sided spot; retire `capacity_scale`/`n_uld`-as-κ** |
+| `scenario_db` (`src/scenario_db.py`) | 2 | ◐ | built; **F1 adds `"supply"` to `RNG_STREAMS`** |
+| 2-FLEX (`src/components/flexibility.py`) | 2 | ✓ | Tier/derive_deadline/classify/cw_flex. t=0 wiring deferred (with 2c) |
+| Daily substrate (`tpeb_air_instance.py`) | 2 | ◐ | `build_tpeb_daily`; will extend to the region→region airport grid |
 | Air transit-time 2b (`src/components/air_transit_time.py`) | 2 | ✓ | deterministic for air (`s=0`); stochastic path kept for ocean |
-| `scenario_db` schema seam (`src/scenario_db.py`) | 2 | ✓ | full schema + reveal view; arrival columns populated S33 |
-| Scenario-IO adapter (`data/synthetic/scenario_io.py`) | 2 | ✓ | `persist`(+arrivals)/`load`/`persist_actuals` |
-| Replay orchestrator 2c | 2 | ☐ | **BLOCKED on the critique-12 fold (F1/F2/F4/F3-D-A17).** Then M₀ pin-prior-soft + `M₁'` arm + recourse fixtures |
-| Arms: H₀ / M₀ / M₁ / M₁' / π_hind | 2 | ☐ | M₀ incremental-greedy vs M₁ open-book re-opt; batch-cutoff H₀ headline |
-| Scorer + Replan-savings backtest (Stage 3) | 2 | ☐ | κ×λ band + α-frontier; **the proof** |
+| Scenario-IO adapter (`data/synthetic/scenario_io.py`) | 2 | ✓ | persist/load/persist_actuals |
+| **F1 — independent network-supply + region→region** | 2 | ☐ | **NEXT.** §13 v4. Supersedes the old "continuous κ" F1 + S34 Wave-2 fold. |
+| Replay orchestrator 2c | 2 | ☐ | after F1 + the N3 `ReplayState` owner. M₀ greedy / M₁ open-book / `M₁'` / π_hind; recourse fixtures |
+| Arms: H₀ / M₀ / M₁ / M₁' / π_hind | 2 | ☐ | M₀ = competent single-pass (D-A23); batch-cutoff H₀; **N6 π_hind_locked** |
+| Scorer + Replan-savings backtest (Stage 3) | 2 | ☐ | (κ,α,λ) sweep + loose-corner `|L2|<CI` gate; reshuffle decomposition; **the proof** |
 | Ocean FCL / LCL / Trucking optimizers | 2 | ☐ | models drafted, not approved; Stage 4 (ocean = asymmetry test) |
-| Path-level TT / destination leg / rules engine; generic graph gen (2.1) | 2 | ⏸ | Stage 4 |
+| Path-level TT / rules engine; generic graph gen (2.1) | 2 | ⏸ | Stage 4 |
 | Multimodal stitching | 3 | ☐ | after all modes pass isolation |
 | MCP server / Agent loop / UI surfaces / L3–L4 | 4–6 | ☐ | UI = the ~+56K LOC cliff, last |
 
@@ -88,81 +103,70 @@ Legend: ✓ done · ◐ in progress · ☐ not started · ⏸ deferred
 
 ## Near-term critical path (the air proof) — ordered
 
-0. ✓ **λ arrival-stream + 2-FLEX DONE (S33)** — 4 slices, 191 passed; 4-agent build critique run (`docs/critique/12`).
-1. ☐ **Clarity rewrite** — rewrite `docs/critique/12` § Numeric walkthroughs F1/F2/F3 clearer/step-by-step
-   (user-flagged). First action S34.
-2. ☐ **Fold the critique-12 BLOCKING/MATERIAL set (gates 2c), in order F1 → F4 → F2 → F3:**
-   - **F1** — replace the integer κ proxy (`n_uld=max(1,round(2·scale))`) with continuous binding-ness
-     (κ = peak-concurrent-demand ÷ contracted slots; size BSA `cap_a` continuously; `n_uld` billing-only).
-   - **F4** — capacitate ≥1 origin-diverse lane (set `FlatRate.cap`) + add `lane_mix` to `ArrivalConfig` +
-     emit the M-B5 roll-to-next-contract option; report L2 by lane.
-   - **F2** — derive cutoffs as `dep − L_cut` (L_cut>0); anchor `d*` to the binding contracted leg.
-   - **F3** — methodology **D-A17**: pre-registered symmetric null (negative-control `|L2|<CI`; peak-cell CI
-     lower bound > τ AND reshuffle-share ≥50%; `L2(κ)` monotone) + `cell_role` guard (`tier_coupled⇒upper_bracket`).
-   - **F8** (cheap, anytime) — always-consume the `t_dead` uniform so `t_dead_prob` stays CRN.
-3. ☐ **2c replay loop + arms** — M₀ incremental-greedy vs M₁ open-book re-opt + `M₁'` control (`C(M₁')==C(M₀)`);
-   one time-scalar SoT (D-A13); global conservation + 2-arc reshuffle fixture + 3 disruption-recourse fixtures;
-   **F5** persist frozen t=0 `cw_flex` + D-F7 arm-invariance pytest; **F7** window-prune subgraph to ±2d + gated
-   warm-start (behind the `M₁'` invariant).
-4. ☐ **Negative control + null + baseline** (per D-A17) — required abundant×early `|L2|<CI` cell; batch-cutoff H₀.
-5. ☐ **Scorer + Stage 3 outputs** — running-clock walk from `leg_actuals`+`component_actuals`; OTP vs FROZEN
-   `booking_promise`; L1/L2 + `L2_reshuffle` gated headline; → resolves the thesis number.
-
-**Calibration note (pre-Stage-3, gating the headline):** source `L_cut` (F2), DEFERRED `sla_offset` slack (F6),
-contracted-vs-spot share & which lanes (F4); + the 2a distribution-provenance note (lane structure vs BTS FAF).
-
-**Post-proof broaden (Stage 4), in order:** Ocean FCL (**the asymmetry test**; G-LaTeX first) → LCL + Trucking →
-path-level TT / destination leg / rules engine (+ generic Graph Generator 2.1 gate) → multimodal stitching → MCP →
-agent → UI (the ~+56K LOC cliff) → L3/L4.
+0. ✓ **§13 v4 redesign + approval (S35):** supply ⟂ demand, integer network draw, region→region locked.
+1. ☐ **F1 slice A — independent network-supply draw** (FIRST ACTION S36, fail-fast): add `"supply"` to
+   `RNG_STREAMS`; κ+α integer multinomial draw of per-flight `N_f` off the new stream; `E[Σ SE_k]` analytic mean;
+   retire `capacity_scale`/`n_uld`-as-κ. **CRN test: vary κ/α ⇒ demand draw byte-identical** (hard gate).
+2. ☐ **F1 slice B — region→region (D-A24):** per-airport trucking-cost matrix on the HAWB; multi-O/D subgraph
+   construction (airport-pair-specific arc IDs); consolidation-coherence invariant (every MAWB arc = one
+   airport-pair flight, riders reach tail via priced trucking); tractability re-check.
+3. ☐ **F1 slice C — spot + fallback MILP:** new per-arc spot CW-cap constraint `Σ cw_k·x ≤ cap^spot`; two-sided
+   spot pricing (base×m); route-based fallback (1.5× graph-derived worst-spot-route); assert `BsaContract.cap=={}`;
+   reuse C.5/C.5b for the contracted gate.
+4. ☐ **Wave 3 — N3 `ReplayState` owner** (clock + per-arm capacity ledger + RNG sub-streams) before 2c.
+5. ☐ **2c replay loop + arms** — M₀ competent single-pass (D-A23, deterministic tie-break) vs M₁ open-book + `M₁'`
+   control (`C(M₁')==C(M₀)`); conservation + reshuffle fixture + 3 disruption-recourse fixtures.
+6. ☐ **Wave 4 — claim-framing folds** — N4 disruption sensitivity; N5 `L2%` primary; N6 π_hind_locked; loose-corner
+   `|L2|<CI` gate; L2=0-fraction + per-airport binding-rate + post-consolidation occupancy diagnostics.
+7. ☐ **Wave 5 — e2e tests** (`docs/design/e2e_test_plan.md`): Tier-1 identities + Tier-2 use-case matrix (some
+   cases need the region→region generator first).
+8. ☐ **Scorer + Stage 3 outputs** → resolves the thesis number.
 
 ---
 
 ## Built & verified (quality state)
 
-- **Test suite last green:** 2026-06-10 (Session 33) — **191 passed** in ~6s, ruff clean across src/tests/data.
-- **Built components:** `air_graph.py` (+`earliest_arrival`), `air_milp.py`, `air_transit_time.py`,
-  `scenario_db.py`, `data/synthetic/air_generator.py` (+ Part B λ stream / `write_arrival_scenario`) +
-  `tpeb_air_instance.py` (+ `build_tpeb_daily`) + `scenario_io.py` (+ arrival columns) + **`src/components/flexibility.py`**
-  (real HiGHS, never mocked).
-- **New S33 tests:** `tests/components/test_flexibility.py` (+23), `tests/test_tpeb_daily.py` (+6),
-  `tests/test_arrival_stream.py` (+11), `tests/test_arrival_persistence.py` (+4).
+- **Test suite last green:** 2026-06-11 (Session 34) — **193 passed**, ruff clean across src/tests/data. **No code
+  touched S35** (methodology-only).
+- **Real HiGHS, never mocked.** Determinism proven hash-seed-independent cross-process.
+- **Built components:** `air_graph.py`, `air_milp.py`, `air_transit_time.py`, `scenario_db.py`, `flexibility.py`,
+  `data/synthetic/{air_generator,tpeb_air_instance,scenario_io}.py`. **F1 will modify air_graph / air_milp /
+  air_generator / scenario_db / tpeb_air_instance per §13 v4.**
 
 ---
 
 ## Key locked decisions (pointers, not duplicated)
 
-- **Input layer = Option A** (S31): one `scenario.db` holds inputs+outputs; offers carry their rate; `offer_legs`
-  chains physical legs; reference tables; per-HAWB ground scalars on `shipments`. → `docs/design/scenario_db_erd.md`.
-- **One offer = one rate; one lane → many offers** (sourced). → memory `reference_air_offer_rate_cardinality`.
-- **Capacity = ULD-slot-only for the proof** (D1) — MILP binds at the BSA allotment tier. *(NOTE: the κ-as-`n_uld`
-  dial is being replaced per critique-12 F1 — continuous binding-ness, not integer ULD count.)*
-- **MCT ≠ dwell** (D2); ledger `arc_id` = `{offer_id}:{uld_type}` (D3).
-- **Determinism** = HiGHS `threads=1`+`random_seed` + sorted column order + `PYTHONHASHSEED=0` for cross-process
-  byte-identity; named RNG sub-streams (G1).
-- **Arrival-only proof (S32, governing)** = the ONLY stochastic process is **demand arrival**; transit DETERMINISTIC;
-  predicate-9/z_tier/σ̂ retired for air → `A ≤ Δ_k`. Arms M₀ greedy / M₁ open-book / `M₁'` control / batch H₀;
-  L2=M₀−M₁ (reshuffle-gated headline). Sweep κ×λ; D-A9 independent-arrival headline; null + negative-control cell.
-  → `model/arrival_only_replan_methodology.md` (§10 arrival, §12 D-A9..D-A16). Ocean (Stage 4) revives stochastic transit.
-- **2-FLEX built (S33)** = `TierSpec` single source (sla_offset/z_tier/w_sp, `[CAL]` 12-40-120 / 2-1-0.5 / 4-2-1);
-  `Δ_k = A_k^min + sla_offset(tier)`; `flex_k` = ≥2 θ-separated, non-dominated, on-time options. → `model/flexibility_model.md` v0.3.
+- **Supply ⟂ demand (S35, governing F1 design):** §13 v4 of `arrival_only_replan_methodology.md`; memory
+  `project_supply_independent_of_demand`. Supersedes the old "continuous κ = peak_demand/κ on `BsaContract.cap`".
+- **Input layer = Option A** (S31): one `scenario.db` holds inputs+outputs. → `docs/design/scenario_db_erd.md`.
+- **Arrival-only proof (governing)** = the ONLY stochastic process is **demand arrival**; transit DETERMINISTIC.
+  → `model/arrival_only_replan_methodology.md` (§10 arrival, §12 D-A9..D-A16, **§13 v4 capacity/supply**).
+- **Fallback (S35):** `1.5 × graph-derived worst-spot-route` (`1.5·[top_spot·CW·max_air_legs + ground]`), dominant
+  + well-conditioned; replaces the S34 `2× worst-route` / old $1M (amends D-A12).
+- **Determinism** = HiGHS `threads=1`+`random_seed` + sorted column order; proven hash-seed-independent.
+- **2-FLEX** = `TierSpec` single source; `Δ_k = A_k^min + sla_offset(tier)`. → `model/flexibility_model.md` v0.3.
 
 ---
 
 ## Deferred / parked (do not lose)
 
-- **Critique-12 fold (the live queue)** — F1 continuous-κ, F2 cutoffs+binding-anchor, F3→D-A17, F4 lane capacity+`lane_mix`+M-B5,
-  F5 frozen-`cw_flex`+D-F7 pytest, F6 DEFERRED-slack sandbag, F7 tractability, F8 CRN. → `docs/critique/12`.
-- **`flex_k`/`cw_flex` t=0 wiring** — compute once at generation over the pre-9 option set *with cost*, persist as a
-  scenario-level scalar; the component is built and arm-invariant, the caller is not (F5).
-- **Forwarder scale-up stress test** (after the proof passes) — small → medium forwarder; tractability + signal hold. §11.
-- **Disruption-recourse fixtures (3)** — absorbable / connection-break / cancellation; built WITH 2c.
-- **Single-consignee direct-delivery bypass**; **dest cartage at US gateways**; leg `ac_type`/`lithium_ok`/`embargoed_cargo`
-  columns; `corpus` first-class rows; per-MAWB-break hub-dwell attribution; `model/capacity_manager.md` stub (L3).
-- **Standing review agents** (calibration / interface-seam / backtest red-team): last full run S29; **next due ~S36**.
-- **2a distribution-calibration provenance note** — Stage-3 precondition.
-- **Generic Graph Generator (2.1)** deliberately skipped for air; gate retired at Stage 4 (re-triggers if 2c
-  re-pruning outgrows air's embedded rules).
+- **N3 `ReplayState` owner** (clock + per-arm ledger + RNG) before 2c. **N4 disruption sensitivity / N5 L2%-primary
+  / N6 π_hind_locked** — Wave 4. → `docs/critique/13`.
+- **N11 carrier deny/blacklist layer** — graph enforces allow-set only; deny cascade is a later slice.
+- **F5 `flex_k`/`cw_flex` t=0 wiring** — with 2c.
+- **Tex reconcile** — retired predicate-9 still in `air_freight_routing.tex`; PDF one compile behind.
+- **Forwarder scale-up stress test** (after the proof passes; also where the integer-κ ladder becomes a smooth
+  (κ,α) plane) — §11 of the methodology; **disruption-recourse fixtures (3)** (built WITH 2c).
+- **Standing review agents** (calibration / interface-seam / backtest red-team): last full run S29; **next due
+  ~S36** (now overdue — run alongside F1).
+- **F1 `[CAL]` to source** (pre-Stage-3): κ ladder, α grid, supply distribution, spot multiplier band, density mix,
+  per-airport trucking matrix values.
+- Single-consignee direct-delivery bypass; leg `ac_type`/`lithium_ok`/`embargoed_cargo` persisted columns; `mct_h`
+  real source; `model/capacity_manager.md` stub (L3).
 - ocean refining-ETA/cancellations — Stage 4 (stochastic transit apparatus revives).
+- **The S34 Wave-2 fold (F1 continuous-κ / F4 / F3 / D-A17) is RETIRED** — superseded by §13 v4. Some critique-13
+  Wave-0/1 *code* fixes already landed (S34) and stand; the Wave-2 *design* is gone.
 
 ---
 
@@ -173,11 +177,11 @@ agent → UI (the ~+56K LOC cliff) → L3/L4.
 | `BUILD_STATUS.md` (this) | clean built/remaining dashboard — refreshed fully each sign-off |
 | `CONTEXT.md` | compressed context + RESUME HERE |
 | `SESSION_LOG.md` | running per-session history (read last entry only) |
-| `docs/critique/12-simulation-build-review-brief.md` | **4-agent BUILD critique (S33)** — F1..F8 + § Numeric walkthroughs (clarity-TODO) + fold sequence |
-| `docs/critique/11-simulation-design-review.md` | 4-agent sim-DESIGN review (S32) → D-A9..D-A16 |
+| `model/arrival_only_replan_methodology.md` | **governing** proof methodology — v0.1 (§10 arrival, §12 D-A9..16) + **§13 v4 (S35) independent network-supply + region→region** |
+| `docs/critique/13-integration-and-framework-review.md` | 7-agent integration/framework review (S34) — N1..N18 (N3–N6 still live for 2c/Wave-4) |
+| `docs/design/e2e_test_plan.md` | two-tier e2e test plan (Wave 5) |
 | `docs/design/scenario_io_and_replay.md` | SQLite scenario IO + deterministic replay |
 | `EXECUTION_PLAN.md` | canonical phase/gate framework (whole product) |
 | `product_thesis.md` | four-layer thesis + the load-bearing replan-savings claim |
-| `model/arrival_only_replan_methodology.md` | **governing** proof methodology (v0.1) — arrival-only, deterministic transit |
 | `model/backtest_methodology.md` / `flexibility_model.md` / `air_transit_time.md` / `human_planning_heuristic.md` | proof method / 2-FLEX / 2b / H₀ specs |
 | `PRD.md` + appendices | strategic index, capabilities, competitive |

@@ -2,6 +2,146 @@
 
 ---
 
+## 2026-06-13 (Session 35 — F1 redesign: independent network-supply model + region→region routing. `arrival_only_replan_methodology.md` §13 APPROVED v4. No code yet.)
+
+**Context:** user asked for a critique round before building F1 (the planned "continuous κ"). What started as a
+review of F1 turned into a ground-up redesign of the proof's supply/demand model, driven by the user's pushback.
+Four critique rounds (general-purpose agents); §13 written v1→v4, approved at end.
+
+**The arc of the redesign (each step user-driven):**
+1. **4-agent pre-F1 critique** (proof-validity / MILP-numerics / generator-CRN / test-design) on the *original* F1
+   ("continuous κ = peak_demand/κ on `BsaContract.cap`, weight-only kg cap"). Converged: the kg cap **can't ration
+   volume-limited cargo** — all generated cargo is 120–240 kg/cbm, below the LD3 333 kg/cbm break-even, so C.5b-volume
+   binds first and a kg dial is a near-no-op. Plus peak_demand double-counts, arc-key mismatch, etc.
+2. **User pushback #1 — "weight cap is too artificial; just generate a density mix."** Showed numerically a mix makes
+   the weight cap *worse* (1L+1D: weight says fits, volume says no). Fix = meter capacity in chargeable weight / slots,
+   not kg. Mix is a good realism add but orthogonal.
+3. **User pushback #2 (the big one) — "you're constructing supply from the demand you generated; that's circular."**
+   Correct and load-bearing. Contracted capacity is bought **ahead** on forecast; today's cargo doesn't match — the
+   **mismatch IS the problem**. → Redesign: **supply generated INDEPENDENTLY of demand, across the network.** Deleted
+   the whole peak_demand machinery.
+4. **§13 drafted v1 (per-lane κ + two-sided pricing) → critique → REWORK; v2 (independent network draw) → critique →
+   REWORK; v3 (integer ULDs + region→region) → critique → REWORK; v4 (folded all) → critique → APPROVE-WITH-MINOR-EDITS,
+   edits applied → APPROVED.**
+
+**§13 v4 — the governing F1 design (APPROVED S35):**
+- **Supply independent of demand.** Per-flight contracted = **integer ULD positions** from a new `supply` RNG stream.
+  **κ** = network tightness (`total_N = round(E[Σ SE_k]/κ)`, `E[Σ SE_k]` = analytic mean of standalone slot use
+  `max(w/1500, v/4.5)` — closed-form, no demand coupling, the no-consolidation upper bound). **α** = Dirichlet
+  concentration (lumpiness). Per-lane tightness EMERGES from random supply vs where demand lands. κ a coarse integer
+  ladder at proof scale; smooth at forwarder scale.
+- **D-A24 (LOCKED) — region→region routing.** Origin/dest airport, lane, flight are optimizer decisions via a
+  per-airport trucking matrix + multi-O/D subgraphs + tractability re-check. Fixed-lane `DEMAND_LANES` retired. **Scope
+  expansion, committed.**
+- **Integer ULDs dissolve the original defect** — the existing 2D **C.5/C.5b** (`Σw≤1500η`, `Σv≤4.5η`, `η≤N_f`) is the
+  contracted gate as-is; rations weight AND volume. No SE constraint / cap_a / suppress-C.5b (D-A20/21 WITHDRAWN). CW
+  stays in billing only; assert `BsaContract.cap=={}`.
+- **Three supply sources / flight:** contracted (C.5b) · spot (NEW per-arc `Σ cw_k·x ≤ cap^spot` constraint, two-sided
+  price base×m) · fallback (unlimited, **1.5× the graph-derived worst-spot-route** = `1.5·[top_spot·CW·max_air_legs +
+  ground chain]`, dominates every real route; **amends D-A12**'s 2×-worst-route).
+- **Falsifiability (D-A10 rev):** dedicated negative-control cell retired; instead the **loose corner of the (κ,α,λ)
+  sweep is gated `|L2|<CI`** (no new construction). Regret floor `C(π_hind)≤C(M₁)` demoted to a by-construction
+  self-check (not the guard). **M₀ (D-A23)** = competent single-pass baseline: optimally consolidates each cycle's new
+  batch under a deterministic tie-break, never disturbs priors → L2 isolates cross-cycle reshuffle. Report fraction of
+  L2=0 draws.
+- **CRN three streams** (demand / supply / rates); D-A16 frozen-across-arms now on the integer capacity vector.
+
+**The original F1 ("continuous κ") in BUILD_STATUS is SUPERSEDED** by this. New F1 scope: generator (supply stream +
+κ/α multinomial draw + region-O→D demand + multi-O/D subgraphs + density mix + capped two-sided spot + route-based
+fallback; retire `capacity_scale`/`n_uld`-as-κ; airport-pair-specific arc keys; add `"supply"` to `RNG_STREAMS`); MILP
+(spot per-arc CW-sum cap constraint + route-based fallback pricing; reuse C.5b for contracted gate); graph-gen
+(region→region multi-O/D). Tests per §13 build-implication.
+
+**▶ RESUME = start the F1 build** against §13 v4. Suggested first slice: the independent network-supply draw
+(κ+α integer multinomial on a new `supply` stream) + `RNG_STREAMS` edit + the CRN test (vary κ/α ⇒ demand
+byte-identical), BEFORE the bigger region→region graph work — fail-fast on the supply mechanic first.
+
+**No code touched this session. 193 passed (unchanged from S34). Memory added: `project_supply_independent_of_demand`.**
+
+---
+
+## 2026-06-11 (Session 34 — critique-12 clarity rewrite + 7-agent integration/framework review + Wave-0 fixes. 193 passed, ruff clean.)
+
+**1. First action (user-requested): rewrote `docs/critique/12` § Numeric walkthroughs (F1/F2/F3)** clearer/step-by-step
+— added a "Shared picture" framing (κ×λ grid, L2=C(M₀)−C(M₁), which axis each finding breaks), Step-1..4 structure for
+F1, before/after cutoff table + ASCII timeline/route diagram for F2's through-lane case, two named failure modes + boxed
+worked examples for F3. Numbers unchanged.
+
+**2. User asked for a deeper round before 2c** ("catch errors early + will it fit together as code grows"). Ran a
+**7-agent integration/framework review → `docs/critique/13-integration-and-framework-review.md`** + the two-fold test
+plan → `docs/design/e2e_test_plan.md`. Lenses: code-arch/debuggability, integration seams, graph-gen logic,
+model-correctness+planner-realism, e2e-sim-realism, model-numerics, test-case-design. **Core confirmed sound** (D-A13
+walk≡scalar empirically verified, 0 mismatches; layering/schema-seam/CRN well-built). **New findings beyond F1–F8:**
+- **N1 [BLOCKING]** `FALLBACK_COST=$1M` wrecks the relative MIP gap (L2 is a difference of two such objectives) — the
+  #1 fix.
+- **N2 [BLOCKING]** `PYTHONHASHSEED=0` documented but set nowhere; byte-identity test was in-process only.
+- **N3 [BLOCKING]** no state-owner object for sim-clock/capacity-ledger/RNG → 2c would bolt onto free functions.
+- **N4/N5/N6 [BLOCKING, sim-realism]** headline excludes the thesis's *primary* driver (disruption/readiness); one
+  `[CAL]` knob (DEFERRED slack) sets both the L2 mechanism and its `cw_flex` denominator; `π_hind` floor near-vacuous.
+- **N7–N18 [MATERIAL]** latent correctness: `Δ^post` subgraph-wide sum; `earliest_arrival` over unfiltered graph;
+  air-arc board-by `CO*` not `STD`; dispatch check over-applied; carrier deny-layer enforced nowhere; ULD vol mismatch
+  (8.0 vs 4.5); asserts stripped by `-O`; dup HAWB-draw logic. Full convergence map + 5-wave sequencing in critique-13 §E.
+
+**3. Wave 0 (cheap correctness/conditioning, non-directional) — DONE, 193 passed, ruff clean:**
+- **N1** — `compute_fallback_cost(hawbs, rates, gateways)` in `air_generator.py` (2× a safe worst-real-route upper
+  bound); wired into both generators; static rateless default lowered $1M→$100k. **Computed fallback now ~$40k** (was
+  $1M, 25× better conditioned); dominance holds (TPEB still 0-fallback).
+- **N2** — dropped a fragile conftest re-exec (broke `uv run pytest` output); instead `tests/test_determinism.py`
+  PROVES hash-seed-independence cross-process for BOTH the solve output and the persisted scenario.db bytes (two
+  subprocesses, seeds 0 vs 12345/987654). Stronger than forcing the seed.
+- **F8** — always-consume the `t_dead` uniform (CRN; draw count now t_dead_prob-independent).
+- **N17** — 3 load-bearing billing/BSA reconciliation `assert`s → `raise ValueError` (not stripped by `-O`).
+- **n1** — bounded the flat-bucket aux `c` above (no ~1e30 in the matrix).
+- **n2** — finite-ordered-deadline guard at MILP build, gated on `tardiness_weight>0` (won't bite default W=0 path).
+- **N7** — single-tail invariant guard on `Δ^post` (raises if alternate dest tails ever double-count).
+- **N18** — extracted `_draw_cargo_profile` (single source for both generators; sequence-preserving).
+
+**4. Wave 1 (graph-gen service-level correctness, non-directional latent-bug fixes) — DONE, 193 passed, ruff clean:**
+- **N9** — air-arc backward board-by = `min(CO*, STD)` in `_latest_to_dest` (was `CO*`, → ∞ when an offer has no
+  cutoff, which could false-admit an unreachable schedule).
+- **N10** — dispatch-lead check gated to origin-POL air arcs (`arc.tail == airport_out(origin_gateway)`) in both
+  `_propagate_forward` and `_first_failing_predicate`; on hub-outbound legs the connection lead is the dwell δ_a, not
+  origin λ_disp.
+- **N8** — `earliest_arrival` (A_k^min) now propagates over MILP-admissible arcs only (new `_static_predicates_ok` =
+  predicates 2–5/8), so `Δ_k = A_k^min + sla_offset` can't anchor to a route the optimizer can't take.
+- **N12** — aligned the CX BSA offers' predicate-8 ULD volume cap 8.0→4.5 to match the contract `_ULD_TYPES` LD3
+  (v=4.5); a 4.5<v≤8 HAWB no longer passes prefilter then silently spills in C.5b.
+- **N11 (carrier deny-layer)** left tracked-deferred (bigger; the real engines are a later slice).
+N8/N9/N10 are inert on the current TPEB instance (all arcs pass) but correct on generalization; N12 + N8 legitimately
+shift some Δ_k where a HKG HAWB's CX route was never ULD-feasible (self-consistent, tests green).
+
+**5. Wave 2 (the critique-12 fold) — STARTED. All [CAL] inputs locked with the user:** L_cut=6h, κ grid
+{0.5,0.8,1.0,1.25,1.5,2.0}, roll $50/HAWB, F4 = capacitate one more origin-diverse lane at ~60/40 contract/spot,
+**τ = 1.5% of C(M₀)** (decided via researched forwarder economics: air COGS ~85–92% of air revenue, net margin ~3%,
+so COGS ≈ 28× net profit → even 1–2% COGS savings is +28–57% net profit; 5% was too high a floor — would reject a
+transformative 2% result. Sources: GoFreight/McKinsey/IBISWorld). **Reordered to F2→F1→F4→F3** because F1's demand-sized
+caps need d* already anchored to the binding leg.
+- **F2a (cutoffs) DONE** — every offer cutoff = `first_leg_dep − L_CUT_H(6)` in `tpeb_air_instance` (`_direct` derives
+  it; `_shift_time` applies a `_SCHED_OFFSET_H=10` so the early origin cutoffs clear the ~11.5h ground chain; the
+  HKG→US outbound bank widened +8h so a feeder + 6h CFS-H dwell + 6h cutoff fit the connection). No more zero/negative
+  cutoffs.
+- **F2b (binding-leg anchor) DONE** — `_contracted_by_dest_day` replaces `_origin_offers_by_day`/`_target_offer`; d*
+  = the CX HKG→US contracted segment into the HAWB's dest gateway (the scarce tender), keyed by dest. Added
+  `air_graph.latest_ready` + a `known_at` clamp in the generator pass-2 so a late-revealed through-lane HAWB can't be
+  born-dead (cargo stays ready in time for its origin feeder). **193 passed, ruff clean.** Verified: d* now anchors to
+  `cx_hkg_*`, known_at ∈ [0,144] mean 58, clamp-to-0 down 8→5/30 (residual = legit day-0 warm-up edge, N15-able).
+- **▶ REMAINING Wave 2: F1 (continuous κ = demand/slots, size BSA `cap` from realized per-arc demand; n_uld→billing
+  only) → F4 (capacitate a 2nd origin-diverse lane + `lane_mix` + M-B5 roll option) → F3 (D-A17 null: `cell_role`
+  field + τ=1.5% floor + reshuffle-share≥50% + monotonicity guard).**
+
+**▶ NEXT (user decision):** continue Wave 2 with F1 (the continuous-κ core), or hold. Then Wave 3 (`ReplayState`/N3
+owner before 2c), Wave 4 (claim-framing/methodology folds: N4 disruption sensitivity + reframe headline as a named
+component, N5 L2%-primary, N6 π_hind_locked, N13 Diligent+ H₀, N14 phase-jitter, N15 scale-gates, N16 reshuffle
+hurdle), Wave 5 (e2e test build-out per `docs/design/e2e_test_plan.md`).
+
+**Sign-off (S34 end, 2026-06-11).** Stopped at a clean green checkpoint after F2 (cutoffs + binding-leg anchor); F1
+fully scoped and approved (above), not yet coded. **No pending user inputs** — all Wave-2 `[CAL]` decided (L_cut=6h,
+κ grid, roll $50, F4 ~60/40, τ=1.5%). RESUME = build F1 continuous-κ (CONTEXT.md RESUME HERE has the step-by-step).
+193 passed, ruff clean. `usr_session_notes.md` empty (no triage). `model/air_freight_routing.pdf` shows modified from
+a pre-session compile — excluded from the commit (LaTeX-compile rule).
+
+---
+
 ## 2026-06-10 (Session 33 — λ arrival-stream generator + 2-FLEX core + persistence BUILT & GREEN. 191 passed, ruff clean.)
 
 **▶ Built the NEXT item (λ arrival-stream generator + 2-FLEX)** in four verified slices (foundation-first, no churn to the 147 prior tests):
@@ -281,42 +421,6 @@ walkthroughs, make it clearer, then proceed F1→F4→F2→F3.
 **Where we left off / next action (this thread):** (1) user picks schedule-schema structure; (2) promote `schedule_legs` + `demand_generator_configs` into `data_model.md` (§1.3, §3.6) per the chosen structure; (3) optionally spec `supply_generator_config`. **Does not block the air MILP M4 work**, which remains the PRIMARY next action (user reads `docs/design/air_milp_m4_bsa_schema_options.md`, picks a BSA schema option, then builds M4).
 
 **Note for next session (open question flagged):** `schedule_legs` currently uses a single `capacity_total` + `capacity_unit`; air capacity is genuinely 2D (weight **and** volume/ULD positions bind independently) — decide whether both must be first-class on the schedule row when the air generator is built.
-
----
-
-## 2026-06-02 (Session 25 — Air MILP slice M2: C.4 chargeable-weight density mixing + flat_rate bucket cost + C.5c cap)
-
-**Trigger.** "slice M2" after reviewing the full M2–M6 roadmap. Built M2 of `src/components/air_milp.py` — the slice where consolidation starts paying.
-
-**Landed in `air_milp.py`:**
-- **C.4 density mixing** (`_build_c4_density`, tex sec:cw-density-mixing): continuous `CW[a,g]` per MAWB candidate; lower bounds `CW ≥ (1+ε)Σ w_k·x` (C.4a+c) and `CW ≥ Σ v_k·167·x` (C.4b+d) with `Wt/Wv` inlined into the bounds (their equality defs only feed C.4c/d); upper-link `CW ≤ CW^ub·z` (Eq. cw-ub, empty-bucket⇒0). `CW^ub = (1+ε)Σ max(w_k, v_k·167)`. Created for **all** `(a,g)∈M` (the universal family M3/M4 also bill against).
-- **flat_rate bucket cost** (`_build_flat_bucket_cost`, tex sec:lin-bucket): aux `c[a,g]≥0` with `c ≥ min_chg·z` and `c ≥ m·CW`; objective uses `c`. Only generated for `FLAT_RATE` arcs with a catalog entry; min_flat_breaks/per_uld bill in M3/M4.
-- **C.5c per-offer cap** (`_build_c5c_caps`, Eq. C5c): `Σ_{k∈K_a} w_k·x ≤ cap_a` over all riders, when the flat offer specifies a cap.
-- **`RateCatalog.flat: dict[ArcId, FlatRate(m, min_chg, cap)]`**; `MilpParams.dunnage_eps=0.05`; `AirSolution.mawb_chargeable_weight` (CW at optimum for active MAWBs).
-- **Monotonicity post-solve assert** (`_assert_cw_invariant`, tex sec:objective / TEST_PLAN §10): for billed flat MAWBs (`m>0`), recompute `max(Wt,Wv)` from the integer routing and assert `CW` is pinned to it; a miss = a negative-coefficient-on-CW modeling bug, surfaced loudly.
-
-**Tests:** +6 (`test_air_milp.py`), value-checked: flat bucket single HAWB (650), min_chg floor (250), **density mixing CW=283.9 < per-HAWB sum 400.4**, **consolidation-beats-separation** (shared 1-MAWB 1669.5 < split 2-MAWB 2302.0 via distinct temperature), dunnage uplift (+50 at ε=0.05), C.5c cap forces fallback (cap 150→1 fallback, 250→0). **air_milp 13 passed; full suite 79 passed; ruff clean across src/tests/data.**
-
-**Observed (now correct):** consolidation pays — two HAWBs on a shared MAWB density-mix their chargeable weight (dense cargo absorbs light cargo's volumetric slack) and beat separate MAWBs. M1's "optimizer prefers direct legs" caveat is resolved for the flat family.
-
-### Slice M3 — min_flat_breaks (IATA next-break-down round-up) (2026-06-02, same session)
-
-**Landed in `air_milp.py`:**
-- **min_flat_breaks bucket cost** (`_build_min_flat_breaks_cost`, tex sec:lin-bucket): per MFB MAWB, break selector `γ_{a,g,b}` (binary) + bucket weight `BW_{a,g,b}` (continuous [0, M^BW]). Constraints: `Σ_b γ_b = z` (exactly one break iff active); `BW_b ≤ M^BW·γ_b`; `BW_b ≥ break_b·γ_b`; `BW_b ≥ CW − M^BW·(1−γ_b)`. **No `BW_b ≤ CW`** (would ban the round-up case). `M^BW = max(CW^ub, max_b break_b)` — the `max_b break_b` widening is load-bearing (BUG-1, Eq. bigm). Objective gets `Σ_b rate_b·BW_b` (returned as `mfb_terms`).
-- **`RateCatalog.min_flat_breaks: dict[ArcId, list[Break(threshold, rate)]]`**; new `Break` dataclass (`B_a` ordered ascending).
-- **Billing validation reworked** (`_assert_cw_invariant` → `_validate_billing` + `_routed_cw`): the old assert read the `CW` *variable*, which is solver-dependent (CW floats when bucket cost is locally flat — min-charge floor binding, or a break floor above CW). Now recompute `CW = max(Wt,Wv)` **from the realized integer routing** and assert each family's *realized* cost equals its closed form (flat: `max(min_chg, m·CW)`; MFB: `min_b rate_b·max(CW, break_b)`). Robust + directly validates billing. `mawb_chargeable_weight` now reports the routing-derived CW (always correct).
-
-**Tests:** +5 — round-up-to-higher-break ($800 not $900: 90kg, breaks (45,$10)(100,$8); total 950), stay-at-lower-break ($500: 50kg; total 650), weight-dominated above all breaks ($3200: 400kg; total 3350), MFB-family-without-catalog-entry (no bucket cost, total 150), density-mixing-lowers-break-cost (shared CW 283.9, breaks (250,$5)(300,$4) → $1200; total 1450). **air_milp 18 passed; full suite 84 passed; ruff clean across src/tests/data.**
-
-**Next: slice M4 — `per_uld_pivot` + BSA allotment.** Integer `η_{a,g,u}`, `pivot_{a,g}`, `over_c`. C.5 allotment cap `Σ_g η ≤ N_{a,u}`, C.5-act `η ≤ N·z`, C.5b per-ULD `W_u`/`V_u`, C.5c-uld per-offer cap. C.13 BSA settlement: `per_flight` pivot (`r_a·max(CW, π_a·Ση)` via C.13b-1/b-2) vs `equalized` accumulator (`A_c`, `r_c·over_c`, cost^MAWB=0). Catalog: ULD/BSA tables (`N_{a,u}`, `W_u`, `V_u`, `π_a`, `r_a`, settlement basis, `A_c`). Then M5 (tardiness PWL), M6 (surcharges + full objective). **Deferred, don't lose:** per-MAWB-break cost attribution for hub dwell (objective slice); plan-§6 construction micro-cases; `model/capacity_manager.md` stub review.
-
-### M4 schema discussion (end of Session 25) — DECISION OPEN, deep-dive deferred to next session
-
-After M3, opened the M4 data-model decision (M4 introduces a **BSA contract entity** + **ULD-type catalog**, not just per-arc rate fields). Walked the user through three schema options with a shared CX-BSA-out-of-HKG numeric scenario (per_flight = $6000 via pivot floor; equalized = $1500 via allowance overage). Surfaced and corrected a **conceptual conflation**: the user's "pre-buy ULDs, free up to pivot, pay above" merges two opposite-direction levers — **pivot `π`** (per-ULD *minimum charge*, per_flight branch, makes you pay for empty space) vs **allowance `A_c`** (take-or-pay sunk threshold, equalized branch, the actual "free up to X"). Bridge: `A_c ≈ pre-bought-positions × π`, pooled across the contract's arcs.
-
-**User signed off asking for detailed notes to deep-dive next session.** All three options, the full numeric walkthroughs, and the pivot-vs-allowance clarification are captured verbatim in **`docs/design/air_milp_m4_bsa_schema_options.md`** (NEW). Decision NOT made. Drafter's lean recorded in the doc: Opt 3 (per_flight only) now → Opt 1 (contract entity) for M4b; counter-consideration noted if equalized is MVP-pitch-core.
-
-**Next action on resume (in order):** (1) user reads `docs/design/air_milp_m4_bsa_schema_options.md` and picks a schema option; (2) only then build M4 against the chosen schema. Do NOT start M4 code before the schema is chosen.
 
 ---
 
