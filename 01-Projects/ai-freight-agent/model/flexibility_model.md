@@ -62,8 +62,14 @@ product names are deliberately avoided.
   expectation. The *ordering* is the defensible claim; the *levels* are calibrated.
 - **Tier mix (D-F5): a config**, default **20 / 40 / 40** (EXPRESS / STANDARD / DEFERRED). 2a draws
   `tier(k)` from this mix; sweepable for the band (a peak regime can skew express-heavy).
-- **`Δ_k` is tier-derived (D-F6):** `Δ_k = ready_k + min_transit_k + sla_offset_h(tier)` — the tier
-  *sets the promise*, so slack is a consequence of the sold product, not a free draw (§2 worked example).
+- **`Δ_k` is a pre-committed tier×lane SLA (D-F6 v2, supersedes the original D-F6):**
+  `Δ_k = ready_k + base_transit_h(lane) + sla_offset_h(tier)`, where `base_transit_h(lane)` is the
+  lane's **pre-committed promised end-to-end transit** (a capability estimate, shared by all
+  shipments on the lane, set *before* routing — e.g. TPE→LAX base 96h + `{0/24/48}` → 96/120/144h
+  for X/S/D). The tier *sets the promise premium*; the lane sets the base. **Not** the shipment's own
+  `A_k^min` (the retired v1 `Δ_k = A_k^min + sla_offset`, which coupled the promise to the routing
+  graph — circular, and under build-time geo selection it pushed `Δ_k` past `T^abs`). Rationale +
+  worked numbers: `precommitted_sla_deadline_proposal.md` (APPROVED S37).
 
 ---
 
@@ -93,27 +99,28 @@ reshuffle *to*:
 > `cw_flex` — the diagnostic is a *companion* to the denominator, not a subset of it.
 
 ### 2.1 Computation order (no circularity)
-`Δ_k` needs `A_k^min`; predicate 9 screens against `Δ_k`; `flex_k` is on the post-9 set. This is a
-single deterministic pass with **no fixpoint**, *because `A_k^min` is on the pre-9 (tier-free) set*:
-1. `A_k^min` ← min Â over the predicates-1–8 routes (no `Δ_k`, no tier).
-2. `min_transit_k = A_k^min − ready_k`.
-3. `Δ_k = ready_k + min_transit_k + sla_offset_h(tier)`.
-4. predicate 9 screens routes against the now-known `Δ_k` (with the `z_tier·σ̂` margin).
+Under D-F6 v2 the circularity is gone **outright**: `Δ_k` no longer reads any route arrival, so it
+is fixed before the route set is even examined. `A_k^min` survives only for `slack_k`/the on-time set:
+1. `Δ_k = ready_k + base_transit_h(lane) + sla_offset_h(tier)` (pre-committed; no routes, no `A_k^min`).
+2. `A_k^min` ← min Â over the predicates-1–8 routes (tier-free).
+3. `min_transit_k = A_k^min − ready_k`; `slack_k = Δ_k − A_k^min` (**may be < 0** — a born-at-risk
+   HAWB whose own fastest route is slower than the lane SLA; `flex_k = False`).
+4. predicate 9 screens routes against `Δ_k` (with the `z_tier·σ̂` margin).
 5. `flex_k` ← ≥2 `θ_flex`-separated on-time options on the post-9 set.
 
-**Corner case:** a tight EXPRESS `sla_offset` plus a large `z_tier·σ̂` margin can let predicate 9 prune
-*even the fastest route* → 0 admissible real routes → routes via fallback, (correctly) excluded from
-`cw_flex`. Not an error — a too-aggressive tier promise surfacing as a fallback + predicate-9 rescue
-signal.
+**Corner cases:** (a) a tight EXPRESS promise + large `z_tier·σ̂` margin can prune *even the fastest
+route* → fallback, (correctly) excluded from `cw_flex`; (b) `slack_k < 0` (born-at-risk) → no on-time
+option → `flex_k = False`. Both are signals, not errors — a too-aggressive promise vs the network.
 
-**Worked example.** TPE→LAX, daily freighters (gap ≈ 24h), ready `t=0`. Estimate end-to-end arrival:
-F1 = **56h** (= `A_k^min`), F2 = 80h, F3 = 104h. `Δ_k = 0 + 56 + sla_offset`:
+**Worked example.** TPE→LAX, daily freighters (gap ≈ 24h), ready `t=0`, lane `base_transit = 56h`.
+Estimate end-to-end arrivals: F1 = 56h (= `A_k^min`), F2 = 80h, F3 = 104h.
+`Δ_k = 0 + 56 + sla_offset`:
 
 | Tier | `sla_offset` | `Δ_k` | on-time flights (≤ `Δ_k`) | `slack_k` | `flex_k` |
 |---|---|---|---|---|---|
 | EXPRESS | 12h | 68 | F1 (56) only | 12h | **No** (1 option) |
-| STANDARD | 40h | 96 | F1 (56), F2 (80) | 40h | **Yes** (2 separated options) |
-| DEFERRED | 120h | 176 | F1, F2, F3 | 120h | **Yes** (3 options) |
+| STANDARD | 24h | 80 | F1 (56), F2 (80) | 24h | **Yes** (2 separated options) |
+| DEFERRED | 48h | 104 | F1, F2, F3 | 48h | **Yes** (3 options) |
 
 The "on-time flights" column applies the timing cut `≤ Δ_k` for arithmetic clarity; **predicate 9
 additionally subtracts the `z_tier·σ̂` reliability margin** (e.g. with `z_EXPRESS·σ̂ = 8h`, EXPRESS

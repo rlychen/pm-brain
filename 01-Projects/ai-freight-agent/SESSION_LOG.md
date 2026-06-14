@@ -2,6 +2,283 @@
 
 ---
 
+## 2026-06-14 (Session 37 — `FreightNet` first cut BUILT & GREEN: physical freight-node reference layer + great-circle topology service. 218 passed, ruff clean.)
+
+**Built `FreightNet`** (the S37-first workstream / network layer; name locked S36), the prerequisite for
+geographic graph-gen that fixes the B5 blocker. New module `src/freightnet.py` (data model + service) kept fully
+separate from `scenario_db` (static global topology vs per-scenario realization).
+
+**User decisions (4-question batch, all recommended option):** (1) standalone module + own reference DB under
+`data/reference/`; (2) schema accommodates all 9 node types, **seed airports only** (the only type the air proof
+needs); (3) real airport data from **OurAirports** CSV; (4) **brute-force haversine** spatial queries (correctness-
+first; spatial index deferred).
+
+**Verified OurAirports before building** (engagement rule 1): live, 12.6MB, fields lat/lon + IATA/ICAO + type +
+country + iso_region + municipality; existing 6 airports match hardcoded coords (HKG 22.31/113.91 ✓); LAX–HKG = 11664 km.
+
+**What landed:**
+- `data/reference/ourairports_airports.csv` — committed real-topology asset: OurAirports filtered to
+  large/medium airports with an IATA code + scheduled service = **3,274 nodes** (~0.36 MB). The real asset.
+- `src/freightnet.py`:
+  - **Data model** — one `freight_nodes` SQLite table; `node_type` CHECK over all 9 types
+    (airport/ocean_port/rail_terminal/icd/cfs/truck_terminal/border_crossing/ftz/barge_terminal); lat/lon NOT NULL +
+    range CHECKs (a coord-less node is unusable, rejected at ingest); codes (iata/icao/unlocode), full geography
+    (address/city/admin_region/country), timezone (NULL — not in OurAirports, not fabricated), modal_capabilities
+    (JSON sort_keys), status, provenance (`ourairports:<id>`). Indexes on type/iata/country.
+  - `FreightNode` frozen slotted dataclass; canonical `haversine_km`; `connect`/`insert_nodes` (upsert);
+    `ingest_ourairports` (skips coord-less rows with a stderr warning).
+  - **Topology service** `class FreightNet` — loads nodes to memory once; `nodes_within_km` (radius query),
+    `nearest` (k-NN), `extend_until_reachable` (grow radius until ≥min_count — the geographic-propagation primitive;
+    graceful degrade at max_km, never raises). Deterministic: results sorted (distance, node_id).
+- `tests/test_freightnet.py` (13 tests, all real SQLite): ingest/data-model, LA-basin radius (LAX→LGB/BUR/SNA/ONT,
+  nearest-first), HKG cluster k-NN (HKG/SZX/MFM), unseeded-type returns empty, extend-radius-grows + graceful-
+  unreachable, LAX–HKG distance, invalid-input raises, all-9-types schema round-trip, out-of-range-lat CHECK reject,
+  tie-break-by-node_id.
+- `.gitignore` += `data/reference/freightnet.db` (build artifact; rebuild via `ingest_ourairports`).
+
+**Verified:** 218 passed (was 205; +13), ruff clean. Smoke: LAX within 100km → {LGB,BUR,SNA,ONT}; mid-Pacific
+extend → radius 2100km finds CXI/PPG (graceful propagation).
+
+### Graph-gen review (Q&A) — design LOCKED, then Slice 1 BUILT & GREEN
+
+**Reviewed sim-vs-real graph-gen together.** Diagnosed B5 root precisely: blowup is *upstream* of the 1→8
+prefilter — the generator hands every HAWB all 9 airport pairs (hardcoded `_ORIGIN_REGION`/`_DEST_REGION`), and the
+prefilter only prunes by time/lane, never geography. Fix = per-door geographic candidate selection over FreightNet.
+
+**User design decisions (8 questions across 2 rounds):** sim→real seam = **geographic ∩ topology airports** (one
+query path, sim restricts to airports-with-flights via new FreightNet `allowed_ids`); selection lever = **k-NN within
+radius, extend-until-reachable**; **frontier propagation NOW** (not deferred); selection at **subgraph-build-time**
+(retires the S36 D-A24 generator candidate seam — HAWB will carry door lat/lon only); persist **door coords**, not
+candidate sets (recomputed deterministically at build).
+
+**Key correctness finding (caught before building):** the obvious "follow flights that get *closer* to dest" gradient
+is WRONG — HKG is *farther* from LAX (11,664 km) than TPE (10,922 km), so it would prune the `TPE→HKG→LAX`
+consolidation feeder (the route the fixture exists to test). Validated with real coords. **Fix = detour-corridor
+ellipse** `d(O,H)+d(H,D) ≤ φ·d(O,D)`: ratios TPE→HKG→LAX=1.14, HKG→ANC→ORD=1.02 → **φ≈1.3** admits both. ANC polar
+tech-stop is fine even under strict-closer (great circles go over the pole) — so the bug isn't visible from ANC alone.
+
+**Option-richness correction (user pushback):** frontier growth must NOT stop at first connection (would strand the
+alternatives the optimizer needs under tight supply — `feedback_no_standalone_cost_pruning`). Locked: **exhaustive
+bidirectional** — forward hop-depths f(·) from origin seeds, backward b(·) to dest seeds within the corridor; keep
+every leg A→B with `f(A)+1+b(B) ≤ H_max`. "Connected" is only a feasibility flag, never a stop. Knobs (φ, radius/k,
+H_max) are the tractability dials, default generous; tighten config (visibly), never silently drop paths.
+
+**Slice 1 BUILT — `src/components/geo_select.py`** (pure, air-model-agnostic; works on IATA codes + directed legs +
+FreightNet coords, no Arc/Offer/MILP types): `GeoSelectConfig` (seed_radius_km/seed_k/corridor_phi/max_air_legs/
+extend), `SelectionResult`, `select_subgraph(origin_door, dest_door, freightnet, flight_legs, config)`. Doors are the
+ellipse foci (seed-independent); seeds always admitted; fail-fast `ValueError` if a flight references an airport absent
+from FreightNet. Deterministic (sorted BFS + sorted outputs). FreightNet gained an `allowed_ids` filter on
+nodes_within_km/nearest/extend_until_reachable (the sim ∩-topology seam).
+- **Tests:** `tests/components/test_geo_select.py` (12) — consolidation-feeder kept, polar-tech-stop kept, direct+feeder
+  kept *together* (option-richness), out-of-corridor (JFK/SYD/ORD) excluded, H_max=1/2 leg bounds, tight-corridor
+  graceful disconnect (non-seed hub), isolated-door radius-extend, determinism under leg reorder, missing-airport
+  raises, config validation. +1 FreightNet `allowed_ids` test.
+- **Verified:** 232 passed (was 218; +14), ruff clean.
+
+### Slice 2 BUILT & GREEN — geographic selection wired into the air graph at build-time
+
+**Design:** kept `build_air_graph` FreightNet-agnostic — geography resolved in a separate pre-step that produces
+candidates + a per-HAWB `allowed_air_pairs` map, threaded through the existing builders (default `None` = back-compat,
+every existing fixture byte-unchanged).
+
+**Changes (`src/components/air_graph.py`):**
+- `Hawb` gains 4 optional door-coord fields (`origin/dest_door_lat/lon`, default None). When set, candidates are
+  DERIVED at build, not pre-baked.
+- `resolve_geo_candidates(hawb, air_pairs, freightnet, *, config, truck_h/cost_per_km)` — calls `select_subgraph`,
+  turns origin/dest **seeds** into `origin/dest_candidates` (door↔airport drayage = haversine × rates) and returns the
+  kept flight legs as the HAWB's `allowed_air_pairs`. Fail-fast if door coords missing. `resolve_geo_subgraphs(...)`
+  batches it (computes the flight-pair universe once from offers).
+- `allowed_air_pairs` param added to `build_hawb_subgraph` (restricts AIR arcs to corridor pairs **before** the
+  reachability passes — so forward/backward never traverse an out-of-corridor flight; the actual B5-fix mechanism),
+  threaded through `build_subgraphs` and `build_air_graph`. `None` = unrestricted.
+- `FreightNet` query methods gained `allowed_ids` (added Slice 1).
+- **Tests:** `tests/components/test_geo_select_integration.py` (6) — candidates populated from door seeds (TPE-door →
+  {TPE,HKG} origins w/ ~800km HKG drayage, {LAX} dest), allowed-pairs keep corridor (direct + feeder) & drop decoys
+  (JFK/ORD), missing-door raises, `build_air_graph` excludes out-of-corridor air arcs from the subgraph (the B5 prune)
+  while keeping direct+feeder, end-to-end solve feasible (no fallback), determinism under offer reorder.
+- **Caught a non-bug:** the feeder first looked pruned in the integration test — was predicate-6 (unrealistic test
+  cutoffs), not the geo code; geo selection was correct (allowed pairs right, decoys excluded). Fixed test timings.
+- **Verified:** 238 passed (was 232; +6), ruff clean.
+
+**NOTE — Slice 2 is the air_graph side only.** The generator still uses the old `_draw_region_routing` candidate path;
+the new resolver is tested standalone but **not yet wired into the generate→solve pipeline**. That wiring + retiring
+the generator candidate computation + `forwarder_graph_config.json` knobs + persistence (door coords replace
+`origin/dest_candidates_json`) is **Slice 3**.
+
+### Slice 3a BUILT & GREEN — build-time per-HAWB fallback (redesigned via long Q&A)
+
+**Design debate (resolved with user):** the old fallback was a generation-time per-scenario scalar
+(`compute_fallback_cost`) computed from candidates — which broke once candidates moved to build-time. Worked
+through it: user proposed "build fallback last = max-cost route O→D in the DAG; $1 if no feasible route." Key
+realizations:
+- **The $1-when-stranded is correct** (I was wrong to object): a structurally-infeasible HAWB (no feasible route)
+  is stranded *identically in both M0 and M1* (same physical subgraph per HAWB; arms differ only in open-book
+  reshuffling under capacity), so its fallback cancels in `L2 = obj(M0)−obj(M1)`. The case that NEEDS a high
+  fallback (a routable HAWB the optimizer must not strand for being cheap) always HAS routes → max-path computable.
+  The hard-to-size case and the must-be-high case are disjoint. Load-bearing assumption recorded: M0/M1 share one
+  physical subgraph per HAWB.
+- **Max-cost path in the DAG is cheap (O(V+E))** — user right, I was wrong it's a search. BUT pricing each arc
+  *exactly* would duplicate the consolidation-coupled MILP cost model (drift risk). **Synthesis (built): longest-cost
+  path with each arc at a safe UPPER bound** (air arc = `air_leg_ub(hawb)`, ground = its fixed cost) → route-aware,
+  guaranteed-dominating, decoupled from the MILP billing. Retires `_MAX_AIR_LEGS_PROXY` (leg count is now real).
+
+**Built:**
+- `air_graph.FallbackPolicy(air_leg_ub, margin=1.5, trivial=1.0)` + `_max_path_cost` (memoized DFS longest path,
+  back-edge/cycle guard) + `_hawb_fallback_cost`. `build_hawb_subgraph` now adds the fallback **last**, sized from the
+  surviving real arcs; takes **exactly one** of `fallback_cost` (scalar, back-compat) / `fallback_policy` (per-HAWB).
+  Threaded through `build_subgraphs` / `build_air_graph`. air_graph stays decoupled from air_milp (caller supplies the
+  pricing callable — no import cycle).
+- `air_milp.air_leg_cost_ub(hawb, rates)` — worst single-air-leg UB across every rate family (flat / top weight-break /
+  co-load / BSA per-flight|equalized) + worst Path-A surcharge + MAWB fix. The pricing the caller hands to FallbackPolicy.
+- **Tests** `tests/components/test_fallback_policy.py` (8): air_leg_cost_ub flat-per-kg / **top-weight-break** / min-charge
+  floor (the user's #3 sizing); longest-path picks 2-leg over 1-leg (exact $300 vs $150); no-feasible-route → trivial $1;
+  **dominance guard** (fallback ≥ realized solve cost, optimizer never picks it); exactly-one-input guardrail.
+- **Verified:** 246 passed (was 238; +8), ruff clean. Back-compat: all existing fixtures pass `fallback_cost` scalar.
+
+**Fallback transit-time / max-tardiness confirmed + tested (user check):** fallback arrives at `T_k^abs` (the hard
+backstop) — set in BOTH the arc (`delta_h = deadline_abs − ready_early`, air_graph) AND the C.10 calc
+(`arr[fallback] = deadline_abs`, air_milp). Predicate 7 prunes real routes arriving past `T^abs`, so the fallback is
+always the latest-arriving option → drives `τ_k = span = T^abs − Δ_k` (the τ cap), and the PWL `α=1.0` breakpoint
+coincides with `span` so the penalty is exactly `W_k·span²` (max, no extrapolation). +3 tests
+(`test_fallback_policy.py` → 11): arc lands at `T^abs`; forced-fallback HAWB gets full-span tardiness; a real route
+arriving before `T^abs` has strictly less tardiness. **249 passed, ruff clean.**
+
+### Slice 3b–3e BUILT & GREEN — geo pipeline wired end-to-end + CANDIDATE PATH FULLY RETIRED
+
+**First landed additively (doors + geo path alongside candidates), then — at user direction — did the full
+big-bang removal of the candidate path.** Net state: the hardcoded-region candidate path is GONE; generation is
+doors-only; candidates + per-HAWB fallback resolve at build.
+
+**Full retirement (the big-bang):**
+- **Generator** (`air_generator.py`): `_draw_region_routing`/`_trucking_candidates`/`_ORIGIN_REGION`/`_DEST_REGION`/
+  `_AIRPORT_COORDS`/`_nominal`/`compute_fallback_cost` + the `_FALLBACK_DOMINANCE_FACTOR`/`_MAX_AIR_LEGS_PROXY`/
+  `_MIN_ULD_PAYLOAD_KG` constants **all deleted**. New: `_draw_doors`, `_nominal_gateway` (nearest real
+  airport-with-flights over FreightNet — the generator now **depends on FreightNet**, lazy-cached `_default_fn()`),
+  and `build_geo_air_graph(inst|siminputs, fn=None, fgc=None) -> (AirGraph, resolved_hawbs)` — the single geo build
+  chain (resolve_geo_subgraphs → FallbackPolicy(air_leg_cost_ub) → build_air_graph) every consumer + the orchestrator use.
+- **`AirInstance.fallback_cost` REMOVED**; `compute_fallback_cost` gone. Fallback is per-HAWB at build (`FallbackPolicy`).
+- **Persistence:** dropped `origin/dest_candidates_json` columns + `_load_candidates`; dropped persisted `fallback_cost`
+  (config.json + `SimInputs` + `persist()` param). Doors are the only routing geography persisted.
+- **`freightnet.load_freightnet()`** added (build-DB-if-missing guard).
+- **Rewired 6 generated-instance test files to the geo path** (`build_geo_air_graph`): components/test_air_generator,
+  test_air_transit_time, test_generator_to_files, test_scenario_io_spike, test_arrival_stream, test_determinism
+  (legacy `_SOLVE_SNIPPET` replaced by the geo one). Hand-built TPEB tests (test_tpeb_daily, test_air_graph*) keep the
+  `build_air_graph(fallback_cost=…)` scalar API — that API stays; only the *generated/persisted* scalar is retired.
+
+**⚠ METHODOLOGY CONSEQUENCE (flag for ratification):** with candidates resolved at build, the arrival **Δ_k**
+derivation's `A_k^min` (pass-2) had to be computed over the **geo-resolved multi-airport graph**, not the single
+nominal airport — a test caught that single-nominal `A_k^min` is too late (nominal may be a poor route), inflating Δ_k
+past `T^abs` and breaking `backstop > Δ_k`. Fixed: pass-2 resolves candidates transiently for `A_k^min`, stamps Δ_k onto
+the door-only HAWB. Δ_k now reflects the real corridor graph (subset of the old full-region graph), so Δ_k values
+shifted slightly vs the region-candidates era — proof-neutral for L2 (Δ_k identical across M0/M1) but worth ratifying.
+
+**Changes:**
+- **3b generator** — `_draw_region_routing` now also returns the doors (same 4-uniform draw, CRN-stable);
+  `_gen_hawbs` + `_gen_arrivals` stamp `origin/dest_door_lat/lon` on every HAWB (candidates kept for the legacy path).
+- **3c config** — `ForwarderGraphConfig` gains the geo-selection block (seed_radius_km/seed_k/corridor_phi/
+  max_air_legs/extend_step_km/max_radius_km), drayage rates (truck_h/cost_per_km), and fallback_margin; new keys
+  default so the old `config.json` (only backstop_buffer_h) still loads. `.geo_select_config()` builds the
+  `GeoSelectConfig`.
+- **3d persistence** — `shipments` += `origin/dest_door_lat/lon` columns (additive); `scenario_io` persists + loads
+  them; doors round-trip exactly. (Candidate columns + config.json `fallback_cost` NOT yet retired — deferred.)
+- **The geo build path** (the chain Slice 4 / the orchestrator will use): `resolve_geo_subgraphs(hawbs, offers, fn,
+  config=fgc.geo_select_config(), …)` → `FallbackPolicy(air_leg_ub=λh: air_leg_cost_ub(h, rates), margin=…)` →
+  `build_air_graph(…, fallback_policy=…, allowed_air_pairs=…)`.
+- **Tests:** `tests/test_geo_pipeline.py` (5) — generator stamps doors; doors round-trip; geo path solves OPTIMAL;
+  every subgraph's AIR arcs obey `allowed_air_pairs` (the B5 prune held); within-process determinism. Plus
+  `test_determinism.test_geo_build_solve_is_hashseed_independent` — **cross-process** (PYTHONHASHSEED) determinism of
+  the full geo path (generate → resolve → fallback → solve leaks no hash order).
+- **Verified:** **254 passed, ruff clean** (full suite). Incidental: full-suite time dropped ~16s→~6s — the corridor
+  prune shrinks each subgraph (early, unmeasured hint the B5 fix helps tractability).
+
+### Methodology change — Δ_k = pre-committed tier×lane SLA (D-F6 → D-F6 v2) — APPROVED & BUILT
+
+The Δ_k entanglement flagged above was resolved by a **methodology change** (user-driven): the per-shipment
+`Δ_k = A_k^min + sla_offset` (old D-F6) is backwards — real forwarders pre-commit tier×lane ETA SLAs from
+capability, before routing. **New rule (D-F6 v2):** `Δ_k = ready_k + base_transit(lane) + sla_offset(tier)` —
+exogenous, graph-free. Wrote it up first (`model/precommitted_sla_deadline_proposal.md`), user approved all 3
+decisions (adopt / base_transit hardcoded `[CAL]` now / keep `T^abs = cutoff + buffer`), then implemented.
+
+- **`flexibility.committed_deadline`** replaces `derive_deadline`; `TIER_SPECS.sla_offset_h` recalibrated
+  **12/40/120 → 12/24/48** (it's now a premium above the lane base, not above A_k^min — keeps `base+offset` well
+  under the 168h backstop so `T^abs > Δ_k` by construction). `classify` takes `base_transit_h`, handles `slack<0`
+  (born-at-risk → `flex_k=False`).
+- **Generator:** `_base_transit_h(lane)` `[CAL]` table (dest-keyed: LAX/SFO 84h, ORD 96h); pass-2 stamps
+  `committed_deadline(...)` instead of `A_k^min`-derived. Pass-2 keeps the geo-resolve + `latest_ready` clamp
+  (the clamp still needs the graph; the *deadline* no longer does — which is what fixed the `Δ_k>T^abs` defect).
+- **Docs:** `flexibility_model.md` §1 (D-F6 v2) + §2.1 (computation order + worked example, offsets 12/24/48) amended;
+  proposal marked APPROVED.
+- **Why band-aid `T^abs=max(default,Δ_k)` rejected:** sets tardiness span=0 for high-Δ_k shipments → they become
+  un-penalizable; the real fix prices the promise from lane capability instead.
+- **Proof impact:** headline (W_k=0) unaffected (Δ_k cancels in L2); tardiness-weighted diagnostics shift slightly
+  (definitional). `+1` test (born-at-risk). **255 passed, ruff clean.**
+
+### Slice 4 — B5 RE-MEASURE: BLOCKER RESOLVED ✅
+
+Measured the proof cell via the geo build path (real HiGHS, **threads=1** — same pin as the B5 baseline; apples-to-apples):
+
+| Cell | region→region (S36 baseline) | geo path (S37) | status |
+|---|---|---|---|
+| **n=15 / days=7** (the blocker) | **>5 min, did NOT finish** | **21.2s** | OPTIMAL |
+| n=10 / days=7 | ~60s | 3.5s | OPTIMAL |
+| n=20 / days=7 | — | 210s | OPTIMAL |
+
+Mechanism confirmed: **avg air-arcs/subgraph 103 → ~37** (≈2.8× cut) from the corridor restriction → ~2.8× fewer
+`x_{k,a}` vars + weaker airport-pair symmetry → the proof cell that didn't finish in 5 min now solves in **~21s**.
+(MAWB count rose 214→295 — geo gives less cross-HAWB arc sharing — but the per-HAWB x-var cut dominates.)
+
+**Caveats:** scaling still steep (n=15→20 = 21s→210s, ~10× for +5 HAWBs); n=15 is fine, pushing past needs more
+levers (tighter φ / solver tuning — deferred, correctness-first). For the full SWEEP (× seeds × (κ,α,λ) × arms ×
+replay re-solves) 21s/full-solve is workable but not free — the orchestrator's concern (Slice 5+).
+
+### Critique round (4 parallel agents) — RUN; B5 claim WALKED BACK + 1 correctness bug found
+
+Ran 4 critique agents on the whole S37 workstream (correctness / methodology / integration-seam / red-team).
+Full detail: **`docs/critique/17-graph-gen-session-review-s37.md`** (user RC to review tomorrow). Headlines:
+- **🔴 BLK-1 — B5 is NOT robustly resolved (claim walked back).** The 21.2s was a lucky seed. Same proof cell
+  n=15/d7: seed0=23s, seed1=132s, **seed2 did NOT finish in >5min**. Corridor cut LP size (real, 103→~37 arcs) but
+  NOT the consolidation/capacity branching hardness, which is seed-dependent + unbounded (no HiGHS time limit).
+  **B5 REOPENED.** Real fix deferred: time-limit+incumbent / solver tuning / smaller n / tighter φ.
+- **🔴 BLK-2 — `air_leg_cost_ub` under-bounds BSA per_flight** (`n_uld_solo` weight-only; real cargo is volume-bound)
+  → fallback can be under-priced → can strand a routable HAWB. Verified counterexample. Fix: volume-aware n_uld_solo
+  + add a fallback-dominance invariant test.
+- **MATERIAL:** BUILD_STATUS self-contradicted (banner RESOLVED vs ☐ tables + uncommitted) — **fixed at this sign-off
+  (full rewrite + commit)**; proof-neutrality "second-order" wording wrong for W_k>0 (headline W_k=0 still neutral);
+  born-at-risk p90 guard oversold; `t_dead_offset` floor 48h < base transit 84/96h (only bites if t_dead_prob>0,
+  default 0); empty geo-seed silently reverts to gateway.
+- **MINOR:** φ=1.3 load-bearing (not free knob — wants a sensitivity sweep); doc drift (flexibility_model §0/§3/§6 +
+  generator docstrings still v1 formula); committed_deadline no `T^abs>Δ_k` construction assert; extend_until_reachable
+  no start≤max guard; through-offer wording.
+- **✅ SOUND (confirmed):** geo_select is genuinely NOT a dominance prune (exhaustive-within-corridor — honors
+  no-stranding); bidirectional frontier retention proven; `_max_path_cost`/cycle-guard/determinism clean; the
+  integration/persistence seam clean (round-trip float-exact, `_default_fn` cache safe, CRN preserved, back-compat
+  intact); `T^abs>Δ_k` holds across 48 cells at default t_dead_prob=0.
+
+**NOTE (process):** the 4 agents read SESSION_LOG "top entry" as empty — they applied the literal "stop at first `---`"
+rule and stopped at the header's `---` (line 3). The S37 content IS present (below that `---`). Latent mismatch between
+the read-rule and the file structure; reviews were done from code so unaffected. Consider fixing the format/rule.
+
+---
+
+### WHERE WE LEFT OFF (S37 sign-off, 2026-06-14)
+Long session. User will **review `docs/critique/17` tomorrow** and decide fixes. Nothing fixed in response to the
+critique yet — all S37 build work (FreightNet, geo_select, Slices 1–3, fallback redesign, candidate retirement,
+D-F6 v2) is BUILT + GREEN (255 passed, ruff clean) and is being committed at this sign-off, but with **two open
+BLOCKING findings** (B5 not resolved; BSA UB bug) logged in critique-17.
+
+**▶ RESUME (S38), suggested triage order from critique-17 §"Suggested triage order":**
+1. **BLK-1 (B5):** pick the tractability strategy (HiGHS time-limit + incumbent / MIP-gap/warm-start tuning / accept
+   n<15 / tighter φ). B5 is REOPENED.
+2. **BLK-2:** volume-aware `n_uld_solo` in `air_milp.air_leg_cost_ub` + fallback-dominance invariant test.
+3. Cheap safety: `t_dead_offset` floor ≥96h; `committed_deadline` `T^abs>Δ_k` assert; `extend_until_reachable` guard;
+   loud empty-seed.
+4. Docs: retract "second-order" (proposal §6); scrub v1-formula drift (flexibility_model §0/§3/§6 + generator
+   docstrings); report born-at-risk fraction.
+5. φ sensitivity sweep (alongside B5).
+Then (still pending): Slice 5 — replay orchestrator / (κ,α,λ) sweep (the proof number); F1 Slice C.
+
+
+
 ## 2026-06-13 (Session 36 — F1 Slice A BUILT & GREEN: independent network-supply draw (κ+α integer multinomial on a new `supply` RNG stream) + CRN hard gate. 199 passed, ruff clean.)
 
 **Built Slice A of F1** (the fail-fast first cut of methodology §13 v4 / D-A18): the contracted ULD capacity is now
