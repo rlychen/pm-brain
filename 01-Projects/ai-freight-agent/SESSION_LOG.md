@@ -2,6 +2,139 @@
 
 ---
 
+## 2026-06-13 (Session 36 — F1 Slice A BUILT & GREEN: independent network-supply draw (κ+α integer multinomial on a new `supply` RNG stream) + CRN hard gate. 199 passed, ruff clean.)
+
+**Built Slice A of F1** (the fail-fast first cut of methodology §13 v4 / D-A18): the contracted ULD capacity is now
+drawn **independently of demand**, on its own RNG stream.
+
+**Changes:**
+- `scenario_db.RNG_STREAMS` += `"supply"` (now demand / rates / supply / leg_actuals / component_actuals / spot_regime).
+- `air_generator.py`:
+  - New `_expected_slot_mean()` — closed-form `E[SE_k] = E[w]·E[1/density]/V_uld` (≈0.6632 slots/HAWB). Reads ZERO
+    demand draws → CRN. Volume-bound across the whole density band (asserted: `4.5·240 < 1500`); the no-consolidation
+    upper bound, so κ=1 is conservatively loose (understates L2, never inflates).
+  - New `_draw_network_supply(rng, cx_arcs, n_hawbs, κ, α)` — `total_N = round(n_hawbs·E[SE_k]/κ)` spread per-flight by
+    `Multinomial(total_N, Dirichlet(α))` (stdlib `gammavariate` + `bisect` categorical). Zero-count flights kept in the
+    contract (priced at 0-capacity, never dropped — dropping would leave the arc free-of-charge).
+  - `_build_rate_catalog(...)` now takes pre-drawn `allotment_counts` instead of `capacity_scale` (prices still on the
+    `rates` stream; capacity decoupled).
+  - Factored cargo-distribution constants (`_WEIGHT_*`, `_DENSITY_*`) so the analytic mean and the draw stay in sync.
+  - **`capacity_scale` RETIRED** from `GenConfig` + `ArrivalConfig` → replaced by `kappa` (large=tight) + `alpha`
+    (low=lumpy). Both generators + both `write_config` dicts updated.
+- Tests: new `tests/test_network_supply.py` (7 unit tests: closed-form mean, inverse-κ scaling + conservation, α
+  lumpiness ordering averaged over 40 seeds, reproducibility, zero-demand + empty-flight edges). Strengthened the
+  arrival CRN test to the **§13 hard gate** (vary κ OR α ⇒ full demand realization byte-identical; κ moves supply).
+  Updated the two `capacity_scale` tests + the components allotment test for κ semantics.
+
+**Verified:** 199 passed, ruff clean. Eyeball: κ=0.5/1.0/2.0 → total_N=40/20/10; α=0.1 dumps 13/20 on one flight,
+α=50 spreads evenly. Cross-process determinism test still green (supply draw is hash-seed-independent).
+
+### Standing review agents (calibration / interface-seam / backtest red-team) — RUN (cadence: last S29 → now S36, next S43)
+Three parallel subagents; reports in `docs/critique/14-calibration-audit-s36.md`, `15-interface-seam-audit-s36.md`,
+`16-backtest-red-team-s36.md`. Memory `feedback_review_agents_cadence` bumped (last=S36, next=S43).
+- **Seam audit: no BLOCKING. Slice A validated** — zero-count allotment path lossless end-to-end (generator→persist→
+  load→MILP), κ⟂demand byte-identical, `capacity_scale` fully purged. Two MATERIAL (pre-existing, deferred): `load()`
+  partial inverse for arrival scenarios; Δ_k in two columns (`soft_deadline_h` vs `effective_deadline_at`).
+- **Red-team R1/R2 DEFLATED after user pushback** — the "loose-corner gate is passed by a no-op M₁" framing is a
+  strawman (deterministic sim, two real solver calls, errors surface loudly); the "average hides a lottery" is just the
+  real value distribution + the correct estimator. Residue is minor: add a hand-computed POSITIVE control + report the
+  L2 distribution/CI (scorer-build notes, NOT a §13 change). Logged; §13 not reopened.
+- **Drifts FIXED:** `_FALLBACK_DOMINANCE_FACTOR` 2.0→**1.5** (matches §13/D-A19); hardcoded "2 air legs" → named
+  `_MAX_AIR_LEGS_PROXY` with a **[Slice B TODO]** to make graph-derived. Left the `1e6` *test* fixtures alone (single-
+  objective exact-equality checks, not L2 differences — N1 conditioning defect doesn't apply; red-team over-relayed).
+- **Calibration:** top risk = **α has no external anchor and amplifies L2** → must report L2 as a curve across a
+  BTS-FAF-anchored α band, not one peak cell. Also slot-density(333) vs billing-density(167) divergence. Pre-Stage-3.
+
+### F1 Slice B — region→region (D-A24) — FAIL-FAST FIRST CUT DONE (both origin+dest airport choice; user picked 3 candidates)
+Additive `Hawb` schema: optional `origin_candidates`/`dest_candidates` tuples `(airport, truck_h, truck_cost)`; empty =
+single-airport (all existing fixtures byte-identical). `build_origin_chain`/`build_dest_chain` gained per-candidate
+trucking + arc-id suffix; `cleared_node` per (HAWB, gateway); `build_physical_graph` fans a trucking "diamond" out
+from / into the shared door over every candidate airport. Air arcs already per-flight ⇒ airport-pair-specific +
+consolidation-coherent for free. **The first cut immediately tripped the N7 guard** (predicted by the S36 red-team):
+C.10's `Δ^post` was a flat sum over dest-chain arcs → double-counts across candidate PODs. **FIXED** — new
+`_dest_tail_transit` computes `Δ^post` PER candidate dest tail (memoized walk to the shared door); single-POD path
+byte-identical, multi-POD correct. New `tests/components/test_air_graph_region.py` (3): optimizer picks cheapest
+origin+dest airport via trucking; choice flips when trucking flips; subgraph spans all 4 candidate pairs. **202 passed,
+ruff clean.**
+
+**B2 DONE** — `_origin_pol_nodes(hawb)` generalizes the dispatch/origin-POL check (air_graph forward-propagation +
+predicate-6) to the whole candidate origin set, not just `origin_gateway`. Test: a tight-cutoff non-`origin_gateway`
+candidate is dispatch-pruned, forcing the costlier feasible airport (before the fix it was false-admitted + chosen).
+
+**B3 DONE** — `check_consolidation_coherence(air_graph)` invariant (F5/B1=A): every MAWB = one physical flight arc;
+every rider must physically reach that flight's origin airport via a priced trucking path in its own subgraph. Tests:
+partially-overlapping candidate origins don't cross-airport-consolidate (HKG flight rider-set excludes the HAWB that
+can't truck to HKG); a corrupted enrolment is flagged. Holds by construction (prefilter + overlay) → standing guard.
+
+**205 passed, ruff clean** after B2+B3.
+
+**B4 DONE** (user picks: 3rd dest = **SFO**; trucking = **distance-based from synthetic coords**). Topology: added SFO
+gateway + `cx_hkg_sfo` (contracted pivot, supply draw covers it) + `br_tpe_sfo` (spot) to `tpeb_air_instance`.
+Generator: retired `DEMAND_LANES`; each HAWB now region-O→region-D — origin region {HKG,PVG,TPE}, dest region
+{LAX,ORD,SFO}; real airport coords + synthetic door coords (bbox) → **haversine distance-based trucking matrix** per
+candidate airport, drawn on the `demand` stream (4 uniforms, CRN-stable); nominal gateway = cheapest-trucking candidate
+(label + known_at anchor). `_gen_hawbs` + `_gen_arrivals` populate `origin_candidates`/`dest_candidates`.
+`compute_fallback_cost` now bounds ground by the FARTHEST candidate trucking (so the fallback dominates far-airport
+routes). `[CAL]`: coords real, bbox + $/km + km/h placeholders.
+
+**Round-trip + determinism breakage (found + fixed):** (1) `scenario_io` didn't persist the candidate matrices →
+loaded HAWBs were single-airport → different solve. Added `origin_candidates_json`/`dest_candidates_json` columns +
+persist/load (`_load_candidates`); floats round-trip exactly via JSON repr. (2) region→region exposed **latent
+hash-order determinism bugs** (Python *sets/frozensets* iterate in hash order; dicts don't): the solve objective and
+the `component_actuals` presampling diverged across `PYTHONHASHSEED`. Fixed by sorting every frozenset/set iteration
+that feeds a HiGHS constraint sum (`_build_flow` C.1 nodes+arcs, `_build_c2` mawbs+members, C.10a `arr`, C.5c riders,
+`_build_c10` subgraphs) **and** keying `component_actuals` by the arc's **gateway** (`_facility_gateway`) so
+per-candidate-airport ground arcs stay distinct instead of collapsing to one hash-arbitrary actual. Cross-process
+determinism test green again.
+
+**B5 tractability re-check: FOUND A BLOCKER.** Solve times (real HiGHS, threads=1): static n=20 = **2.6s** (59 MAWBs);
+arrival n=15/days=3 = **51s** (117 MAWBs); arrival n=10/days=7 = **102s** (176 MAWBs); arrival n=15/days=7 = **>180s, did
+not finish** (214 MAWBs). **Region→region as built is intractable at the proof cell** — the replay sweep solves this
+instance thousands of times (× seeds × (κ,α,λ) × arms), so ~100s/solve is fatal. Root: region→region multiplies each
+HAWB's subgraph ~9× (3 origins × 3 dests), and the **very loose `_BACKSTOP_BUFFER_H=720h` backstop** means predicate-7
+prunes almost nothing → every one of ~7 days' flights stays in every subgraph → ~100 arcs/HAWB, ~17 MAWBs/HAWB, weak
+LP relaxation from airport-pair symmetry. **205 passed, ruff clean (correctness fine; it's solve TIME).**
+
+**TRACTABILITY FIX (user decision): reduce the backstop, NO dominance pruning.** User rejected dominance pruning —
+correctly: under tight supply the "higher-cost" airport pair is the feasible fallback once cheap lanes fill, so
+standalone-cost pruning can STRAND a HAWB (memory `feedback_no_standalone_cost_pruning`). Instead: **720h → 168h
+backstop**, made a **forwarder-level config file** `config/forwarder_graph_config.json` (`backstop_buffer_h`) + loader
+`load_forwarder_graph_config()`; `ArrivalConfig.backstop_buffer_h` override (None→file); resolved value recorded in the
+scenario `config.json`. 28 generator/arrival tests green. **MEASURED: the backstop reduction does NOT fix tractability —
+subgraph sizes are IDENTICAL at 720h vs 168h (avg 103 arcs, 214 MAWBs; even 60h barely moves them). Backstop is a
+*backward* deadline prune; the blowup is *forward* (a HAWB revealed day-d boards days d..6 across all 9 airport pairs),
+which the backstop can't touch. Clean solve times (earlier 102s for n=10 was CPU contention from stale procs):
+n=10/d7 ≈ 60s unchanged by backstop; n=15/d7 >5min. The 168h change is KEPT (realism + configurability) but is NOT the
+tractability fix. ROOT CAUSE = every HAWB gets all 9 airport pairs (hardcoded full region set) × boardable-days ×
+~15 offers/day → the fix is GEOGRAPHIC candidate selection (the user's real-graph-gen vision), safe unlike dominance.**
+
+**▶ NEXT-SESSION TODOs (user-requested S36; ordered):**
+1. **FIRST — build `FreightNet` (the network layer; prerequisite, before any graph-gen logic).** **Name LOCKED
+   (S36): `FreightNet`** — both the data model AND the service (e.g. "all nodes within X distance of a point").
+   DB tables of every physical freight node:
+   types = airport / ocean port / rail terminal / ICD-dry-port / CFS-warehouse / trucking terminal / border-crossing /
+   bonded-FTZ / barge terminal; per-node fields = id, type, name, codes (IATA/ICAO/UN-LOCODE), **full address, city,
+   admin region, country, lat/lon**, timezone, modal capabilities. Real ref data (UN/LOCODE, IATA — free).
+   → memory `project_graph_generation_vision`.
+2. **THEN — review graph-generation logic together (Q&A), sim vs real.** Today: subgraph = hardcoded candidate-airport
+   set (`_ORIGIN_REGION`/`_DEST_REGION`) + algorithmic feasibility prune (`build_hawb_subgraph`); topology = TPEB
+   fixture. Real = geographic on-the-fly propagation over the network layer (origin→airports within X km, dest→within
+   Y km, extend radius until reachable; flight-propagate both frontiers until connected). **This also FIXES the B5
+   tractability blocker** (replaces "all 9 airport pairs for every HAWB" with the few geographically-near ones — safe,
+   distance-based, unlike the rejected cost-based dominance pruning).
+3. **THEN — Slice C** (spot per-arc CW-cap + two-sided price + route-based fallback). Then Wave-3 N3 ReplayState → 2c.
+
+**=== SIGN-OFF (S36, 2026-06-14) ===** Paused for sign-off after a large session: F1 Slice A (independent network-supply
+draw) + standing review agents (calibration/seam/red-team; R1/R2 deflated; drifts fixed) + F1 Slice B B1–B4
+(region→region routing, additive `Hawb` candidates, N7 per-tail Δ^post fix, dispatch-per-candidate, consolidation
+coherence, distance-based trucking generator + SFO topology) + determinism/round-trip fixes + backstop→168h forwarder
+config. **B5 found region→region intractable at the proof cell (n=15/d7 >5min); the backstop didn't fix it; the real
+fix is the geographic graph-gen / network layer above (todo 1+2).** Suite **205 passed, ruff clean**. Nothing was
+broken — the blocker is solve TIME, deferred to the network-layer workstream. `model/air_freight_routing.pdf` left
+unstaged (user artifact).
+
+---
+
 ## 2026-06-13 (Session 35 — F1 redesign: independent network-supply model + region→region routing. `arrival_only_replan_methodology.md` §13 APPROVED v4. No code yet.)
 
 **Context:** user asked for a critique round before building F1 (the planned "continuous κ"). What started as a
