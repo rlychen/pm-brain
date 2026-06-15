@@ -51,11 +51,27 @@ reliable transit and zero disruptions, so it can't be attacked as manufactured.
   | arm | behavior |
   |---|---|
   | `H₀` | human heuristic — batch-at-cutoff, simple rules (the spreadsheet) |
-  | `M₀` | incremental-greedy — slot each new arrival into remaining capacity; don't disturb prior soft commitments |
-  | `M₁` | full re-optimization of the open book each cycle (reshuffle all un-tendered) |
-  | `π_hind` | all demand known at `t=0`, solved once (the upper bound) |
-- **Decomposition:** `L1 = C(H₀) − C(M₀)` (planning value); **`L2 = C(M₀) − C(M₁)`** (replan value —
-  *headline*); `Total = C(H₀) − C(M₁)`; `regret = C(M₁) − C(π_hind)`.
+  | `M₀` | **greedy incremental** — places each newcomer into the best option available when processed, **without** jointly optimizing the cycle's other newcomers; priors pinned (no reshuffle). Myopic baseline. |
+  | `M₁'` | **single-pass optimal (pinned replan)** — each cycle the MILP **jointly** optimizes all un-tendered newcomers with priors hard-pinned (`x_{k,a}=1 ∀(k,a)∈S_t`); optimum of the no-reshuffle feasible set. The competent planner we'd actually ship. |
+  | `M₁` | **open-book** — full MILP re-optimization of the open book each cycle (reshuffle all un-tendered; pins relaxed). |
+  | `π_hind` | all demand known at `t=0`, solved once (the clairvoyant lower bound) |
+- **Cost chain (guaranteed by feasible-set nesting + optimality):**
+  `C(H₀) ≥ C(M₀) ≥ C(M₁') ≥ C(M₁) ≥ C(π_hind)` *when solves reach optimality*. `M₀ ≥ M₁'` because greedy is
+  ≥ the optimum of the same pinned set; `M₁' ≥ M₁` because `M₁` optimizes a superset (pins relaxed).
+  *(BLK-1 decision S38: each solve is capped at a 600s wall-clock limit and returns the best incumbent —
+  NOT solved to optimality. So the chain holds per-draw only for cells that finish; on time-limited cells a
+  truncated incumbent can transiently violate it. Accepted for now; real tractability — warm-start chaining /
+  symmetry breaking / smaller n — is deferred until the full pipeline is built. Track `status`/`mip_gap` per
+  solve.)*
+- **Decomposition:**
+  - **`L1 = C(H₀) − C(M₁')`** (planning value — human → the competent single-pass optimizer we ship).
+    Internally splits into **automation** `C(H₀) − C(M₀)` + **within-cycle optimization** `C(M₀) − C(M₁')`;
+    `M₀` is an internal ablation rung, not a product-facing endpoint.
+  - **`L2 = C(M₁') − C(M₁)`** (replan value — *headline*; cross-cycle reshuffle / open-book recourse).
+    Computed **entirely within the MILP engine** (pins on vs off), so the headline subtracts two runs of the
+    *same* solver — structurally free of cross-engine / code-path artifact (this replaces the retired
+    `C(M₁')==C(M₀)` "leakage" device; see D-A11).
+  - `Total = C(H₀) − C(M₁) = L1 + L2`; `regret = C(M₁) − C(π_hind)`.
 - **OTP** is now deterministic-given-routing: a shipment is on-time iff its committed route's `A ≤ Δ_k`.
   Cross-arm OTP differences come from **capacity-driven routing choices under the arrival dynamics**, not
   random transit. OTP is still a **population** metric (across shipments/tiers), scored vs the **frozen
@@ -178,14 +194,21 @@ forecaster-asymmetry, double-spend, denominator inflation, OTP re-promising) wer
   as an **upper bracket**, never the headline. If `L2` collapses under independent arrival, that is the
   finding. (Removes "we built the sim to win.")
 - **D-A10 (C2) — pre-registered null + mandatory negative control.** Null: *thesis unsupported if peak-cell
-  `L2` CI straddles 0, or `M₀≈M₁` across the grid.* A **required abundant-capacity × early-arrival cell** with
+  `L2` CI straddles 0, or `M₁'≈M₁` across the grid.* A **required abundant-capacity × early-arrival cell** with
   a gated `|L2| < CI` pass condition (a regime where replan must NOT help). **κ is dialed in binding-ness**
   (peak-concurrent-demand / slots), not quantized ULD integers (`max(1, round(2·scale))` is retired as the κ axis).
-- **D-A11 (C3 — blocks 2c) — `M₀` = pin-prior-soft (Reading A) + an `M₁'` control arm.** `M₀` pins each prior
-  cycle's **soft departure / MAWB-arc choice** via a new soft-pin constraint (`x_{k,a}=1 ∀(k,a)∈S_t`; ground
-  re-derives); a HAWB whose pinned departure goes infeasible falls to fallback. Add a **pinned-replan control
-  arm `M₁'`** (M₁ scope, priors pinned = M₀'s feasible set) with the invariant **`C(M₁') == C(M₀)` per draw** —
-  any gap is solver/tie-break leakage netted out of `L2`.
+- **D-A11 (C3 — blocks 2c) — pin-prior-soft + the three pinned-vs-open arms (`M₀ / M₁' / M₁`).** *(Revised S38 —
+  retires the `C(M₁')==C(M₀)` invariant; `M₁'` is now a first-class no-reshuffle baseline, not a leakage placebo.)*
+  **Two orthogonal axes, do not conflate:**
+  1. **Priors (the original "Reading A", KEPT):** un-tendered prior-cycle commitments are pinned via a soft-pin
+     primitive `x_{k,a}=1 ∀(k,a)∈S_t` (ground re-derives; a HAWB whose pinned departure goes infeasible falls to
+     fallback). **Both `M₀` and `M₁'` pin priors;** only `M₁` relaxes them (open book).
+  2. **Newcomer placement (the S38 distinction):** `M₀` places newcomers **greedily/myopically** (one at a time,
+     no joint within-cycle optimization); `M₁'` places them at the **joint optimum** of the same pinned set.
+  Hence `C(M₀) ≥ C(M₁')` (greedy ≥ optimum) and `C(M₁') ≥ C(M₁)` (`M₁` optimizes a superset) — a *guaranteed
+  inequality*, not an empirical hope. The old "net the `M₀−M₁'` gap out as leakage" is **gone**: that gap is the
+  real **within-cycle optimization value** (a component of `L1`), and the **headline `L2 = C(M₁') − C(M₁)` is
+  intra-engine** (same MILP, pins on vs off), so it carries no cross-code-path artifact for `M₁'` to detect.
 - **D-A12 (C4) — the headline means *reshuffle*.** `realized_cost` **excludes** the C.10 quadratic tardiness
   penalty (objective-steering term, not a cash outflow; `C(π)` = freight + consolidation + spot/recovery).
   Report **three** components: `L2_reshuffle` / `L2_fallback_avoidance` / tardiness-penalty-delta. **Gate
@@ -302,13 +325,16 @@ machinery is WITHDRAWN):**
   cap must never be populated on a contracted arc (asserted in the generator + a test), so the withdrawn
   machinery cannot leak back.
 
-- **D-A23 (keep) — M₀ is a competent single-pass baseline.** M₀ **optimally consolidates each cycle's
-  newly-revealed HAWBs under a deterministic tie-break order `(tender_at, tier, shipment_id)`** but never
-  disturbs prior-cycle commitments; M₁ may reshuffle the whole open book. So `L2 = C(M₀) − C(M₁)` measures
-  **cross-cycle reshuffling (= replanning)**, not within-batch consolidation a naive greedy would leave on
-  the table; the deterministic tie-break keeps `C(M₁') == C(M₀)` exact (D-A11), not contaminated by
-  path-dependence. **Report the fraction of draws with L2 = 0** as a diagnostic (if large, the arrival
-  permutation — not the engine — is driving the result). *(Sharpens §4 / D-A11.)*
+- **D-A23 (rev S38) — `M₁'` is the competent single-pass baseline; `M₀` is the greedy ablation.** *(The
+  S35-approved D-A23 made `M₀` the optimal single-pass arm; that role moves to `M₁'`, and `M₀` is demoted to
+  the myopic baseline — see D-A11.)* `M₁'` **optimally consolidates each cycle's newly-revealed HAWBs**
+  (priors pinned) — the competent no-reshuffle planner we ship. `M₀` places the **same** newcomers
+  **greedily/myopically** under a deterministic order `(tender_at, tier, shipment_id)`. `M₁` may reshuffle the
+  whole open book. So the headline **`L2 = C(M₁') − C(M₁)`** measures **cross-cycle reshuffling (= replanning)**;
+  the within-batch consolidation a naive greedy leaves on the table is the *separate* `C(M₀) − C(M₁')`
+  (within-cycle optimization value, a component of `L1`, never folded into the replan headline). **Report the
+  fraction of draws with `L2 = 0`** as a diagnostic (if large, the arrival permutation — not recourse — is
+  driving the result). *(Sharpens §4 / D-A11.)*
 
 - **D-A10 (rev v4) — dedicated control cell retired; the sweep's loose corner is GATED as the null.** No
   separately-constructed control instance. Instead the **abundant-capacity × even-supply × early-arrival

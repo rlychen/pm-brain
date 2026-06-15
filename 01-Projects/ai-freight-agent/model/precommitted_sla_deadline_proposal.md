@@ -125,12 +125,23 @@ Noted as a candidate extension, not part of this change.
 
 ## 6. Proof neutrality (L2)
 
-`Δ_k` is identical across the M0 and M1 arms (same shipment, tier, lane, ready), so:
+`Δ_k` is identical across all arms (`H₀/M₀/M₁'/M₁/π_hind` — same shipment, tier, lane, ready), so:
 - **Freight-cost L2 is Δ-independent** (Δ_k does not enter freight cost).
-- **Headline (W_k = 0):** the tardiness term is 0 in both arms → L2 unaffected by this change.
-- **Tardiness-weighted runs (W_k > 0):** the quadratic tardiness depends on the absolute `Δ_k`, so
-  diagnostics shift slightly vs the old per-shipment derivation. This is a definitional change to the
-  promise, not a bug — and the new promise is the realistic one.
+- **Headline (W_k = 0):** the tardiness term is 0 in both `M₁'` and `M₁` → the headline
+  `L2 = C(M₁') − C(M₁)` is genuinely unaffected by this change. *This is the load-bearing neutrality
+  claim and it holds.*
+- **Tardiness-weighted runs (W_k > 0) — NOT "second-order" (MAT-2, critique-17).** Earlier wording
+  ("diagnostics shift slightly") was wrong. `L2_tard(k) = W_k·[max(0, t_k^{M₁'}−Δ_k)² −
+  max(0, t_k^{M₁}−Δ_k)²]`: `Δ_k` enters the tardiness **nonlinearity** and the two arms sit at
+  **different** `t_k`, so the difference does **not** cancel — the shift is **first-order**. Tardiness-
+  weighted L2 under v2 is therefore a **different metric** (the promise itself changed), not a
+  perturbation of the v1 number. Do not compare v1 and v2 tardiness-L2 directly.
+- **Born-at-risk diagnostic (MAT-3).** The p90 `base_transit` calibration is *necessary but not
+  sufficient* to make baseline tardiness congestion-independent: ~10% are still born-late (`slack_k<0`),
+  and a born-late HAWB with multiple all-late routes can be reshuffled by `M₁` → its tardiness differs
+  across arms and enters L2. **Report the born-at-risk fraction (`slack_k<0` count) as a first-class
+  per-run diagnostic**; either exclude their tardiness from the headline or document the
+  congestion-coupled component. (Also: p90 is lane-level but `slack_k` is door-level via geo_select.)
 
 ---
 

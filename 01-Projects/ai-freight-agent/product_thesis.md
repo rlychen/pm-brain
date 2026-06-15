@@ -102,9 +102,10 @@ A partner *validates and anchors*; it does not *originate* the number.
 
 **1. Estimate via calibrated simulation, not a partner.** Run the synthetic backtest: real
 topology (available) + synthetic commercial params + the realized uncertainty process, and
-measure the gap across a **four-arm decomposition** — `H₀` human heuristic → `M₀` MILP
-no-replan → `M₁` MILP replan → `π_hind` clairvoyant floor — reporting **L1 = H₀−M₀ (planning
-value), L2 = M₀−M₁ (the replan headline), Total**. For the **air** proof the uncertainty
+measure the gap across a **five-arm decomposition** — `H₀` human heuristic → `M₀` greedy
+incremental → `M₁'` MILP single-pass (no-replan) → `M₁` MILP open-book replan → `π_hind` clairvoyant
+floor — reporting **L1 = H₀−M₁' (planning value; internally automation H₀−M₀ + within-cycle-opt M₀−M₁'),
+L2 = M₁'−M₁ (the replan headline), Total**. For the **air** proof the uncertainty
 process is the **HAWB arrival stream** (demand revealed over the sim clock); transit is
 low-variance, realized once per shipment so OTP is a real **population-over-time** number (the
 on-time fraction over the book, not a per-route probability). (For **ocean**, transit drift — AIS

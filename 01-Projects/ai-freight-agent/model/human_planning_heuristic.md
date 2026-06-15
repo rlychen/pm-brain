@@ -13,9 +13,12 @@ manually in a spreadsheet** — so no MILP-grade joint optimization, no foresigh
 re-optimization.
 
 Its role in the decomposition:
-- **L1 = C(H₀) − C(M₀)** isolates *solver quality* (MILP vs. spreadsheet) by giving `M₀` the
-  **identical commitment timing and recourse behavior** as `H₀` — the only difference is the
-  planner. So `H₀`'s commitment/recourse rules below are also `M₀`'s.
+- **L1 = C(H₀) − C(M₁')** isolates *planning value* — the competent single-pass optimizer (`M₁'`, MILP,
+  priors pinned, no reshuffle) vs. the spreadsheet — by giving every no-replan arm the **identical
+  commitment timing and recourse behavior** as `H₀`; the only difference is the planner. L1 splits internally
+  into **automation** `C(H₀)−C(M₀)` (spreadsheet → greedy `M₀`) + **within-cycle optimization**
+  `C(M₀)−C(M₁')` (greedy → joint MILP optimum). So `H₀`'s commitment/recourse rules below are shared by
+  `M₀` and `M₁'`.
 
 ## The heuristic (spreadsheet-executable)
 

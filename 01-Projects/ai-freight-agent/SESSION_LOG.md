@@ -2,6 +2,77 @@
 
 ---
 
+## 2026-06-15 (Session 38 — critique-17 triage CLEARED + M₀/M₁′ decomposition reshape + F1 Slice C + N3 ReplayState + 2c-1 MILP pinning. 278 passed, ruff clean.)
+
+Big build session off the S37 critique. Suite 255 → 278, ruff clean throughout.
+
+**1. M₀/M₁′ decomposition reshape (methodology, no code).** User pushed on "why both M₀ and M₁′?"
+→ found a genuine doc inconsistency: M₀ was both "greedy" (table) and "optimal-pinned with
+`C(M₁′)==C(M₀)`" (D-A11) — incompatible. **Locked Reading B:** M₀ = greedy/myopic (places newcomers
+without joint within-cycle opt), M₁′ = single-pass MILP optimal (priors pinned), M₁ = open-book.
+Guaranteed chain `C(H₀) ≥ C(M₀) ≥ C(M₁′) ≥ C(M₁) ≥ C(π_hind)`. **User chose L1 = C(H₀) − C(M₁′)**
+(planning value vs the competent optimizer we ship; M₀ is an internal ablation splitting L1 into
+automation + within-cycle-opt). **Headline L2 = C(M₁′) − C(M₁)** — now INTRA-engine (same MILP, pins
+on/off) so structurally artifact-free; the `C(M₁′)==C(M₀)` "leakage placebo" retired. Reconciled:
+`arrival_only_replan_methodology.md` (arms table, D-A10/D-A11/D-A23), `backtest_methodology.md`
+(symbol+arm tables, §3, invariant chain, D-4, DoD), `human_planning_heuristic.md`, `product_thesis.md`,
+`scenario_io_and_replay.md`. **Memory to add S39:** the Reading-B decomposition + L1=H₀−M₁′ anchor.
+
+**2. BLK-1 (B5 tractability) — MITIGATED, real fix deferred.** User decision: **600s HiGHS time-limit
+per solve + accept best incumbent.** `MilpParams.time_limit_s=600.0`; `solve()` returns `status="TIME_LIMIT"`
++ `AirSolution.mip_gap` on truncation (kTimeLimit w/ incumbent), INFEASIBLE if no incumbent. Verified
+highspy API first (`time_limit`, `kSolutionStatusFeasible`, `info.mip_gap`). Doc caveat added: the cost
+chain holds per-draw only for OPTIMAL solves; a TIME_LIMIT solve can transiently violate it (artifact,
+not a bug). Tiny isolation instances finish in ms so the cap never fires for them.
+
+**3. BLK-2 (BSA fallback under-bound) — DISMISSED as a non-bug.** Predicate 8 (`air_graph._uld_fit_ok`,
+both weight AND volume) guarantees every ROUTABLE HAWB fits one ULD → carried alone needs η=1 →
+`⌈cw/1000⌉ ≥ 1` already dominates. The critique conflated the consolidated GROUP's volume-driven η with
+the single-HAWB-alone η that `air_leg_cost_ub` bounds. The 20cbm counterexample is unroutable ($1 fallback,
+cancels in L2). No code change beyond a comment on `_MIN_ULD_PAYLOAD_KG` recording the invariant.
+
+**4. critique-17 cheap fixes (all decision-free).** MAT-4 `t_dead_offset` floored at 96h (max base
+transit) + `_T_DEAD_FLOOR_H`; MIN-3 generator asserts `Δ_k < T^abs` at construction; MIN-4 guard
+`start_km ≤ max_km` (freightnet) + `seed_radius_km ≤ max_radius_km` (GeoSelectConfig); MAT-5
+`resolve_geo_candidates` raises on empty seeds (no silent gateway revert). Doc: MIN-2 v1-formula drift
+scrub (flexibility_model + air_generator docstrings + tpeb retired `compute_fallback_cost`); MAT-2
+retract "second-order" (tardiness-L2 under v2 is a first-order DIFFERENT metric); MAT-3 born-at-risk
+(`slack_k<0`) diagnostic added to proposal §6 + backtest §6. **MIN-1 φ:** confirmed empirically φ=1.3 is
+load-bearing (PVG→HKG→LAX ratio 1.240, pruned at φ=1.2) — recorded at the `corridor_phi` knob; full
+L2-sensitivity sweep DEFERRED to 2c (no L2 to measure yet).
+
+**5. F1 Slice C — spot capacity (BUILT).** MILP: `RateCatalog.spot_cap` + `_build_spot_cap` (C.5d) caps
+chargeable weight on BOTH billing styles — coload `Σ cw_k·x ≤ cap`, flat/MFB `Σ_g CW_{a,g} ≤ cap`
+(user: "model both" — correctness, an uncapped channel is the infinite escape hatch D-A19 forbids).
+Fallback already reflects spot (rides `coload_per_kg` in `air_leg_cost_ub`). Generator: per spot arc
+draws cap=`Uniform(1,3)×1500kg` + two-sided rate=`base×Uniform(0.85,1.18)`, both on the κ-independent
+`spot_regime` stream (decisions: REAL units, κ-independent — no sweep confound). Persistence: `spot_cap`
+folds into `rate_json`. +7 tests (cap binds both styles, escape-hatch guard, κ-stability).
+
+**6. N3 `ReplayState` (BUILT) — `src/replay.py` + `tests/test_replay.py` (13 tests).** Ran an independent
+design-review agent that found my first ledger design wrong in 3 BLOCKING ways; redesigned per its
+guidance. **Clock:** in-memory monotonic; `visible()` parameterized-only (cross-arm safe); syncs sim_state
+for observability only. **Ledger = declarative per-cycle RECONCILE** (not inc/dec): `reconcile(arc,
+tendered, committed_untendered)` recomputes `free`, so a dropped HAWB's slot returns to free for free,
+tendered frozen (rollback raises), over-commit raises. **Two units/tables:** contracted ULD →
+`capacity_ledger` (INT, exact CHECK); spot kg → NEW `spot_capacity_ledger` (REAL, ε-conservation — mirrors
+the float `Σcw≤cap`). `tendered_set()` = the (hawb,arc) pin set (the 2c hook). Idempotent
+executions/runs registration. User walked the design via numeric examples (parking-lot) before approving.
+
+**7. 2c-1 MILP pinning (BUILT).** `solve(..., pinned=frozenset[(hawb,arc)])` hard-pins `x_{k,a}=1`
+(D-A11) — the mechanism M₀/M₁′ use to freeze priors + all arms to lock tendered. Absent-arc pin skipped
+(caller → fallback). +2 tests.
+
+**▶ RESUME (Session 39) — continue 2c, next slice 2c-2:** populate `tender_at` (= binding cutoff, D-A1) in
+the generator/arrival + persistence (currently UNSET — the loop's tender step has no data). Then **2c-3
+loop skeleton (M₁ open-book):** `run_replay` walks clock → `visible()` → `solve` (pin tendered via
+`tendered_set`) → extract per-arc allocation (η from `mawb_uld_counts`; Σcw on spot arcs) → `reconcile`
+ledger → tender at cutoff. Then 2c-4 M₀/M₁′ arms (pin priors) → 2c-5 scorer (deterministic §4 walk w/
+frozen actuals → realized cost/OTP/fallback) → 2c-6 H₀ + π_hind → 2c-7 recourse fixtures (§6) → Stage 3
+(κ,α,λ) sweep = the thesis number. **Standing review agents next due S43** (last S36).
+
+---
+
 ## 2026-06-14 (Session 37 — `FreightNet` first cut BUILT & GREEN: physical freight-node reference layer + great-circle topology service. 218 passed, ruff clean.)
 
 **Built `FreightNet`** (the S37-first workstream / network layer; name locked S36), the prerequisite for

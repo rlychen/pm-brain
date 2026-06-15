@@ -19,11 +19,12 @@ Extends `product_thesis.md §2`; operationalizes `PRD.md §5.2` (counterfactual 
 > over shipments/tiers, scored vs the frozen promise, but no draws). `π_hind` knows the full demand
 > stream at `t=0` (transit is deterministic, so there are no "realized actuals" to also reveal).
 > **`z_tier` / `σ̂` / predicate-9 retire for air** → deterministic deadline feasibility `A ≤ Δ_k`
-> (`air_transit_time.md` v0.3); they revive for ocean. **Arms (sharpened):** `M₀` = incremental-greedy
-> (slot new arrivals into remaining capacity, don't disturb prior soft commitments); `M₁` =
-> re-optimize the open (un-tendered) book each cycle — same arrival stream. **L2 = `C(M₀)−C(M₁)` is a
-> conservative lower bound** (it holds with perfectly reliable transit + zero disruptions, so it cannot
-> be attacked as manufactured). **Disruption recourse is a TESTED CAPABILITY, not a value source** —
+> (`air_transit_time.md` v0.3); they revive for ocean. **Arms (S38):** `M₀` = greedy incremental (myopic,
+> priors pinned); `M₁'` = MILP single-pass optimal (priors pinned — the competent planner we ship); `M₁` =
+> re-optimize the open (un-tendered) book each cycle (pins relaxed) — same arrival stream. Cost chain
+> `C(H₀) ≥ C(M₀) ≥ C(M₁') ≥ C(M₁) ≥ C(π_hind)`. **L2 = `C(M₁')−C(M₁)` is the headline** (open-book reshuffle
+> over the no-reshuffle optimum) and a **conservative lower bound** (it holds with perfectly reliable transit +
+> zero disruptions, so it cannot be attacked as manufactured). **Disruption recourse is a TESTED CAPABILITY, not a value source** —
 > kept out of the headline scenario, verified by three deterministic 2c fixtures (absorbable-delay
 > no-op / connection-break unlock-and-reroute / cancellation reroute-from-current); recourse =
 > replan-from-current-position, past legs immutable, **promise holds** (disrupted-late = miss, no
@@ -35,8 +36,9 @@ Extends `product_thesis.md §2`; operationalizes `PRD.md §5.2` (counterfactual 
 > not a cash outflow) and the headline is gated on `L2_reshuffle` (3-way split, retire the $1M fallback);
 > (C7/D-A14) the **headline `H₀` is batch-at-cutoff** (§0/§3), on-arrival `H₀` (the §4 "known limitation") is the
 > upper bracket only; (M-B1/D-A15) "conservative lower bound" scoped to **transit reliability only**; (M-B2/D-A16)
-> BSA pacing `cap_a`/`A_c` join `W_k`/`z_tier` as **control inputs frozen + bit-identical across arms**; (C3/D-A11)
-> add the **`M₁'` pinned-replan control arm** (`C(M₁')==C(M₀)`) to net tie-break leakage out of `L2`; (C2/D-A10)
+> BSA pacing `cap_a`/`A_c` join `W_k`/`z_tier` as **control inputs frozen + bit-identical across arms**; (C3/D-A11,
+> **rev S38**) the **`M₁'` arm is now the first-class no-reshuffle baseline** (`C(M₀) ≥ C(M₁') ≥ C(M₁)`; the old
+> `C(M₁')==C(M₀)` leakage placebo retired — the headline `L2=C(M₁')−C(M₁)` is intra-engine and artifact-free); (C2/D-A10)
 > pre-registered null + a required negative-control cell. Sound-no-change: lookahead, double-spend, denominator.
 >
 > **v0.2 reframe (kept).** Uncertainty for air is **demand arrival**, not transit time. Air
@@ -72,12 +74,13 @@ Extends `product_thesis.md §2`; operationalizes `PRD.md §5.2` (counterfactual 
 | Symbol | Meaning |
 |---|---|
 | `H₀` | **Human-heuristic baseline.** Simple, spreadsheet-executable planner (`human_planning_heuristic.md`): per-cutoff greedy consolidation, FCFS on cheap/contracted capacity, break-only recourse, no proactive re-optimization. |
-| `M₀` | **MILP, incremental-greedy (no open-book replan).** Slots each new arrival into remaining capacity; does **not** re-optimize prior soft (un-tendered) commitments. Same commitment timing as `H₀`, solved with the air MILP. Isolates solver quality. |
-| `M₁` | **MILP, rolling replan (the product, L2).** Re-optimizes the **open (not-yet-tendered)** book each sim step — reshuffles wherever permitted. |
+| `M₀` | **Greedy incremental (myopic baseline).** Places each newcomer into the best option available when processed, **without** jointly optimizing the cycle's other newcomers and **without** disturbing prior un-tendered commitments. The naive-automation rung; an internal ablation of `L1`, not a product-facing endpoint. |
+| `M₁'` | **MILP, single-pass optimal (pinned replan).** Each sim step the air MILP **jointly** optimizes all un-tendered newcomers with priors hard-pinned (`x_{k,a}=1 ∀(k,a)∈S_t`) — the optimum of the no-reshuffle feasible set. The competent single-pass planner we ship; the `L1` endpoint and the `L2` baseline. |
+| `M₁` | **MILP, rolling replan (the product, L2).** Re-optimizes the **open (not-yet-tendered)** book each sim step — reshuffles wherever permitted (pins relaxed). |
 | `π_hind` | Offline clairvoyant — full demand stream known at `t=0` (transit is deterministic), solved once subject to physical feasibility only (no info/tender-lock). Regret floor (§3). |
 | `α` | Objective tradeoff lever `∈ [0,1]`: `min α·cost$ + (1−α)·lateness$` (both dollars). Swept to trace the cost–OTP curve (§8). |
-| `L1` | **Planning value** = `C(H₀) − C(M₀)` — the solver out-plans the spreadsheet on a static snapshot. Real, near-term-sellable value (§4). |
-| `L2` | **Replan value — the thesis headline** = `C(M₀) − C(M₁)`. |
+| `L1` | **Planning value** = `C(H₀) − C(M₁')` — the competent single-pass optimizer out-plans the spreadsheet. Splits internally into automation `C(H₀)−C(M₀)` + within-cycle optimization `C(M₀)−C(M₁')`. Near-term-sellable value (§4). |
+| `L2` | **Replan value — the thesis headline** = `C(M₁') − C(M₁)` — open-book reshuffle over the no-reshuffle optimum. Intra-engine (same MILP, pins on vs off), so artifact-free. |
 | `Total` | Customer-facing value = `C(H₀) − C(M₁)` = `L1 + L2`. |
 | `C(π)` | Realized cost of `π` over a sim run (operating cost: freight + consolidation + spot/recovery), evaluated on realized actuals. |
 | `C_hind` | Clairvoyant cost. Regret floor. |
@@ -168,25 +171,30 @@ MILP (`src/components/air_milp.py`); `H₀` uses the heuristic in `human_plannin
 | Arm | Solver | Commitment / recourse | Role |
 |---|---|---|---|
 | **H₀** | spreadsheet heuristic | per-cutoff greedy batch; break-only recourse; no proactive re-opt | Realistic human baseline |
-| **M₀** | air MILP | **same as H₀** (per-cutoff batch, break-only) | MILP-no-replan — isolates solver quality |
-| **M₁** | air MILP | re-optimizes the not-yet-tendered book each step | The product (L2) |
+| **M₀** | greedy | per-newcomer myopic; priors pinned; **no** joint cycle opt | Naive-automation ablation (splits L1) |
+| **M₁'** | air MILP | jointly optimal each cycle; priors **hard-pinned** (no reshuffle) | Competent single-pass — L1 endpoint + L2 baseline |
+| **M₁** | air MILP | re-optimizes the not-yet-tendered book each step (pins relaxed) | The product (L2 headline) |
 | **π_hind** | air MILP | full demand + realized actual ETAs at `t=0`; physical-feasible only, no tender lock | Regret floor `C_hind` |
 
-**Why four arms (the L1/L2 decomposition).** Comparing only `H₀` vs `M₁` fuses two effects: the
+**Why the arms (the L1/L2 decomposition).** Comparing only `H₀` vs `M₁` fuses two effects: the
 MILP plans better than a spreadsheet even with zero replanning (**L1**), and the MILP replans
 while the human does not (**L2**). The thesis claim is specifically L2 ("not out-planning a human
-on a static snapshot"). `M₀` is the middle arm that splits them:
+on a static snapshot"). The arms split these along the guaranteed cost chain
+`C(H₀) ≥ C(M₀) ≥ C(M₁') ≥ C(M₁)`:
 
-- **L1 = C(H₀) − C(M₀)** — solver vs. spreadsheet on the *same* commitment behavior. Clean
-  (only the planner differs).
-- **L2 = C(M₀) − C(M₁)** — replan vs. no-replan with the *same* solver. Clean (only recourse
-  differs). **This is the headline.**
+- **L1 = C(H₀) − C(M₁')** — the competent single-pass optimizer vs. the spreadsheet, no replan on
+  either side. Splits internally into **automation** `C(H₀)−C(M₀)` (spreadsheet → naive greedy) +
+  **within-cycle optimization** `C(M₀)−C(M₁')` (greedy → joint optimum); `M₀` is the ablation rung
+  that exposes the split, not a product-facing endpoint.
+- **L2 = C(M₁') − C(M₁)** — replan vs. no-replan with the *same* MILP engine (pins relaxed vs.
+  pinned). Clean (only recourse differs) and **intra-engine** (no cross-code-path artifact).
+  **This is the headline.**
 - **Total = C(H₀) − C(M₁) = L1 + L2** — the customer-facing number, reported as L1+L2, never
   mislabeled as replan value.
 
 The decomposition is exact and additive. It also *tests* (rather than assumes) the claim that
-"the main difference is replanning": if true, `M₀ ≈ H₀` and L2 carries the total; if L1 is large,
-that is itself important to know.
+"the main difference is replanning": if true, L2 is large; if instead `M₁' ≈ M₁` (L2 ≈ 0), the
+value is planning not replan — itself important to know.
 
 **π_hind** uses the point-in-time replay machinery validated in the S2 spike (closed-form
 hindsight on a 3-HAWB/5-step instance; regret matches by hand; no double-spend). 3c productionizes it.
@@ -202,17 +210,18 @@ Consequently `Reg(M₁) = C(M₁) − C_hind` mixes **two irreducible gaps** —
 the future) *and* commitment-structure (M₁ must commit sequentially, π_hind needn't) — and **neither
 is recoverable headroom** (§6). If π_hind were left subject to the tender lock it would not be a true
 clairvoyant and M₁ could beat it on some draw (`Reg < 0`), silently breaking the
-`C_hind ≤ M₁ ≤ M₀ ≤ H₀` chain.
+`C_hind ≤ M₁ ≤ M₁' ≤ M₀ ≤ H₀` chain.
 
 ---
 
 ## 4. Why the decomposition is honest — and why BOTH layers are real value
 
-**L2 is confound-free by construction.** `M₀` and `M₁` share the same solver, the same arrival
+**L2 is confound-free by construction.** `M₁'` and `M₁` are the **same MILP engine** run on the same arrival
 stream through the same `I_t`, the same near-deterministic transit, the same physical-tender lock,
-**and the same frozen control inputs (`z_tier`, `W_k`)**. The *only* difference is that `M₁`
-re-optimizes the not-yet-tendered set. So `C(M₀) − C(M₁)` is the value of recourse over
-sequentially-revealed demand — by construction, not by argument. The v0.1 "you measured your own
+**and the same frozen control inputs (`z_tier`, `W_k`)** — they differ *only* in whether prior commitments are
+pinned. The *only* difference is that `M₁` re-optimizes the not-yet-tendered set (pins relaxed). So
+`C(M₁') − C(M₁)` is the value of recourse over sequentially-revealed demand — by construction, not by argument,
+and with no cross-code-path artifact (the same solver both sides). The v0.1 "you measured your own
 forecast error" objection does not arise (no forecaster asymmetry; the uncertainty is *which HAWBs
 have arrived*, seen identically by both).
 
@@ -337,9 +346,13 @@ asserted bit-identical across re-solves.
   quadratic penalty minimizes mean tardiness, which is *correlated with but not identical to* the
   binary on-time count; reporting both is the falsification check for that metric/objective mismatch
   (the optimizer must not reduce mean tardiness while worsening the on-time fraction).
+- **Report the born-at-risk fraction (`slack_k < 0` count) per run (MAT-3, critique-17).** The p90
+  `base_transit` calibration is necessary-not-sufficient for congestion-independent baseline tardiness:
+  born-late HAWBs with multiple all-late routes get reshuffled by `M₁`, so their tardiness enters L2.
+  Either exclude their tardiness from the headline or document the congestion-coupled component.
 
 **Cost metrics — report percent AND per-flexible-kg** (user D-2):
-- `savings%` per layer, e.g. `L2% = (C(M₀) − C(M₁)) / C(M₀)`; likewise `L1%`, `Total%`.
+- `savings%` per layer, e.g. `L2% = (C(M₁') − C(M₁)) / C(M₁')`; likewise `L1%`, `Total%`.
 - **Per-flexible-kg**: `L2 / cw_flex`. Across the `λ` sweep the book composition changes, so
   percent and per-flexible-kg are *not* affine reparametrizations — both carry information; report
   both. Absolute-$ is dropped (book-size-dependent). **Caveat (`flexibility_model.md` D-F8):
@@ -353,8 +366,13 @@ asserted bit-identical across re-solves.
 
 **Regret invariants** (S2 machinery):
 - `Reg(π) ≥ 0` for every arm and draw.
-- `C_hind ≤ C(M₁) ≤ C(M₀) ≤ C(H₀)` in expectation. Per-draw `C_hind ≤ ·` violations are hard
-  bugs; per-draw `C(M₁) ≤ C(M₀)` violations on adversarial arrival orders are allowed and reported.
+- `C_hind ≤ C(M₁) ≤ C(M₁') ≤ C(M₀) ≤ C(H₀)` in expectation. `C_hind ≤ C(M₁) ≤ C(M₁') ≤ C(M₀)` holds
+  **per-draw when every solve reaches optimality** (nested feasible sets + optimality). **BLK-1 (S38): solves
+  are capped at 600s and return the best incumbent**, so a *time-limited* solve (`status="TIME_LIMIT"`,
+  `mip_gap>0`) can transiently violate the chain — that is a tractability artifact, not a hard bug; only a
+  violation among `status="OPTIMAL"` solves is a hard bug. Report `status`/`mip_gap` per arm so truncated cells
+  are visible. `C(M₀) ≤ C(H₀)` is expectation-only (a greedy MILP-fed arm can lose to the spreadsheet on an
+  adversarial arrival order — allowed and reported).
 - **`Reg(M₁) = C(M₁) − C_hind` is partly irreducible** — the clairvoyant exploits information no
   online policy can have. Do **not** market this gap as "recoverable headroom"; it bounds the gap,
   it is not opportunity left on the table.
@@ -484,8 +502,8 @@ Not building L3 — just not discarding its training data.
   end-to-end running-clock walk per shipment, **no per-route Monte-Carlo**); OTP = **population-over-
   time** on-time fraction (binary per shipment: `A ≤ Δ_k`); CIs via `R` horizon replications.
   OTP **controlled** at graph-gen + penalty, **not** chance constraints. §6, §8, `air_transit_time.md`.
-- **D-4 — baseline / decomposition:** four arms `H₀ / M₀ / M₁ / π_hind`; report L1 = H₀−M₀,
-  **L2 = M₀−M₁ (headline)**, Total = H₀−M₁. §3–§4.
+- **D-4 — baseline / decomposition:** five arms `H₀ / M₀ / M₁' / M₁ / π_hind`; report **L1 = H₀−M₁'**
+  (splits into automation H₀−M₀ + within-cycle-opt M₀−M₁'), **L2 = M₁'−M₁ (headline)**, Total = H₀−M₁. §3–§4.
 - **D-6 — OTP promise frozen at booking**, immutable, pytest invariant. §6.
 
 ---
@@ -493,8 +511,9 @@ Not building L3 — just not discarding its training data.
 ## 11. Definition of Done (Stage 3 gate)
 
 - [ ] **`H₀`** human heuristic implemented per `human_planning_heuristic.md` (fair, non-strawman).
-- [ ] **`M₀`** MILP-no-replan arm (same commitment timing as `H₀`).
-- [ ] **`M₁`** MILP rolling replan wrapping the air MILP in the orchestrator (2c).
+- [ ] **`M₀`** greedy incremental arm (myopic newcomer placement; priors pinned; no joint cycle opt).
+- [ ] **`M₁'`** MILP single-pass arm (jointly optimal each cycle; priors hard-pinned, no reshuffle).
+- [ ] **`M₁`** MILP rolling replan wrapping the air MILP in the orchestrator (2c; pins relaxed).
 - [ ] **L1 / L2 / Total decomposition** reported, L2 the headline (§3–§4).
 - [ ] **Demand lookahead tripwire** pytest green — no future arrival leaks (§5).
 - [ ] **Schedule lookahead tripwire** pytest green — inject future-only flight/cancellation, plan

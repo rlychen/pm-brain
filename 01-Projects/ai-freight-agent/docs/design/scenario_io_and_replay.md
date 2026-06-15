@@ -19,7 +19,7 @@ driven capacity decrement, the conservation identity (`backtest_methodology.md �
 consumes the scenario and produces *decisions*, but **draws nothing new**. Consequences:
 - **Reproducibility:** `(seed, config)` → byte-identical scenario → identical outputs. Re-runnable
   forever; a scenario file is a permanent artifact.
-- **CRN for free:** every policy arm (`H₀/M₀/M₁/π_hind`) reads the *same* scenario, so a measured
+- **CRN for free:** every policy arm (`H₀/M₀/M₁'/M₁/π_hind`) reads the *same* scenario, so a measured
   delta is policy difference, not sampling noise — no separate CRN plumbing.
 - **Plan-on-estimate / score-on-actual** is clean: planners read the published schedule; the scorer
   reads the **pre-generated actuals**; π_hind is simply *allowed* to read the actuals at `t=0`.
@@ -70,8 +70,8 @@ generator DoD item.
   return different equally-optimal solutions → a re-run gives a different total, breaking
   reproducibility). No tie-break canonicalization is needed: whichever optimum the deterministic solver
   returns is **locked in under non-anticipativity** (you don't retroactively re-pick a different optimum
-  when new demand arrives — that would be prescience). This also makes `M₀`/`M₁` return the **identical
-  pre-divergence plan by construction** (they solve the identical `t=0` instance), so they diverge only
+  when new demand arrives — that would be prescience). This also makes `M₁'`/`M₁` return the **identical
+  pre-divergence plan by construction** (same MILP engine on the identical `t=0` instance), so they diverge only
   on genuine replanning = the real L2. DoD: two solves of the same instance → identical `route_legs`.
   - **Hash-independent model build (Session 31).** Arc/HAWB/group ids are strings, so iterating
     sets/dicts to create solver variables and constraints is `PYTHONHASHSEED`-dependent *across
@@ -176,7 +176,7 @@ Per scenario, per policy arm, walk the clock in steps (cadence from `config`):
 for t in steps(horizon, cadence):
     UPDATE sim_state SET sim_clock = t
     I_t  ← visible_shipments(t)  +  capacity_ledger(t)        # only known_at ≤ t
-    plans ← policy.plan(I_t, published_schedule_estimates)    # H₀ heuristic | MILP (M₀/M₁)
+    plans ← policy.plan(I_t, published_schedule_estimates)    # H₀ heuristic | M₀ greedy | MILP (M₁'/M₁)
     for shipment in plans:                                    # RECORD EVERY plan this cycle
         write planning_run + route + route_legs (immutable snapshot, §7)
     firm_up_and_tender(bookings with tender_at ≤ t)           # capacity decrement; conservation identity
@@ -191,7 +191,8 @@ semantics with the frozen draws plugged in (so it's a deterministic replay, not 
 connection-made check + recourse are the orchestrator's per `air_transit_time.md §4`.
 
 Determinism: the MILP and the heuristic are deterministic **under the §2.1 solver pins + tie-break**;
-inputs are fixed; so the run is reproducible. `M₀` re-plans only at commitment (break-only recourse); `M₁` re-plans the open book each
+inputs are fixed; so the run is reproducible. `M₀` (greedy) and `M₁'` (single-pass MILP) pin priors —
+they re-plan only newcomers, never disturbing prior commitments; `M₁` re-plans the open book each
 step → naturally produces *multiple* plan snapshots per shipment. `π_hind` is one solve at `t=0` over
 the full demand + `leg_actuals` (physical-feasible only, no tender lock — `backtest §3`).
 

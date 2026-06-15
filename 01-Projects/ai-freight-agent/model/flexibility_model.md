@@ -155,7 +155,7 @@ that can only make F1.
 ### 2.3 Frozen at `t=0` / instance generation (B-1)
 There is no per-HAWB "booking firm-up" instant in the model (only `known_at` reveal + physical tender).
 So `flex_k`/`cw_flex` are **computed once at `t=0` on the initial schedule snapshot, identically for
-all four arms** (`H₀/M₀/M₁/π_hind`), and frozen — this is the **reporting denominator**. Computing it
+all five arms** (`H₀/M₀/M₁'/M₁/π_hind`), and frozen — this is the **reporting denominator**. Computing it
 at arrival instead would let diverged arms see different post-9 sets → an arm-dependent denominator →
 `L2/cw_flex` incomparable across arms. **Invariant (pytest): `cw_flex` bit-identical across all arms.**
 A HAWB flexible at `t=0` but inflexible by tender still counts (the denominator is fixed; this only
@@ -170,19 +170,19 @@ flight fills). Report against frozen `cw_flex`; reshuffle against the live set.
 2-FLEX owns one table, `TierSpec`, consumed everywhere:
 
 ```
-TierSpec(tier) -> { sla_offset_h,   # T_SLA = ready_k + min_transit_k + sla_offset_h(tier)
+TierSpec(tier) -> { sla_offset_h,   # T_SLA = ready_k + base_transit_h(lane) + sla_offset_h(tier)
                     z_tier,          # predicate-9 reliability multiplier
                     w_sp }           # W_k tardiness weight
 ```
 
 - **2a** draws `tier(k)` from a configured mix (default **20/40/40**, D-F5), sets `T_SLA = ready_k +
-  min_transit_k + sla_offset_h(tier)`, **draws an optional shipper `T_dead` per HAWB** (with a config
+  base_transit_h(lane) + sla_offset_h(tier)` (D-F6 **v2** — the lane's pre-committed achievable transit,
+  **not** the shipment's `A_k^min`), **draws an optional shipper `T_dead` per HAWB** (with a config
   probability; D-F6/M-2b — gives within-tier slack heterogeneity), then `Δ_k = min(T_dead, T_SLA)`,
   stored as `soft_deadline_h`. Replaces 2a's current free `soft_deadline_h` draw.
-  **New dependency:** computing `min_transit_k = A_k^min − ready` needs route enumeration over the
-  predicate-1–8 set, i.e. **generator → graph-gen (route enumeration) → 2b (`route_reliability` Â)** —
-  an edge that did not exist at Stage 2a. No cycle (`route_reliability` is demand-independent: a pure
-  function of schedule + (μ,σ)).
+  **No route dependency:** `Δ_k` is graph-free under v2 — it needs only the lane's `base_transit_h`
+  table, so the v1 generator → graph-gen → 2b edge for the deadline is gone. (`A_k^min` is still
+  computed downstream, but only for `slack_k` / the on-time set, never for `Δ_k`.)
 - **Predicate 9** and **C.10 `W_k`** read `z_tier` / `w_sp` from the same table → no drift in the
   *source*. Note `z_tier` and `sla_offset` are **not independent in effect** (predicate-9 admission
   turns on `sla_offset − z_tier·σ̂`); EXPRESS sets both stringent, so the calibration note must
@@ -215,8 +215,8 @@ TierSpec(tier) -> { sla_offset_h,   # T_SLA = ready_k + min_transit_k + sla_offs
 
 | Consumer | Uses | Note |
 |---|---|---|
-| 2a generator | `TierSpec` → tier mix + `T_dead` draw + `Δ_k` | via graph-gen→2b for `min_transit` |
-| 2b transit | `A_k^min` via `route_reliability` Â | min over **pre-predicate-9** routes (§2.1) |
+| 2a generator | `TierSpec` → tier mix + `T_dead` draw + `Δ_k` | `Δ_k` graph-free (lane `base_transit_h`); no route enum |
+| 2b transit | `A_k^min` via `route_reliability` Â | min over **pre-predicate-9** routes (§2.1); only for `slack_k` |
 | Predicate 9 | `z_tier` | OTP admission filter |
 | C.10 `W_k` | `w_sp` | tardiness weight / prioritization base |
 | Backtest 3a/3d | `cw_flex`, sandbagging | denominator + primary stress |
@@ -242,11 +242,12 @@ graph-gen wiring. 2-FLEX itself is pure/deterministic given tier assignment; no 
   + raise `θ_flex` (optional ε classifier-error noise on the *live* reshuffle set, not on frozen
   `cw_flex`). The band's primary sensitivity.
 - **D-F5 ✓ tier mix is a config**, default **20/40/40** (EXPRESS/STANDARD/DEFERRED); sweepable.
-- **D-F6 ✓ `Δ_k` is tier-derived, with per-HAWB heterogeneity** (Option A + Decision-2b):
-  `T_SLA = ready_k + min_transit_k + sla_offset_h(tier)`; the generator draws an optional shipper
-  `T_dead` per HAWB (config prob); `Δ_k = min(T_dead, T_SLA)`. So slack varies within a tier when
-  `T_dead` bites (else `slack_k = sla_offset`). (vs. Option B random-deadline-then-classify, rejected.)
-- **D-F7 ✓ `flex_k`/`cw_flex` frozen at `t=0`/instance-generation**, identical across all four arms
+- **D-F6 v2 ✓ `Δ_k` is tier×lane-derived, with per-HAWB heterogeneity** (graph-free; supersedes v1):
+  `T_SLA = ready_k + base_transit_h(lane) + sla_offset_h(tier)` (the lane's pre-committed achievable
+  transit, **not** `A_k^min`); the generator draws an optional shipper `T_dead` per HAWB (config prob);
+  `Δ_k = min(T_dead, T_SLA)`. So slack varies within a tier when `T_dead` bites (else
+  `slack_k = Δ_k − A_k^min`). (vs. Option B random-deadline-then-classify, rejected.)
+- **D-F7 ✓ `flex_k`/`cw_flex` frozen at `t=0`/instance-generation**, identical across all five arms
   (`cw_flex` arm-invariance pytest); the reporting denominator. Distinct from the time-varying live
   reshuffle set M₁ acts on (§2.3). (B-1.)
 - **D-F8 ✓ per-flexible-kg headline kept (Decision-1b)** but labeled a **conservative lower-bound
@@ -270,9 +271,9 @@ graph-gen wiring. 2-FLEX itself is pure/deterministic given tier assignment; no 
 - [ ] Ex-post **scarce-capacity diagnostic** reported; its reshuffled mass **may exceed `cw_flex`**
       (companion, not subset — M-3); the per-flexible-kg headline is labeled a conservative
       lower-bound rate, not an attribution (D-F8).
-- [ ] 2a generator refactored: draw tier + `T_dead` + derive `Δ_k` (new generator→graph-gen→2b edge
-      for `min_transit`); **generator tests updated** for tier-derived deadlines (the free
-      `soft_deadline_h` range assertions change — "still green" is not expected).
+- [ ] 2a generator refactored: draw tier + `T_dead` + derive `Δ_k` (graph-free under D-F6 v2 —
+      lane `base_transit_h` table, no route enum); **generator tests updated** for tier×lane
+      deadlines (the free `soft_deadline_h` range assertions change — "still green" is not expected).
 - [ ] `sandbag(config)` knob = shrink `sla_offset_h` + raise `θ_flex` (input perturbation, not label
       flip); asserted **weakly** non-increasing in `cw_flex`, with ≥1 configured perturbation that
       **strictly** shrinks it on the test instance (m-3 — avoids a flaky strict-monotone assertion).
