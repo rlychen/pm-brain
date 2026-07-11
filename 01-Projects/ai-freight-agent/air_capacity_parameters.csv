@@ -1,0 +1,88 @@
+"Air capacity-type parameters — pulled from code (S54), never guessed"
+"Legend","SOURCED = grounded to citation","CAL = calibration placeholder","MRN = modeler-reasoned","— = not modeled"
+
+
+"TABLE A — Capacity tiers + fallback (current code values)"
+"Parameter","Hard BSA","Soft BSA","Spot","Fallback"
+"Code id / settlement","bsa-hard, equalized (take-or-pay)","bsa-soft, per_flight","flat/MFB/coload offers","FallbackPolicy"
+"Rate ($/kg)","r_c = 4.2 (SOURCED)","r_a = 4.2 (SOURCED)","base varies by family × U(0.85,1.18) regime (SOURCED)","1.5 × longest-UB path (MRN)"
+"Capacity unit","integer LD3 (1500 kg / 4.5 cbm)","integer LD3","chargeable-kg per arc","none (relief valve)"
+"Cap / sizing","share of contracted; hard_bsa_frac = 0.35 (CAL)","rest of contracted (1 − 0.35)","U(1.0,3.0) × 1500 kg per arc (MRN); belly × 0.4 (SOURCED)","infinite"
+"Contracted share of supply","contracted_share = 0.55 of S_R (CAL)","same pool","1 − 0.55 of S_R","—"
+"Min-bill / pivot","allowance = pos × pivot, pivot = 1200 kg (MRN)","bills r_a on pivot = 1200","none","—"
+"Decays (booking curve)?","NO — firm, passed through untouched","NO per-cycle","YES — convex A(τ)","n/a"
+"Reserve early (hold qty, no cargo)?","reserved from contract (−6/−12mo); no decision","held firm until cliff","— NOT modeled (cargo only touches spot at commit; the S51 bug)","n/a"
+"Release before cutoff?","NO (pay regardless)","YES at dep − 48h (_SOFT_BSA_RELEASE_LEAD_H)","— NOT modeled","n/a"
+"Friction on unused","full pivot sunk (A_c take-or-pay)","penalty-free release; min-utilization = v2 (—)","— NOT modeled (unused spot is free)","n/a"
+"Swap / assignment lock","assigned late, pin at tender","firm → at −48h locks used positions, releases rest","pin at tender (cutoff)","at fallback"
+"Arrives","on-time","on-time","on-time","T^abs (max tardiness)"
+
+
+"TABLE B — Spot decay curve (only tier that decays; current values)"
+"Param","Value","Grounding"
+"Curve form","A(τ) = A_cut + (1−A_cut)(1−e^{−λτ}); τ = days to cargo cutoff","SOURCED (McKinsey back-loaded, convex)"
+"A_cut freighter","Beta(1.3, 8.7) → E = 0.130","shape SOURCED, level MRN (transpac headhaul ~0.15)"
+"A_cut belly","Beta(1.8, 6.2) → E = 0.225","direction SOURCED (belly cooler than freighter)"
+"λ fill rate","U(0.10, 0.16) per day","CAL (bulk fills final 1–2wk)"
+"Anchor (τ=0)","cargo cutoff = first_leg_dep − L_CUT_H; L_CUT_H = 6.0h","CAL (2–6h + CFS)"
+
+
+"TABLE C — Knobs the redesign adds (NOT in code — need values)"
+"New knob","Applies to","What it sets","Proposed default","Status"
+"Spot reserve lead","Spot","how early the planner may hold a spot quantity (τ before cutoff)","reserve while φ still high (~−5 to −7d)","must add"
+"Spot reserve releasable","Spot","can release held spot before cutoff penalty-free","YES (your call)","must add"
+"Spot no-show friction","Spot","fractional penalty on held-and-unfilled-at-cutoff","fractional ~25–50% of rate (or flat like AA $300 >250kg)","must add — needs magnitude"
+"Soft-BSA swap fluidity","Soft BSA","after commit, swap which shipments fill until cutoff","YES (redesign) — today only lock-used/release-rest at −48h","behavior change"
+"Soft-BSA release deadline","Soft BSA","currently hard-coded 48h","24–96h range (SOURCED)","value is CAL — reconfirm"
+
+
+"TABLE D — Spot rate families (billing; all on chargeable weight CW = max actual vs volumetric)"
+"Family","Charged on","Rate (before regime mult)","Weight breaks?","Billing formula"
+"COLOAD_PER_KG","the shipment's own CW","U(3.5, 5.5) $/kg","No — pure linear","m · CW_own"
+"FLAT_RATE","the consolidated MAWB group CW","m = U(3.0, 5.0) $/kg; min_chg = U(80, 150) $","one floor (min charge)","max(min_chg, m · CW_group)"
+"MIN_FLAT_BREAKS","the consolidated group CW","IATA break ladder (Table E)","Yes — 4 breaks","min_b [ rate_b · max(CW_group, break_b) ]"
+
+
+"TABLE E — MFB break ladder (_gen_breaks; top = U(5.0, 7.0) $/kg, × regime mult)"
+"Break threshold (kg)","Rate ($/kg)"
+"0","top"
+"100","top − 1.0"
+"300","top − 2.0"
+"500","top − 2.5"
+
+
+"TABLE F — Spot family representation in the sim (tpeb_air_instance._offers)"
+"Spot family","Count","Offers (semicolon-separated)"
+"FLAT_RATE","9","br_tpe_lax; br_tpe_ord; cv_hkg_ord_anc; mu_pvg_lax; mu_pvg_hkg; br_tpe_sfo; br_tpe_jfk; mu_pvg_jfk; il_tpe_ord_thru"
+"MIN_FLAT_BREAKS","5","ci_tpe_lax; ci_tpe_hkg; ci_hkg_lax; ci_tpe_lax_thru; ci_hkg_jfk"
+"COLOAD_PER_KG","1","co_tpe_lax"
+"PER_ULD_PIVOT (BSA — not spot)","12","cx_hkg_lax; cx_hkg_ord; cx_hkg_sfo; cx_hkg_jfk; cx_hkg_ewr; cx_hkg_dtw; ci_tpe_sfo; ci_tpe_ord; ci_tpe_jfk; ck_pvg_lax; ck_pvg_ord; ck_pvg_jfk"
+
+
+"TABLE G — Research verdicts (S54, 6-agent web research; flat_rate + min_flat_breaks collapsed to one channel = Direct spot)"
+"Question","Direct-carrier spot (flat_rate + min_flat_breaks)","Co-load (coload_per_kg)","Confidence","Key sources"
+"Q1 — does capacity decay?","YES — booking curve (<40% booked 2wk out; >half final week)","YES — finite consolidator block resold first-come; sub-tenant pool shrinks/sells out (block-consumption curve, not airline s-curve)","high (spot) / med-high (coload)","McKinsey 'Ahead of the curve'; Levin-Nediak-Topaloglu OR 2012; icontainers; UAC"
+"Q1 — is a held booking firm?","Firm EXCEPT tail offload/overbooking (spot/belly bumped first)","Sold as firm/'no rollover'; same tail bump risk","high (mechanism) / low (frequency; NOT FOUND)","LNT 2012; AA Cargo; ScienceDirect 2D cargo overbooking"
+"Q1 — is decay a flight or channel property?","CHANNEL property — only free-sale/spot rides the curve; allotment/BSA carved out firm","same","high","LNT 2012; McKinsey; Xeneta/CLIVE dynamic load factor"
+"Q2 — reserve space first, name cargo late?","YES — FFR reserves route+wt+vol for nominated AWB#; FWB carries identity; firms at LAT/cutoff","YES — commit pivot weight early; assign HAWBs at consol cutoff (~24h pre-alert; ramp ~2h)","high (spot) / med-high (coload; sub-tenant clause inferred, NOT FOUND verbatim)","IAG Cargo e-booking; IATA Cargo-IMP FFR vs FWB; Aramex freight SOP"
+"Q2 — friction before / after cutoff","Free to change/cancel before cutoff; no-show fee after (AA $300 >250kg; LH 25%<48h / 50%<24h)","Free before cutoff; no-show charged; hard-BSA take-or-pay","high","AA Cargo fair-booking; Lufthansa Cargo GCS"
+"Does rating (flat vs weight-break) change booking mechanics / capacity?","NO — pure pricing math on the same space, same booking flow, same cutoff (flat<->MFB collapse holds)","n/a","high","IATA Knowledge Hub — Air Cargo Tariffs & Rules; IATA TACT"
+
+
+"TABLE H — Carve-outs / caveats to encode (research scope = GENERAL cargo)"
+"Caveat","Effect on model","Source","Tier"
+"Special / regulated cargo (DG, pharma, perishable, live animals)","reserve-then-assign FAILS — identity + commodity forced at booking; cargo.one general-cargo only. Scope model to GENERAL cargo.","AA Cargo DG; IATA DGR; cargo.one FAQ","primary"
+"ACAS (US) / ICS2 (EU) pre-load identity floor","identity locks at PRE-LOAD, not physical cutoff => swap-freedom ends at min(doc cutoff, ACAS pre-load). Our Asia->US lane triggers ACAS.","US CBP ACAS / 19 CFR 122.48b; EU Commission ICS2","regulator (Tier 1)"
+"Reserve requires commodity CLASS","swap shipments WITHIN a commodity class, not across","IATA Cargo-IMP FFR; DG booking rules","primary"
+"Held spot is not perfectly firm (offload/bump)","optional v2: small offload hazard on held SPOT only; hard-BSA/freighter stay firm (firmness hierarchy)","2D cargo overbooking lit; firmness-hierarchy trade sources","academic / trade"
+"Co-load sub-tenant terms","reserve-then-assign is INFERRED from BSA + consolidation workflow, not a co-loader tariff verbatim (evidence gap)","— (NOT FOUND)","inference"
+"Soft-BSA release window","'advance notice' release confirmed; NO universal number (48h is NOT universal — one point in ~24-96h)","Unitex; Airsupply; prior project memory","industry"
+
+
+"TABLE I — What the research changes in the model"
+"Item","Verdict","Action"
+"Code already decays all 3 spot families incl. coload (spot_cap) and holds both BSA tiers firm","CONSISTENT with research (decay = channel property; coload decays)","No code change for Q1"
+"Reserve-then-assign (reserve early / firm cargo late)","GROUNDED for all spot families, general cargo","Build the redesign (the S51 bug fix); applies to spot + coload identically"
+"Identity-lock timing","min(doc cutoff, ACAS pre-load) on Asia->US","Set swap-freedom end = min(cutoff, ACAS pre-load)"
+"Friction on unused reserved spot","releasable; fractional ~25-50% (or flat) at cutoff","Confirms Decisions 2 & 3"
+"Held-spot firmness","defensible simplification; tail offload risk real","Keep floored now; small offload hazard = v2"

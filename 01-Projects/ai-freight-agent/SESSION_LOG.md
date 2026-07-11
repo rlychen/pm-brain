@@ -2,6 +2,64 @@
 
 ---
 
+## 2026-07-11 (Session 54 — 2D SPOT RESERVATION: grounded (6 agents) + designed (D-A1 replacement) + verified (2 rounds, 7 agents) + BUILT slice S1. Suite 386 green.)
+
+**Thrust.** Turned the S52 "5 decisions" into a full redesign of how spot capacity is reserved across
+the daily replan loop. The user's framing: on each run, spot the plan USES becomes a **committed
+reservation** that persists (doesn't decay) into later runs; you can swap which HAWBs fill it until the
+cutoff, then identity firms up. Grounded it, designed it (2D weight+volume envelope replacing D-A1),
+verified it hard, and built the schema foundation.
+
+**A — Spot-family grounding (6-agent research, NOT the buggy deep-research harness).** Answered two
+questions about the three "spot families" (`coload_per_kg`/`flat_rate`/`min_flat_breaks`): (Q1) does each
+decay? (Q2) reserve-then-assign? **Findings:** `flat_rate`+`min_flat_breaks` are RATING structures, not
+capacity products → **collapse to ONE channel** (IATA: tariff ≠ booking mechanics); two real channels =
+direct-carrier spot + co-load. **Decay is a CHANNEL property** (only free-sale/spot decays; BSA carved
+out firm) → the code was ALREADY correct (CapDecay decays only spot; both BSA firm) ⇒ **Q1 needs no code
+change.** **Reserve-then-assign grounded** for spot+coload (FFR≠FWB; IAG e-booking "update to cutoff") —
+general cargo; carve-outs: special/regulated cargo, **ACAS/ICS2 pre-load identity floor** (our Asia→US
+triggers ACAS ⇒ identity-lock = `min(cutoff, ACAS pre-load)`), commodity-class swaps only; friction =
+free before cutoff, fractional at cutoff. Docs: `docs/design/air_cargo_spot_families_grounding_s54.md`,
+`air_capacity_parameters.csv` (Tables A–I), memory `reference_air_cargo_spot_family_decay_reserve`.
+
+**B — The design (replaces locked D-A1).** Per-tier commit model (hard/soft BSA / spot / fallback);
+spot reserves a **2D physical envelope `(r^w, r^v)`** (Level 2, user's call — because our 120–240 kg/m³
+cargo is volume-bound, the volume cap binds). **5 sub-decisions** (all walked 1-by-1, approved): caps
+from ULD-equivalents (`C^v=C^w/333.33`); one φ per flight both dims; independent monotone ratchet;
+schema split `spot_wcap`/`spot_vcap`; `penalty_frac=1`. **3 REV decisions:** (1) cost = **sunk-cost /
+free-reserved-capacity** (user caught my broken "scored friction" model — reserved space is sunk when
+booked, free at margin thereafter, optimizer fills rather than strands → no L2 artifact); (2) 2D cap is
+**honest ~2× tighter volume** → recalibrate operating point via τ, not the cap; (3) **S51 M1′-dump
+reversal BLESSED** (the dump was an artifact of M1′ holding no space, not a real cost of rigidity).
+Spec: `docs/design/spot_reservation_2d_design_s54.md` (REV 3).
+
+**C — Verification (2 rounds, 7 agents, all read the code).** Round 1 (4 agents: code-fidelity /
+OR-correctness / methodology / test-completeness) → sunk-cost rewrite + B1 (derive C^v from realized
+C^w, preserve lane-supply path) + friction-in-objective + many folds. Round 2 (3 agents) on REV 2 →
+OR-correctness found **NC-a**: the monotone reservation double-charges an arm that reroutes off a
+reserved arc for a tardiness/fallback reason (systematic downward L2 bias). **User DISMISSED NC-a** as a
+domain non-issue (cancelled flight voids commitment; air delays never strand-with-commitment) ⇒
+**`penalty_frac=1` stands**. All other findings folded into REV 3 (`(1+ε)` on `CW^r`; per-group offset;
+`family_cost(0):=0`; h0 binding-dimension; lexicographic min-reservation tie-break; whole-route atomic
+cutoff pin; §11 methodology reconciliations incl. chain guaranteed→empirical).
+
+**D — BUILT: slice S1 (schema split), 386 green, byte-identical.** `RateCatalog.spot_cap` →
+`spot_wcap`+`spot_vcap`; both generator builders derive `spot_vcap = spot_wcap·4.5/1500` (LD3 geometry,
+NO new RNG draw ⇒ every decay/demand golden byte-identical, lane-supply/belly/repos path preserved); all
+readers (`_build_spot_cap`, `CapDecay`, ledger, `h0_planner`, `scenario_io`) renamed, **1D enforcement
+retained** so nothing behaves differently yet; `scenario_io` round-trips both; tests migrated. Ruff: 6
+pre-existing E501 in untouched arrival code (not mine). Branch `s54-2d-spot-reservation`.
+
+**WHERE WE LEFT OFF / next action.** S1 committed. **Resume at slice S2** — `ReplayState._reserved_spot`
+(per-arc `(r^w,r^v)`, monotone) + post-solve usage ratchet (behavior-neutral until S3). Then S3 (2D
+decay floor) → **S4 (2D MILP caps — headline volume-breach test lands here)** → S5 (cutoff handoff,
+whole-route pins) → S6 (sunk-cost objective + ledger 2D + h0 binding-dim + tie-break) → S7 (arm wiring +
+M1′ coherence + recalibrate operating point + NC1–5). S4 & S6 are the delicate ones. Governing spec:
+`docs/design/spot_reservation_2d_design_s54.md` (REV 3); resume anchor memory
+`project_s54_2d_spot_reservation`.
+
+---
+
 ## 2026-07-10 (Session 53 — TIMESTAMP REMODEL ⟨book, available, latest-arrival⟩ grounded + BUILT (Phase 0+1). 8 grounding agents + 4 plan-checkers + 2 plan-reviewers. Suite 386 green.)
 
 **Thrust.** From the S51/S52 arrival/commit-timing bug, a deep grounding effort established: (a) the empirical air-cargo **booking curve** (McKinsey: <40% booked ≥14d out, >50% in the final week); (b) **tier = SLA slack only** — `base_transit` is already door-to-door + tier-agnostic; tier lives in `sla_offset` + the existing tardiness weight, NOT a new "uplift" axis (carrier marketing ≠ forwarder reality); (c) **deferred = standard + 3 days** (Lufthansa, the one carrier-published anchor); (d) three distinct times — **book** (order placed → reserve), **available** (cargo ready → assign/routing), **latest-arrival** (Δ_k deadline). No integrated 3-timestamp air model exists → our synthesis (past the published frontier).
