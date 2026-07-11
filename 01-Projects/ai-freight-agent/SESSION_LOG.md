@@ -2,6 +2,1076 @@
 
 ---
 
+## 2026-07-10 (Session 53 — TIMESTAMP REMODEL ⟨book, available, latest-arrival⟩ grounded + BUILT (Phase 0+1). 8 grounding agents + 4 plan-checkers + 2 plan-reviewers. Suite 386 green.)
+
+**Thrust.** From the S51/S52 arrival/commit-timing bug, a deep grounding effort established: (a) the empirical air-cargo **booking curve** (McKinsey: <40% booked ≥14d out, >50% in the final week); (b) **tier = SLA slack only** — `base_transit` is already door-to-door + tier-agnostic; tier lives in `sla_offset` + the existing tardiness weight, NOT a new "uplift" axis (carrier marketing ≠ forwarder reality); (c) **deferred = standard + 3 days** (Lufthansa, the one carrier-published anchor); (d) three distinct times — **book** (order placed → reserve), **available** (cargo ready → assign/routing), **latest-arrival** (Δ_k deadline). No integrated 3-timestamp air model exists → our synthesis (past the published frontier).
+
+**Key user-driven correction.** An initial mis-fix wired the booking curve onto the routing timestamps (`known_at→cutoff`) and broke the horizon + flipped D-A9. Reverted. The booking curve belongs to **book-time** (a future reserve-layer signal), NOT the routing timeline. Routing runs on **available** (near cutoff); the long book lead is metadata, not a routing clock event → horizon stays bounded.
+
+**Review harness caught:** a generator **crash** (deferred slack + base > backstop), the base_transit-is-door-to-door misread, tier's second effect (tardiness weight), and a methodology **pivot** (was drifting off the S52 "fix M1′ first" order). Reviewers trimmed scope: realism is a required phase (not shelved); no anticipatory buying now, but record book→available as metadata (user decision).
+
+**BUILT (Phase 0 + Phase 1), 386 green:**
+- **Phase 0** — reverted the broken book-curve edit → restored 386 + D-A9.
+- **Phase 1** (grid realism, one unit; calibration-verified: crash margin 54h, McKinsey curve, E<S<D):
+  - `sla_offset` E/S/D 12/24/**96**; `backstop_buffer_h` 168→**264**; `t_dead` ceiling 144→**240** (deferred's +72h survives a biting t_dead). `test_flexibility` ×3 updated.
+  - **`flight_horizon_days`** (opt-in, default None = back-compat) — flights span it (16), demand stays in first `days` (7), so deferred deadlines reach later flights.
+  - **`book_at`** metadata — random via a NEW independent `book_gap` RNG stream (CRN-safe; added to `RNG_STREAMS`), tier gaps E(0,24)/S(24,120)/D(120,456)h, `book_at = ready − gap` (may be <0). Nothing consumes it yet — data capture for the future anticipatory pre-buy model.
+
+**Files:** `air_generator.py`, `flexibility.py`, `scenario_db.py`, `scenario_io.py`, `config/forwarder_graph_config.json`, `tests/components/test_flexibility.py`; new grounding docs (`docs/design/air_cargo_demand_arrival_grounding.md`, `docs/references-air-cargo-two-stage-allotment.md`, `papers/`); reference fixes (Amaruchkul author correction).
+
+**WHERE WE LEFT OFF / next action.** Phase 0+1 committed. **Resume at Phase 2 — M1′ coherence (symmetric reserve floor)** = the S52 structural fix (the "57%-to-fallback is a self-inflicted artifact" bug). Then Phase 3 — measure L1/L2/OTP on the realistic grid + coherent arm. **NOTE:** to actually USE the 16-day realism, sweep/proof configs must set `flight_horizon_days=16` (default None keeps the 7-day behavior + tests green). Plan of record: `scratchpad/timestamp_remodel_plan.md` (v3, approved). Grounding: `docs/design/air_cargo_demand_arrival_grounding.md`.
+
+---
+
+## 2026-07-09 (Session 52 — commit-timing DESIGN + GROUNDING, NO BUILD. Split-`tender` reserve-vs-assign proposal written + grounded (spot + BSA); full synthesis saved to memory; awaiting sign-off on 5 decisions.)
+
+**THE HEADLINE.** Turned the S51 open design discussion into a **fully-synthesized, grounded proposal** for
+the commit-timing fix — and **built nothing** (user hard rule: no build without greenlight). The fix: split
+the single `tender` event into **reserve-space-early + assign-cargo-late**, symmetric across arms. Proposal
+in `model/commit_timing_reserve_assign_proposal.tex` (written, NOT compiled per project rule). Everything is
+gated on the user signing off **5 decisions** (below). Resume anchor = memory
+`project_s52_reserve_assign_synthesis` (the two tables verbatim).
+
+### A — the 5-agent design deep-dive
+Launched 5 persona agents (industry consultant / OR scientist / air-planning veteran / airline RM scientist /
+adversarial red-team), each read the code. **All converged** on the same structural fix: a per-arc
+**reserved-capacity primitive `r_a`** (hold a spot *quantity* early, no HAWB pin) decoupled from the
+assignment pin; decay floor becomes `f=max(r_a,b_a)` so reserved space doesn't decay. **Red-team reframe (the
+load-bearing insight):** today's M1′ is a **strawman** — it commits a route early (`_route_pins` on placed
+priors) but Model-Y floors only *tendered* cargo, so decayed spot infeasibilizes it → `_repair_frozen_infeasible`
+**dumps to fallback**. That "57% to fallback" is a self-inflicted artifact, not evidence rigidity is costly.
+⇒ **make M1′ coherent FIRST** (give it the reserve floor too); the ONLY M1-vs-M1′ difference must be
+*assignment fluidity*. OR scientist framed it as optimal-stopping (FOC ρ(t*)=κ(t*)). Estimator: **retire
+`L2_real%`** (mirage under Model-Y — M1′ "cheap" only by dumping); headline = service (fallback%/OTP) +
+**unsummed** cost channels + per-tier kg + 3-cause fallback (do NOT sum tardiness into total — it re-imports
+the dump via C.10a).
+
+### B — grounding research (two rounds; the workflow harness failed, recovered by hand)
+User challenged "are you allowed to reserve space without naming cargo — is this common practice?" Ran
+research.
+- **Round 1 (deep-research workflow):** BSA-heavy. **The workflow HUNG TWICE** — root cause: a `WebFetch`
+  to a dead host `scm-en.ecer.com` with **no timeout**, holding a concurrency slot; the synthesis barrier
+  waits on all agents → whole run stalls (15+h). Diagnosed from the journal (started-vs-result counts +
+  pending tool_use), stopped the zombie tasks, and **synthesized by hand from 64 cached verified claims**
+  (10 refuted). Result: allotment/BSA two-stage (reserve quantity early, cargo per-flight later) is textbook
+  RM + carrier tariff (CMA CGM); IATA RP 1670 booking-before-acceptance. Refuted: "settle only on actual
+  usage" (reserved space DOES cost money), "48h release" as universal (contract-variable), Maersk-as-air
+  (ocean/FFE).
+- **Round 2 (spot-specific, two regular agents cross-checked):** user (rightly) said round 1 was too
+  BSA-broad; the real question is **spot**. Asked 3 exact questions. **Answers (grounded, cross-checked):**
+  **Q1 — reserve spot by quantity without naming cargo? YES.** IATA Cargo-IMP separates the **booking message
+  (FFR, space by flight/weight/volume) from the waybill data (FWB, shipper/consignee)**; IAG Cargo e-booking
+  confirms a standard booking needs route+commodity+weight+dims+pieces+**own AWB #**+contact, NOT
+  shipper/consignee (those only for special cargo); cargo.one "book against your AWB stock." So the **master
+  booking is cargo-agnostic** — the thin "consolidation" bridge is no longer load-bearing.
+  **Q2 — underuse penalty? YES, cutoff-gated.** AA Cargo $300 no-show (>250kg, free to cancel before cutoff);
+  Lufthansa 25%<48h / 50%<24h / 50% no-show. Free to *release before cutoff*, fractional penalty only if
+  held-and-unfilled at cutoff. **Q3 — latest commit? the cargo cutoff (LAT)**, doc cutoff before physical,
+  ~3–4h general cargo but highly variable; security/advance-data (ICS2/ACAS) can bind earlier.
+
+### C — what the grounding changed in the design
+1. **Change 4 friction REFINED** (the load-bearing knob): NOT flat full-spot charge on all unused → **cutoff-
+   gated fractional no-show penalty** (~25–50% or flat), free to release before cutoff ⇒ reserve likely
+   **releasable, not strictly monotone**. More realistic AND still rig-safe.
+2. **Spot-reserve grounding UPGRADED** — master booking itself is cargo-agnostic (Q1).
+3. **48h cliff → calibration range** (~24–96h), not a constant.
+4. **Scope caveat** — clean separation holds for **general cargo**; special commodities + security force
+   identity earlier.
+
+### D — captured (docs/memory)
+- Proposal `model/commit_timing_reserve_assign_proposal.tex` (with S52 grounding edits: Change 4 note, Change 1
+  consolidation-framing, 48h calibration note, decision-5 methodology framing). **NOT compiled.**
+- `docs/design/air_cargo_reserve_assign_grounding_s52.md` (round-1 BSA-heavy synthesis — **to be rewritten**
+  with the spot answers in the one consistent pass after sign-off).
+- Memories: **`project_s52_reserve_assign_synthesis`** (CURRENT resume anchor — the two tables + 5 decisions),
+  `reference_air_cargo_reserve_assign_practice`. Index updated; S51 pointer demoted.
+
+### E — the 5 OPEN DECISIONS (resume here — get sign-off, THEN one doc pass, THEN build)
+1. **D-A1 amendment** — approve splitting `tender` into `reserve` + `assign` (relaxes a locked decision).
+2. **Friction model** — cutoff-gated fractional no-show magnitude + reserve **monotone vs releasable**.
+3. **Estimator** — D5-separated + per-tier kg + 3-cause.
+4. **M1′ recoding** — symmetric-reserve behavior change to the built arm.
+5. **Methodology framing** — general-cargo scope; reserve = master-slot quantity; special-commodity/security
+   exceptions.
+Then: one consistent pass (rewrite grounding doc spot+BSA, update memory, refine .tex), THEN build starting
+with M1′ coherence. **Still NO code changed this session.**
+
+### Housekeeping
+- **No code touched; test suite unchanged (386 green as of S51).** Repo verified **PRIVATE**.
+- **Sign-off caveat:** research agents left files I did NOT author/review — `papers/`,
+  `docs/references-air-cargo-two-stage-allotment.md`, and edits to `docs/academic-literature-references.md` +
+  `references/air-cargo-allotment-contracts.md`. Left **UNCOMMITTED** — triage next session (likely move to
+  vault or delete per "notes to vault not repo").
+- **Workflow-harness bug noted:** deep-research `WebFetch` has no timeout → a dead host hangs the whole run.
+  Avoid that harness for web research until fixed, or pre-screen URLs; regular Agent calls worked fine.
+
+---
+
+## 2026-07-05 (Session 51 — F1 grounded decay + Model-Y (items 1/2/3) BUILT & reviewed → D3-sweep diagnostics REVEAL the real bug: arrival/commit timing, NOT decay. 386 passed, ruff clean. ▶ Resume: fix the commit-timing / book-lead + BSA-swap allocation, THEN re-run the sweep.)
+
+**THE HEADLINE (read this first tomorrow).** We built a large, grounded, independently-reviewed capacity-model
+overhaul (F1 decay + Model-Y), then the D3-sweep diagnostics exposed that the model's real problem is **the
+arrival/commit timing, not the decay**. **The decay is fine (grounded).** The bug: cargo arrives ~2 days
+before its cutoff and only *commits* at the cutoff, so it never catches spot capacity (which fills over
+~2 weeks). Everything below is context for fixing THAT. **All code is BUILT, tested (386), reviewed, and
+committed at this sign-off — but the sweep/thesis number is NOT produced yet because the model needs the
+timing fix first.**
+
+### PART A — what got BUILT this session (all green, 2 independent code reviews PASS-WITH-NITS)
+
+1. **Increment 4 — freighter repositioning (D-A30)** (`air_generator.py`): `_expected_residual` +
+   `_reposition_freighter_spot(F0,R,ρ)` + `reposition_rho` config (default 0 = negative control). Per dest
+   region, redistribute freighter-spot budget across origins toward analytic residual demand; conserves G_j;
+   no RNG; CRN gate extended to ρ. ρ=0 byte-identical. 9 isolation tests.
+2. **Cleanup** — retired the dead old-region funcs (`_dest_region_shares`/`_draw_region_tightness`/
+   `_size_region_supply`/`_draw_region_network_supply`/`_build_region_rate_catalog`) + constants + 3 dead tests.
+3. **Fix B — per-origin BSA backstop** (`tpeb_air_instance.py`): added CI-ex-TPE (`ci_tpe_sfo/ord/jfk`) + CK-ex-PVG
+   (`ck_pvg_lax/ord/jfk`) **contracted (pivot) freighters** so EVERY origin region has a BSA backstop (was
+   PRD/HKG-only → oversubscribed by all origins via the HKG hub). Placed in the SAME departure bank as the CX
+   HKG flights so the F2b `known_at` anchor is undisturbed (a first attempt with early deps broke arrival
+   timing — fixed). Fallback dropped ~80% → realistic. Happy-path test moved to a clean legacy seed (the
+   doubled contracted-arc count dilutes the flat-κ legacy pool — legacy-only artifact).
+4. **F1 — ONLY SPOT DECAYS** (`cap_decay.py`): grounded convex booking curve `A(τ)=A_cut+(1−A_cut)(1−e^{−λτ})`,
+   τ=days-to-**cutoff**; `A_cut` right-skewed **Beta**, deck-differentiated (freighter mean 0.13 / belly 0.22),
+   `λ~U(0.10,0.16)`. **BOTH BSA tiers now firm** (hard + soft); removed the old soft-BSA continuous decay.
+   Research doc `docs/design/decay_model_research_s51.md`.
+5. **Model-Y (items 2+3)** (`replay.py`): the spot decay FLOOR is now **tendered-only for M1/M1'/π_hind**
+   (was M1' = tendered∪placed, which handed the rigid arm unearned protection = the "M1 OTP always < M1'"
+   artifact). M0 keeps tendered∪placed; H0 all-placed. M1' still hard-pins placed priors, so a placed-un-tendered
+   prior on a decayed arc can go INFEASIBLE → `_repair_frozen_infeasible` **dumps it to fallback** (rigid, no
+   reshuffle) + a **fail-fast guard** (raises if a tendered/held pin was ever decay-invalidated — can't happen
+   by the invariant). Item-3 test forces the path with aggressive decay + monkeypatch-counts the repair (the
+   first version was vacuous — the review caught it).
+6. **Soft-BSA release cliff (item 1)** (`replay.py`): soft BSA firm until **`dep − 48h`** (SOURCED: Amaruchkul
+   2018 penalty-free release), then LOCK the used-at-cliff positions / RELEASE the rest (dropped — a BSA flight
+   has no spot arc to receive them). `_soft_bsa_release_map`/`_used_soft_positions`/`_apply_soft_bsa_locks` +
+   `dep−48h` added as a machine cadence point + `soft_locked` state. Locking *used* protects every tendered
+   booking (the review's invariant — verified). 4 new tests (`tests/test_soft_bsa_cliff.py`).
+7. **Docs reconciled**: methodology **§14.2** rewritten (spot-only decay, 48h cliff, Model-Y floor, M1' recourse);
+   `capacity_types_review_s51.md` created (21-type taxonomy → 6 modeled buckets; price⊥space; F1/F2 findings).
+   **Both increments independently reviewed** (agent, PASS-WITH-NITS each; nits fixed or noted).
+
+### PART B — the D3-sweep DIAGNOSTICS (the pivot — this is where the real problem surfaced)
+
+Ran the corrected model and it looked broken (L2_real NEGATIVE everywhere, fallback 24–71%, OTP 31%). User
+said "something is fucked up." Diagnosed it read-only, cell = **τ=3.0, seed=3, n=70** throughout:
+
+- **Feasibility table**: EVERY HAWB has a feasible in-time route (67/70 have ≥2; up to 73). **Timing WALL ruled
+  out** — deadlines/transit are fine.
+- **Perfect-information solve** (clairvoyant, full undecayed supply, all demand, one solve): **9% fallback, 60%
+  OTP, real $262k, OPTIMAL.** So the engine works; the instance's ceiling at 3× supply is ~60% OTP (structural
+  contention on the fast arcs).
+- **No-decay staged run**: **M1 = 7% fb / 63% OTP / $260k ≈ the clairvoyant ceiling.** M1' = 9%/57%. **⇒ 100%
+  of the degradation is the DECAY. Staging costs ~nothing.**
+- **The mirage**: M1' real cost $94k is BELOW the clairvoyant $262k — impossible legitimately; M1' only "looks
+  cheap" because it dumps 57% to fallback (routes 43%). **`L2_real%` (cost) is INVALID under Model-Y**; the
+  honest headline is **service (fallback/OTP) + total (real+penalty)**, and (probe) M1 delivers ~2× more cargo
+  than M1' — open-book's value is now SERVICE, not cost.
+- **Root cause = arrival/commit timing.** Spot decays to ~18% of nominal at cutoff (65,695→11,545 kg; US-bound
+  32,634→4,508 = 14%). **First HAWB arrives t=0; median book-lead = 1.9 days.** The decay window is ~2 weeks but
+  cargo arrives ~2 days out — so cargo NEVER sees full spot (revealed ~2d out at φ≈33%, commits at cutoff at
+  φ≈15%). We only ever sample the steep tail of the curve.
+
+### PART C — RESEARCH done this session (grounded, agents)
+
+- **Grounded decay** (2 agents): convex/back-loaded (McKinsey <40% booked at 2 weeks, SOURCED); `A_cut` low +
+  right-skewed (dynamic LF ~57–65%); headhaul ⇒ ~0.15 central; freighter<belly. → `docs/design/decay_model_research_s51.md`.
+- **Soft-BSA release** (2 agents): ~48h before departure penalty-free (Amaruchkul 2018, SOURCED); min-utilization
+  60–70% (v2). Note discrepancy: booking-lead agents said allotment release ~2 weeks — reconcile the cliff later.
+- **Book-lead / arrival timing** (2 agents): median **~4–7 days** (A:5–10, B:3–5), mass in final 1–2 weeks, window
+  ~30 days. **Our 1.9 days is ~3× too short.** Tier direction (express books LATE, deferred EARLY) MATCHES our
+  §14.3. The book-lead is **[CAL]/MRN — NOT grounded** and inconsistent with our own grounded decay. Crucial:
+  "booking" = *tendering*; real cargo tenders ~5 days out, NOT at the cutoff (our model tenders at cutoff = T-6h).
+- **Distress pricing** (3 HETEROGENEOUS agents — academic RM / market-data / adversarial): **do air-cargo spot
+  prices DROP close-in on undersold flights?** Verdict: **NO reliable systematic close-in markdown.** Tight flight
+  → RISES (well-sourced: "final shipments highest yield", McKinsey). Slack → theory pulls down but applied RM
+  DELIBERATELY suppresses it (anti-strategic-waiting); unsold cleared via overbooking + spoilage (flown empty) +
+  private consolidator channels, NOT visible price cuts; min-charges floor it. Magnitude UNQUANTIFIED. For our
+  transpac HEADHAUL (tight) → premium, not discount. **⇒ Don't model distress pricing; there is no price reason
+  to wait; a rational forwarder BOOKS EARLY.** (I was called out for earlier asserting "slack→drop" with invented
+  confidence — the research refuted it. Keep MARKET-CYCLE pricing [our 0.85–1.18 regime, legit] separate from
+  TIME-TO-DEPARTURE pricing [not a real drop].)
+
+### PART D — the OPEN DESIGN QUESTIONS the user is thinking about (RESUME HERE tomorrow)
+
+The user concluded the decay is fine and the fix is about **when cargo commits + how BSA is allocated**. Two
+coupled, still-open threads (user was mid-thought at sign-off — do NOT build yet, resume the discussion):
+
+1. **Commit timing** — since there's no distress-discount reason to wait, **commit spot ASAP on arrival** (lock
+   high-φ spot). This is TWO things the user explicitly separated:
+   - **(2) When the order ARRIVES** = a MODELING input (the demand stream). Simple change: lengthen book-lead to
+     the grounded ~5-day median, spread over 1–2 weeks (keep tier direction). Currently 1.9 days.
+   - **(1) When we FIRM/commit** = an ALGO/logic decision (firm-now vs wait). Our model tenders at the CUTOFF;
+     real cargo commits ~5 days out. Under Model-Y (only tendered protected), committing at cutoff = φ≈15%;
+     committing ~5d out = φ≈56%. This is the load-bearing fix.
+2. **BSA-first allocation + the swap insight** (user's last point) — cost-min fills firm BSA first (hard BSA is
+   sunk=free; soft cheap), so early arrivals take BSA and **late arrivals get pushed onto (decayed) spot** →
+   recreates the late-booking problem for exactly the captive cargo. Classic airline-RM "protection level." BUT
+   the user noted **BSA assignment is swappable until cutoff** — a late captive HAWB can DISPLACE an early flexible
+   HAWB off the BSA (bumping it to spot). This corrects the "pre-reserve" framing (open-book M1 can reshuffle BSA
+   fill on the fly). **The bound**: the swap only completes if the displaced early HAWB has LIVE spot to move to;
+   once spot decays, the swap chain breaks. So the leverage is STILL "get the early/flexible cargo onto spot while
+   it's fresh" — which both delivers them and keeps BSA free/swappable for late captives.
+
+Also open/known:
+- **Capacity mix**: Asia→US firm (contracted) capacity is only **0.89× demand** (undersized) and metro-mismatched
+  (at cutoff West 0.9× / Midwest 0.8× SHORT, East 2.0× surplus; Midwest is 59% of demand). Half the spot is
+  **feeder** (intra-Asia, oversized band cap, doesn't deliver). Worth fixing when we revisit supply sizing.
+- **Metric reframe**: retire `L2_real%` as the headline (mirage under Model-Y); lead with service + total cost.
+- The soft-BSA cliff 48h vs the booking agents' "~2 weeks allotment release" — reconcile.
+
+### Housekeeping
+- **386 passed, ruff clean.** All code + docs COMMITTED at this sign-off (were uncommitted during the session).
+- Diagnostic scratch left in the SESSION scratchpad (ephemeral, not committed). Old `scripts/_*.err`/`_*.py`
+  scratch from S50 still uncommitted (as before). `scripts/d3_sweep.py` τ ladder is STALE (`{0.75,1.05}`) — needs
+  the re-anchored ladder AND the metric reframe before the sweep is meaningful.
+- Memories added: `project_s51_decay_timing_modely`, `reference_air_cargo_timing_and_pricing`.
+
+---
+
+## 2026-07-04 (Session 50 — D3 sweep (corrected H0) → geo audit → Taiwan-Strait water-bug FIX (committed) → §14.1-R region redesign APPROVED (D-A25..D-A30) → slice 1 taxonomy + slice 2+3 O-D-lane re-key BUILT. 374 passed, ruff clean. ▶ Resume at increment 4 (freighter repositioning D-A30).)
+
+**1. D3 sweep re-run for the corrected (provisional) L1.** Rebuilt the scratch sweep harness (`scripts/d3_sweep.py`, a keeper) using the PRODUCTION region-τ path (`generate_arrival_instance` + `CapDecay` + `CALIBRATED_TARDINESS_W`, tardiness ALWAYS-ON asserted per-HAWB). Full 24-cell factorial (8 cells × 3 seeds, n=70): **L2_real median +16.5%** (reproduces S49; positive 20/24, negatives all seed-7 = the S45 realized-vs-planned inversion). **L1_real median −27.5% is the D5 MIRAGE** — H0 strands 60–81%, its cheap real cost is fallback-dumped (L1pen$ large-positive everywhere). Where H0 strands less (comp .70 / τ .75), L1 flips slightly +. Report shows BOTH cost numbers (real + fallback penalty) side by side.
+
+**2. The real finding: fallback is 30–70% in EVERY cell, 100% capacity_roll (0% structural).** `scripts/_fb_cause_probe.py`: not a graph bug — every stranded HAWB has a real route that was full. A/B probe (`_decay_ab_probe.py`): CapDecay adds only ~11pts; even decay-OFF at τ=1.05 (supply≥demand) strands 43%. `_supply_balance_probe.py` localized it: the short region (LAX) was starved (S_R/D_R=0.63) even at τ=1.05, and the "S/D=1.64" headline was inflated by a 29k-kg HKG feeder pool.
+
+**3. Geography audit (4 parallel subagents) — two defects.** (a) **Water bug**: origin truck-drayage was pure great-circle k-NN (1500km, no land/water test) ⇒ EVERY HAWB got a priced truck arc across the Taiwan Strait (mainland↔TPE). (b) **Region incoherence**: LAX+SFO are one substitutable West-Coast market wrongly split short/slack ⇒ the 3-way tightness dial collapsed to ~1.5-way; no East Coast. Also found: candidacy `dest_candidates` populated via geo corridor (SFO reachable from LA door, ORD not), the `min_count=1` seed-radius quirk (seed_k inert), and the region-τ sizing math survives clustering (6 re-key sites).
+
+**4. Water-bug FIX — standalone, COMMITTED `7c08539`.** `freightnet.ground_group(coord)` (landmass classifier TW/EA/NA) + `geo_select` gates truck-drayage SEEDS per door by landmass (air legs untouched — cargo flies TPE→HKG→US). Verified 0 cross-landmass truck arcs (was 100%), 0% structural fallback, feasible+deterministic. 3 tests updated (each a downstream consequence, not masked). Sweep re-confirmed NOT corrupted — corrected: fallback +3–10pts (removed illegal escape valve), and **L2 STRENGTHENED** (+16.4%→+32.7% on the smoke cell — tighter legal supply → more open-book value).
+
+**5. §14.1-R region redesign — APPROVED v1.0 (D-A25..D-A30), one-by-one by the user.** After user pushback ("distance not clustering"; "TPE is another country"; "tightness dest-only or O-D lane?"):
+- **D-A25** candidacy = DOOR-CENTRIC distance (not airport clustering — the equidistant-opposite-directions insight); **D-A26** reach = radius now → committed-SLA time budget (Δ_k) next; **D-A25b** regions = supply-indexing partition, decoupled from candidacy.
+- **D-A27** dest = 3 metros (West {LAX,SFO,OAK,ONT,SNA,BUR,SJC} / Midwest {ORD,DTW,MDW} / East {JFK,EWR,LGA,BOS}); **D-A28** origin = 3 regions (Taiwan {TPE} / PRD {HKG,+CAN} / EastChina {PVG,+SHA}), separated by landmass + door-reach.
+- **D-A29** tightness re-keyed to O-D LANE (9), origin-dominant via WIDE-origin/NARROW-dest bands, `q_ij=q^O·q^D`, Σ recovers τ. **D-A30** belly+BSA lane-frozen, freighter/spot the sole repositionable pool (expected-residual signal, `reposition_rho` default 0, supply⊥demand preserved). Design doc `docs/design/s50_lane_tightness_freighter_repositioning.md` (agent-authored, sourced: BAI30-HK vs BAI80-Shanghai origin divergence; Loadstar freighter redeploy; belly-follows-pax; BSA lane-scoping).
+
+**6. BUILT slice 1 (taxonomy) + slice 2+3 (O-D-lane re-key + schedule).** 374 passed, ruff clean, CRN verified (demand byte-identical under τ/α), lane path builds+solves OPTIMAL.
+- Slice 1: `_DEST_REGIONS`/`_ORIGIN_REGIONS`, `dest_region_of`/`origin_region_of`, per-region door boxes, `_DEST_BBOX_METRO` (`tests/test_region_taxonomy.py`, 9).
+- Gateways DTW/JFK/EWR + **grounded** `_DEST_BASE_TRANSIT_H` (East 112h, sourced transit-time research).
+- Lane geometry: `_origin_region_shares` (q^O = analytic config vector, equal thirds default, China-dominant = MRN), `_dest_cluster_shares`, `_lane_shares`, `_draw_lane_tightness`, `_size_lane_supply` (`tests/test_lane_tightness.py`, 7).
+- Supply re-key: `lane_of`, `_draw_lane_network_supply`, `_build_lane_rate_catalog`, orchestrator switched to lanes, `origin_mix` config; `_draw_lane_doors` (per-region origin box + metro dest box) wired into `_gen_hawbs`/`_gen_arrivals` — demand now spreads across all 9 lanes.
+- Schedule flights: East (cx_hkg_jfk/ewr, ci_hkg_jfk) + DTW (cx_hkg_dtw) + origin-direct East (br_tpe_jfk, mu_pvg_jfk).
+- Tests bumped to n=70 proof scale (both-settlements + cap_decay — lane keying lumpier at n=20, R5).
+
+**▶ RESUME: increment 4 — freighter repositioning (D-A30):** `_expected_residual` + `_reposition_freighter_spot` + `reposition_rho` config, layered into `_build_lane_rate_catalog` (currently carries the STATIC lane freighter budget). Then **cleanup** (retire the now-dead old region funcs `_dest_region_shares`/`_draw_region_tightness`/`_size_region_supply`/`_draw_region_network_supply`/`_build_region_rate_catalog` + `_DEST_REGION_GATEWAYS`/`_DEFAULT_REGION_MIX`/`_TAU_BANDS`). Then the PAYOFF PHASE: **calibrate the operating point** (tune τ ladder + origin_mix/region_mix so a normal cell hits realistic fallback/OTP, not today's ~80%) → **re-run the D3 sweep** on the corrected model for the thesis number. **Open calibration (none block build):** reposition_rho value (MRN, sweep {0,0.5,1}), origin/dest band widths (INFERRED — calibrate to BAI dispersion), q^O China-dominant share (MRN), per-gateway transit hours, final metro membership.
+
+---
+
+## 2026-06-28 (Session 49 — Phase 1 (1c + D2) + Phase 2 + Phase 3 BUILT. 1c = lead-time bucket mixture (§14.3). D2 = belly/freighter deck split (belly spot cap = 0.4× freighter, GROUNDED); deferred-air arc DROPPED (same spot pool). Phase 2 = `CapDecay` booking-curve decay component. Phase 3 = scorer 3 metric families (real/penalty split + 3-state OTP + fallback 3-cause + `compute_savings` pairs). 353 passed, ruff clean. ▶ Resume at Phase 4 (calibrate + sweep = thesis number).)
+
+**— S49 continued: calibration → H0 rebuild → tractability deep-dive —**
+
+**Cost-split (D5) + tardiness-always-on + decay, then the D3 sweep.** Two-number cost split
+(`real_cost` vs `fallback_penalty`, never summed; `AirSolution.cost_breakdown` + `_REAL_COST_KEYS`);
+C.10 fallback arc penalized at max tardiness; `CapDecay` gentle default; `CALIBRATED_TARDINESS_W`
+(1.3/0.65/0.32 flat/tier) as the single source, generator default flipped ON (structural guardrail —
+CLAUDE.md + BUILD_STATUS banners; memory `feedback_tardiness_penalty_always_on`, a 2nd-offense calibration).
+OTP re-anchored (~0.63); M1/M1' cost-vs-service is a headline. D3 sweep at proof scale (n≈70) → L2_real%
+≈ +9–18% (open-book saves real money at a service cost). Sweep hit a tractability blowup on some cells → see
+below.
+
+**H0 human baseline REBUILT (`src/h0_planner.py`) — then PARKED as a TODO.** Old standalone-per-shipment
+routing dumped ~80% to fallback regardless of capacity. Replaced with a supply-first, batch,
+best-fit-decreasing consolidation policy (research-grounded: Bookbinder/Li pivot-weight ULD build-up) + a
+knob-C reroute-to-next-supply repair (the all-pinned billing solve is the feasibility oracle). Fixed a
+dunnage mismatch (C.4a 1.05·w) that over-subscribed near-full arcs. Now feasible + capacity-responsive; chain
+C(H0) ≥ C(M1') holds on total cost. BUT still strands ~29–51% (too high for a "competent" daily planner) →
+redesign PARKED (EXECUTION_PLAN.md), user to supply pseudocode. L2 headline (machine-vs-machine) unaffected.
+
+**Tractability deep-dive (4 OR agents) — 2 problems; FIX2 shipped, FIX1 deferred.** (A) `x` (binary routing)
+was O(H²) from a HKG dwell-arc leak → **FIX2**: each HAWB's subgraph keeps only its own hub-dwell arc → O(H)
+(n=70 x −53/−59%), optimum bit-identical at tight gap, suite green → SHIPPED. (B) the ~7952s blowup is a
+weak-LP dual-bound problem on integer `eta` (ULD positions), driven by n (phase transition ~90–100) +
+mid-tight tau (NOT hard_bsa_frac); the soft `time_limit` doesn't bind at n≥100 (unbounded overshoot). FIX1
+(a custom eta MIR cut) is **R2 research** (a naive round-up cut is invalid); the zero-risk interim is a
+looser `mip_rel_gap` at large n (validated: 26× faster for 0.14% obj) + a hard cap, KEEPING 0.005 for L2
+cells. Proof scale (n≈70) is green. Reusable probes kept in `scripts/`.
+
+**Committed:** `c8bb738` (infra: cost-split + CapDecay + calibration), `ee365fc` (H0 rebuild + FIX2); suite
+358 green. ▶ **Resume:** re-run the D3 sweep for the corrected human-vs-machine (L1) number now H0 is fixed;
+H0 redesign awaits user pseudocode; FIX1 eta-cut + symmetry-breaking is R2.
+
+**Phase 1 slice 1c — the arrival spread.** Replaced the binary `tier_coupled_arrival` book-lead path with
+the §14.3 **per-tier lead-time bucket mixture** in `data/synthetic/air_generator.py`:
+
+- New `LeadBucketConfig` (frozen): four fixed buckets (early [96,144] / medium [48,96] / late [12,48] /
+  very-late [6,12]) + the one load-bearing knob = a **3×4 weight matrix** (EXPRESS/STANDARD/DEFERRED rows),
+  defaulted to the §14.3 illustrative values (EXPRESS heavy late tail 0.25; DEFERRED early-skewed 0.50).
+- `ArrivalConfig.lead_buckets: LeadBucketConfig | None = None` — **opt-in**; None = legacy scalar path,
+  byte-unchanged (verified by a test).
+- New `_categorical(rng, weights)` helper; in `_gen_arrivals` the bucket path draws **bucket ~
+  Categorical(π_tier)** then **B ~ U(bucket_range)**, both ALWAYS drawn in fixed order/count (CRN) — the
+  categorical only selects the range, never gates the uniform. Drawn B re-clamped to physical `min_b`
+  (prep+dispatch) so the very-late floor tracks if prep/λ_disp move. Persisted-config gets a
+  `lead_buckets: bool` provenance marker.
+
+**Scoping Q resolved (was flagged in RESUME).** 1c stays standalone — the bucket mixture only touches
+book-lead/`known_at` *timing*, orthogonal to where supply lands. **Did NOT** wire the region/τ supply path
+(1a/1b, on `generate_air_instance`/`GenConfig`) into the arrival generator (`generate_arrival_instance`/
+`ArrivalConfig`) this slice — that integration is its own step (keeps one-thing-at-a-time isolation),
+better done once Phase 2/3 need the unified instance. Flag for the integration slice.
+
+**Tests (`tests/test_arrival_stream.py`, +6 → suite 323→329):** min-floor invariant; EXPRESS heavier
+short-fuse (≤48h) tail than DEFERRED (within-tier spread); reproducibility; **capacity-axis CRN**
+(κ/α leave the full demand+cargo signature byte-identical); default-off == legacy byte-identical;
+degenerate very-late vs early matrices order correctly on mean book-lead. **Test-design note:** the F2b
+`latest_ready` clamp only pulls `known_at` earlier ⇒ realized B can *exceed* its drawn bucket; absolute
+upper-bound asserts on realized B are invalid — used the min-floor + relative-mean forms instead.
+
+**D2 — BUILT (S49), both knobs grounded on real data via background research agents, not guessed.**
+
+- **Belly spot-cap fraction = 0.4 — LOCKED, cited, BUILT.** Physical per-aircraft total payload ratio
+  ~0.15 (belly 12–21 t vs freighter 100–139 t, sourced Boeing/Atlas/IATA/ResearchGate), but the model knob
+  is the *spot* cap and freighters carve most of their hold to BSA (≈35% spot share) while belly is all
+  spot ⇒ 0.15/0.35 ≈ 0.4. Sources in methodology §14.4 + memory `reference_belly_freighter_capacity`
+  (URLs preserved). **Code:** `tpeb_air_instance._BELLY_CARRIERS={5J,MU}` tags those legs `PAX_BELLY` (the
+  `deck`); CI/BR/CX/CV stay freighter; BSA on freighters only. Generator `GenConfig.belly_spot_cap_frac=0.4`
+  + `_is_belly(off)` (any belly leg on the path = bottleneck) thins belly spot caps in
+  `_build_region_rate_catalog` (**region path only**, `tau is not None`). Tagging is inert for routing
+  (HAWBs don't restrict ac_type); only the spot-cap number changes ⇒ legacy κ path byte-identical (tested).
+- **Deferred-air arc — DROPPED (grounded, was an S47 "build now").** Research crux: deferred/economy air
+  is **NOT** a separate capacity pool — it's the lowest-priority tier on the **same** space-available spot
+  space, so a separate-capacity arc double-counts the pool the belly split rations. Also: the deferred
+  *behavior* already emerges (shared spot pool × DEFERRED slack deadline × cost-min), and the deferred
+  *discount* is shipper-revenue-side, not forwarder-cost-side (our L2 is cost-side). Memory
+  `reference_deferred_air_capacity` (URLs preserved); methodology §14.6 D2 flipped to DROPPED.
+
+**Tests (`tests/test_network_supply.py`, +4 → 329→333):** deck tags match carriers; belly arcs thinned by
+0.4 vs the frac=1.0 baseline (freighter arcs unchanged); thinning deterministic; **legacy path ignores
+`belly_spot_cap_frac`** (byte-identical). Region path builds+solves at the default 0.4 (existing
+`test_region_path_builds_and_solves` now exercises the thinning).
+
+**Phase 2 — `CapDecay` BUILT (S49).** The S46 kill-shot's scratch `make_cap_decay` monkeypatch is now a
+tested component `src/cap_decay.py`: `CapDecay(offers, hawbs, *, seed, params=DecayParams())` is the
+callable `run_replay(cap_decay=...)` already expects. The corrected model (only the free pool decays;
+booked/used = firm floor; soft-BSA used counted per commodity-group; hard-BSA untouched). Linear booking
+curve φ_a(T_a−t) = φ_min + (1−φ_min)·clip(Δt/H,0,1); per-flight jitter φ_min~U(.05,.15), H~U(120,168)
+drawn on a NEW dedicated `cap_decay` RNG sub-stream (added to `scenario_db.RNG_STREAMS`; supply-side,
+never reads demand). `DecayParams` exposes the bounds for the Phase-4 sweep. **Tests** (`tests/test_cap_decay.py`,
+9, +9 → 333→342): φ monotone/bounded; spot decays only the free pool floored at booked; hard-BSA
+untouched + soft-BSA shrinks; **soft-BSA floored at USED positions (no eviction)**; determinism on the
+stream; seed changes jitter; params override horizon; **end-to-end `run_replay(cap_decay=…)` on M1/M1p is
+feasible (no INFEASIBLE cascade — the seed-7 bug) + byte-deterministic**. Default-off in `run_replay` ⇒
+headline path byte-unchanged. Kill-shot stays SCRATCH (its inline copy is now superseded by the component).
+
+**Phase 3 — scorer/metrics BUILT (S49).** Extended `score_run` in `src/replay.py` to the three §14.5
+metric families + added `compute_savings` (Reading-B pairs) and `Savings`/extended `RunScore`/`ShipmentScore`.
+- **Family 1 (D5):** `real_cost` + `fallback_penalty` computed and kept **SEPARATE** (penalty = Σ
+  `arc.ground.cost` over FALLBACK arcs; real = total − penalty). `total_cost` retained back-compat only.
+- **Family 2 (D4):** 3 delivery states `on_time_real`/`late_real`/`fallback` (partition the book); strict
+  binary OTP = on_time_real/N; tardiness mean/median/p95 (`_percentile` nearest-rank) + total over the
+  delayed set. (Cash-equiv ΣW·tard deferred — W=0 in the proof default; revisit if a tardiness number is wanted.)
+- **Family 3:** fallback% + 3-cause split structural / capacity_roll / disruption (`_has_real_path` BFS over
+  non-fallback subgraph arcs distinguishes structural vs roll; disruption ≡ 0, recovery-to-fallback unbuilt).
+- **`compute_savings(by_arm)`:** `L2_real$`/`%` (off M₁'), `L1`/`Total` (off H₀), `L2_pen$`/`Total_pen$`
+  separate; requires M1+M1p, H0 optional. **Savings never combine real and penalty.**
+- **Metrics schema:** added `real_cost`, `fallback_penalty`, `total_tardiness_h` columns to the `metrics`
+  table; richer per-shipment Family-2/3 detail lives on the `RunScore` object (the sweep consumes objects).
+- **Demo (legacy κ cell, n=10 seed=1):** M1==M1p (L2_real=$0 — the expected S45 no-bind on the legacy path,
+  no decay/τ); H0 "cheaper" $5.9k real but +$37.9k fallback penalty + worse OTP ⇒ the split correctly
+  exposes that netting would hide a relief-valve dump. Phase 4 turns decay+region-τ on, where L2 should bind.
+- **Tests** (`tests/test_scorer_metrics.py`, +11 → 342→353): real+pen=total; no-fallback⇒0 penalty; state
+  partition + flag consistency; tardiness sign by state; fallback causes sum to count + disruption=0 +
+  roll>0; `compute_savings` separate/normalized/H0-optional/raises/zero-base; `_percentile`. Back-compat:
+  `.total_cost`/`.otp`/`.fallback_count`/`.on_time`/`.shipments` all preserved (existing replay tests green).
+
+**Phase 4 — STARTED (S49): region-τ integration BUILT + first calibration probe.** Wired the region-τ
+supply path into the arrival generator (the flagged integration slice): factored the tau-dispatch supply+
+rates logic into a shared `_build_supply_and_rates(config, offers, fn)` used by BOTH `generate_air_instance`
+(single-day) and `generate_arrival_instance` (D-day tiled); added the region knobs (`tau`/`region_mix`/
+`contracted_share`/`hard_bsa_frac`/`belly_spot_cap_frac`) to `ArrivalConfig`; persisted-config records them.
+Legacy κ path byte-identical (70 generator/replay tests green). **Tests** (+3 → 353→356): region arrival
+builds both settlements + belly thinned on tiled offers; tau=None ignores region knobs; **region-τ scenario
+runs end-to-end through `run_replay` + `CapDecay`, all OPTIMAL, deterministic**.
+
+**KEY PROBE FINDINGS (the Phase-4 calibration moment, as forecast):**
+- **Tractability OK.** Full loop (18 cycles, decay on): n=12 ~1.5s, n=40 ~15s per arm-run. Sweep is heavy
+  but feasible (no blowup). C2 holds.
+- **The mechanism BINDS (the crucial positive — NOT S45-inert).** At n=40, decay-on, M1: OTP 0.38→0.35→0.23
+  and fallback 0.60→0.65→0.78 as τ tightens 1.15→1.0→0.8. τ genuinely moves service. **At n=12 τ is INERT**
+  (byte-identical across τ) — n=12 is degenerate (too lumpy/thin); use n≥40, likely n≈70 (kill-shot scale).
+- **Calibration ~10× TOO TIGHT.** OTP 23–38% vs §14.5 target **80–92%**; fallback 60–78% vs target **2–8%**.
+  All fallback is **capacity_roll** (real paths exist, capacity exhausted) — over-tight supply, not structural.
+- **Diagnosis (why over-tight):** booking-curve decay haircuts the free pool at COMMIT time (shipments
+  tender near cutoff where φ≈φ_min..0.5), so effective available supply ≈ τ·demand·φ̄ — a ~2.5× squeeze even
+  at τ=1, on top of n-lumpiness. **Tension flagged:** I set H∈U(120,168) from §14.2, but the kill-shot
+  ACHIEVED 80–92% OTP with the gentler H∈U(80,112) + its own sizing. The methodology horizon may be too
+  aggressive vs what was proven. The scan also did NOT pass `lead_buckets` (DEFERRED books early at high φ).
+
+**Phase 4 CALIBRATION — diagnosis CONVERGED (S49), via 9 research agents + ground-truth probes.** The
+"OTP 10× too tight" turned out to be several things, none of them the supply/decay knobs:
+- **OTP saturates ~0.57 regardless of τ** (gentle decay, τ=3.0 → fallback 1% but OTP still 0.57). OTP is
+  **not supply-bound**; raising τ/softening decay only fixes FALLBACK (which τ/decay/n DO control to 2–8%).
+- **The OTP target was a phantom.** §14.5's 80–92% is INFERRED/MRN; grounded reality (quoting research):
+  industry "delivery-as-promised" **62.7%** (2025), 80% = "good", **no published per-tier door OTP**. Our
+  ~60% is in the realistic zone, not broken.
+- **The residual lateness is a TIMING dynamic, proven by a solo test:** the late shipments hit their
+  promise ALONE (A_k=106 ≤ Δ_k=146). In the full instance they're revealed early but tender late
+  (big book-lead); the open-book M1 keeps them flexible, the early on-time flights DEPART before they
+  commit, so they're forced onto late flights. W (tardiness penalty) doesn't fix it — it's a zero-sum
+  reshuffle of scarce early-flight slots. Implies a real headline: **M1' (commits early) > M1 on OTP while
+  M1 < M1' on cost** — a genuine cost-vs-timing tradeoff the D4 metrics show.
+- **User CONFIRMED the D-F6 v2 ready-anchor is correct** (quote = ready X + service-window; booked-flight
+  promise is the exception). My earlier `tender_at`-anchor proposal was WRONG and is dropped.
+- **Research grounded (9 agents, all sourced, URLs in vault/memory):** belly=0.4 (done); deferred=same pool
+  (dropped); door-to-door tier windows Express X+3–5d / Standard X+5–8d / Deferred X+8–14d; departure-wait
+  discrete ~6–18h (≤24h); origin/dest handling scalars VALIDATED (our fixture is realistic); per-tier
+  reliability = premium money-back, no published % split.
+
+**Cost-breakdown + scorer fix BUILT (S49, user-requested).** Fixed the `real_cost` pollution (C.10 penalty
+leaked into real money — the $235M explosion) by DECOMPOSING the solve cost, not re-solving:
+- **`air_milp.AirSolution.cost_breakdown`** (+ `_cost_breakdown` mirroring `_set_objective`, + `_REAL_COST_KEYS`):
+  8 categories (freight_spot / freight_contracted / freight_coload / ground / mawb_fix / surcharge /
+  fallback_penalty / tardiness_penalty) that **sum exactly to total_cost** (invariant tested). Freight split
+  spot/contracted/co-load = the capacity-tier story. Additive, post-solve, no objective/solve change.
+- **`score_run`** now reads `real_cost = Σ real categories`, `fallback_penalty`, `tardiness_penalty` off the
+  committed plan's breakdown — **no re-solve, no zeroing-W**. Verified: W-on real_cost stays $16k while the
+  $230M penalty is isolated in `tardiness_penalty`.
+- **`RunScore`** gained `tardiness_penalty` + `cost_breakdown`; **persisted** to `metrics`
+  (`tardiness_penalty` + `cost_breakdown_json` columns). The route plan (decision-variable pins) is already
+  persisted via `routes`/`route_legs` + `realized.final_route_id`.
+- Tests +new in `tests/test_scorer_metrics.py` (sum-to-total invariant, W-on isolation, JSON persist). Suite
+  **358 green, ruff clean**. Scratch: `scripts/calib_grid_s49.py`, `calib_sla_s49.py`, `calib_wscale_s49.py`.
+
+**⛔ GUARDRAIL + STRUCTURAL FIX (S49): TARDINESS PENALTY IS NOW ALWAYS-ON BY DEFAULT.** User caught (2nd
+time) that calibration probes ran with `tardiness_weight_scale=0` — meaningless OTP/tardiness. Fixed at
+three levels: **(1) HARD RULE** added to top of `CLAUDE.md` (always in context) + `BUILD_STATUS.md` banner +
+memory `feedback_tardiness_penalty_always_on` (indexed) — never run any model with the penalty off.
+**(2) STRUCTURAL:** the C.10 quadratic penalty is now ON by every default — `GenConfig` + `ArrivalConfig`
+`tardiness_weight_scale` default flipped 0.0 → **1.0**. **(3) Unified the weights to ONE calibrated source:**
+new `flexibility.CALIBRATED_TARDINESS_W = {EXPRESS 1.3, STANDARD 0.65, DEFERRED 0.32}` (flat $/h², ratio
+4:2:1, S44 calibration) — replaces the old `scale·w_sp·weight_kg` generator formula that at scale 1.0 was
+~1000× too large; both `_gen_arrivals` (per-tier) and `_gen_hawbs` (STANDARD, tier-less static path) and
+replay recourse (`_RECOURSE_W`) now use it. Verified: a DEFAULT run has real=$63k / tardiness=$329 (sane,
+not exploded). **Test fallout fixed (5 tests, all W=0-assuming):** 2 cost-chain divergence tests bumped
+n=12→15 (W-on aligns the tiny cell); my 2 partition asserts now include `+tardiness`; the absorbable-delay
+"no-op" RECONCEIVED — with the penalty on, an absorbable delay shifts the tardiness landscape so the
+open-book re-optimizes (byte-identical no longer holds); the true invariant is the RECOURSE no-op (feasible
++ same shipments tender). Suite **358 green, ruff clean.** NOTE for calibration: prior OTP probes that ran
+W=0 are INVALID — re-run with the penalty on when executing the calibration.
+
+**CALIBRATION LOCKED INTO METHODOLOGY (S49, user-approved + executed).** Skipped the fallback-margin
+cleanup (marginal: 1-shipment effect, uncertain — C.10 already penalizes fallback at max tardiness; the
+residual is the known BLK-2 UB-underbound). Then amended `arrival_only_replan_methodology.md`:
+- **§14.2 decay → GENTLE:** `φ_min ~ U(0.30,0.50)`, `H ~ U(48,80)` (was 0.05–0.15 / 120–168). Code:
+  `cap_decay.DecayParams` default flipped to gentle to match. The aggressive setting evaporated commit-time
+  capacity (fallback ~67% at τ=1.0); gentle → realistic fallback (~6% at τ=1.5).
+- **§14.5 OTP target → RE-ANCHORED:** dropped the phantom 80–92%; now **~0.50–0.65 blended,
+  tier-differentiated** (grounded: industry DAP 62.7%, 80%="good", no per-tier door figure). Added: fallback
+  is a **capacity** signal (capacity-forced, not a cost choice — bump-test confirmed). Added the **cost↔service
+  tradeoff PAIR** as the headline (M1' early→higher OTP/cost; M1 open-book→lower cost/OTP).
+- **§14.6 τ bands → RE-ANCHORED:** normal ≈ τ 1.5–2.0, peak ≈ 1.0, loose ≈ 3.0 (was normal 1.0–1.15).
+  Sweep τ ∈ {1.0, 1.5, 2.0, 3.0}. All flagged single-seed/provisional until the multi-seed sweep confirms.
+- Suite **358 green, ruff clean** after the gentle-default change.
+
+**Penalty-on re-run findings (validated the diagnosis on the CORRECT model):** OTP is W-invariant (timing/
+capacity-bound, not incentive-bound) — so the earlier W=0 diagnosis held qualitatively. The penalty's real
+effect: converts late_real → on-time-or-fallback (planner won't fly badly-late). At n=70 gentle decay,
+fallback drops into band (6% at τ=1.5) and OTP ~0.48–0.66 (grounded). **Fallback is capacity-forced** —
+bump test (fallback cost ×33) moved only 1/25 shipments; the C.10 penalty already orders late-real < fallback.
+
+**SWEEP HARNESS BUILT + FULL SWEEP RUNNING (S49).** `scripts/air_sweep_s49.py` runs M1/M1p/H0 across the
+D3 factorial (contracted_share × hard_bsa_frac × τ), penalty-on + gentle-decay defaults, one scenario/cell;
+emits the FULL three metric families per (cell,arm) to `sweep_detail.csv` (cost + 6-cat breakdown + OTP +
+3-state + tardiness p25/50/75/90/95/100 + fallback 3-cause) + the savings pair per cell to
+`sweep_savings.csv` (L2/L1/Total real$ + %, kept SEPARATE from L2/Total pen$), + a readable per-cell block.
+- **First slice (S49) — the thesis number is EMERGING + STRONG:** mid-market comp=0.55/hard=0.35, τ-sweep,
+  seed 3. **L2_real% = +15.8% (τ=1.0 peak) / +10.8% (1.5) / +2.4% (2.0) / −1% (3.0 noise)** — open-book
+  saves real money, largest where capacity binds. Cost↔service tradeoff is regime-dependent (M1 cheaper but
+  lower OTP at tight τ; M1 DOMINATES at τ=2.0). **Two-number split works:** M1 saves real$ but `L2_pen`<0
+  (rolls more to fallback); H0 `real_cost` looks tiny only because it dumps ~67% to fallback (`Total_pen`
+  huge +). **Watch:** H0 rolling 67% may be too myopic — sanity-check across the full sweep.
+- **FULL SWEEP v1 (lead_buckets OFF — CONFIG BUG, discarded):** comp×hard×τ×seed×3arms = 144 runs done.
+  Multi-seed L2_real%: τ=1.0 +7.4% / **τ=1.5 +11.9% (median 14%, 11/12 positive)** / τ=2.0 +3.8% / τ=3.0
+  +2.6% — open-book saves real money, strongest at normal-tight τ, NOISY (some cells negative at loose τ).
+  **BUT** the harness omitted `lead_buckets` (slice-1c arrival spread) — default None — while the gentle-decay
+  calibration was tuned with it ON. Verified the gap: at the calibration cell (seed3 τ1.5) buckets OFF →
+  OTP 0.36/fb 0.29 (20 fb) vs buckets ON → OTP 0.48/fb 0.06 (3 fb). So v1 ran a harsher arrival config than
+  calibrated; service levels (and L2) are off. **Fixed the harness (one line: `lead_buckets=LeadBucketConfig()`).**
+- **FULL SWEEP v2 RE-RUNNING (background, ~3.5h, lead_buckets ON):** same 144-run factorial, correct config.
+  Output: scratchpad `air_sweep_full2/sweep_{detail,savings}.csv`. **▶ On completion: read CSVs, report the
+  CANONICAL multi-seed thesis number (mean L2_real% per regime + cost↔service pair + OTP/fb now matching the
+  ~6% calibration), sanity-check H0 over-rolling, then SIGN OFF + COMMIT.** The v1 shape (open-book saves
+  real money, biggest at normal-tight τ) is expected to hold; absolute levels improve with buckets on.
+
+**▶ Resume (S50): execute the two approved decisions, then close Phase-4 calibration.** On go: amend §14.5
+(OTP target → grounded tier-differentiated bands + per-tier reliability) ; relabel τ bands so "normal" sits
+where fallback lands 2–8%; set per-tier promise windows from research (Express X+3–5 / Std X+5–8 / Deferred
+X+8–14, compressed to synthetic scale); frame the M1/M1' tradeoff in the thesis; **then** build the D3 sweep
+harness + run M1/M1p/H0 = the air thesis number (a cost+service tradeoff pair). Governing reconciliation:
+§14.5 OTP target + §14.6 stays D-F6-v2 ready-anchor (CONFIRMED correct; tender_at proposal dropped).
+
+**(superseded plan below — kept for the factorial knob list)** Wire the new
+pieces together (region-τ generator + `CapDecay` ON + belly split + bucket arrivals) and run the arms
+M1/M1p/H0 across the D3 factorial (composition {0.55,0.70} × hard_bsa {0.35,0.50} × τ {normal 1.0–1.15,
+stress ≤0.8}), scoring `compute_savings` per cell, calibrating to the §14.5 target bands (door-OTP ~80–92%
+normal, fallback ~2–8% normal / 15–30% peak). **RE-CONFIRM C2 tractability FIRST** — this is the
+compute-heavy, highest-variance phase (the expanded factorial × multi-seed; per-cycle decomposition should
+hold but verify). **Open wiring Q:** `generate_arrival_scenario`/`write_arrival_scenario` still uses the
+legacy κ path — Phase 4 needs the region-τ supply path wired into the arrival generator (the integration
+slice flagged at 1c). Decide its shape at Phase 4 start. Not committed yet (sign-off commits).
+
+---
+
+## 2026-06-28 (Session 48 — planning: air-vertical product roadmap (R1–R5) + autonomous-loop policy for LCL recorded; R1 remaining-work pace estimate computed from actual git-dated cadence. No code touched; air build position UNCHANGED. ▶ Resume at Phase 1 slice 1c.)
+
+**Strategy/planning session — no `src/`/`tests/`/`model/` change.** User asked whether an autonomous agent
+loop could build the next components. Ran a 3-agent deep-dive (decision-history classification /
+air-build-process / LCL+transit-time scope).
+
+**Verdict:** the loop fits **implementation of an approved model against an objective verifier** (~30% of
+component work, ~80% automatable within it) but NOT modeling/metric/scope/**interpretation** (~50%+, where
+this project's value and its costly course-corrections live — S45 L2 measured the wrong thing with a green
+311-suite; S46 decay-model semantic error). **Decision:** air stays human-in-the-loop; the loop is trialed
+**only at LCL**, loopable pieces only, after (a) the user approves the LCL LaTeX model and (b) the user
+authors the isolation-test contract (the verifier). The loop is a bounded executor inside the gated process.
+
+**Recorded:** overarching roadmap (R1 finish air build → R2 air scalability+testing → R3 air UI/backend
+product + per-forwarder deployment → R4 live deployment → R5 LCL-via-loop) added to `EXECUTION_PLAN.md`
+§ "2026-06-28 — Air-vertical product roadmap"; `BUILD_STATUS.md` air-plan tail points there; memory
+`project_autonomous_loop_lcl` written + indexed in MEMORY.md.
+
+**R1 pace estimate (from actual cadence, git-dated).** Measured: ~0.9 committed sessions/calendar-day over
+S15→S47 (31 sessions / 35 days); only **~37% of sessions were forward-build** (7 of last 19) — the rest
+design/critique/redesign/tractability. The thesis number (Phase 4) has slipped ~19 sessions / ~3 weeks via
+discoveries. Remaining R1 = slice 1c, D2, Phase 2 (decay), Phase 3 (scorer), Phase 4 (calibrate+sweep).
+Estimate: best ~6 sessions (~1–1.5 wk) / likely ~9–11 (~2–3 wk) / Phase-4-detour ~13–16 (~4–5 wk).
+**Single number: 2.5–3 weeks**, anchored toward the high end — Phase 4 is the highest-variance step
+(tractability at the expanded D3 factorial + interpretation-heavy calibration + the 02-realism caveats).
+
+**▶ Resume (Session 49): Phase 1 slice 1c** — arrival-spread bucket mixture in `_gen_arrivals`; decide the
+`generate_arrival_scenario` region/τ-wiring scoping Q at start. Then D2 → Phase 2 → 3 → 4. No pending user
+inputs.
+
+---
+
+## 2026-06-27 (Session 47 — Phase 0 COMPLETE: S46 capacity-redesign methodology amendment (§14 of `arrival_only_replan_methodology.md`) DRAFTED, walked D1–D5 with the user, APPROVED. §13 reconciled, banner flipped. No code touched. ▶ Phase 1 (generator) unblocked.)
+
+**✅ PHASE 0 CLEARED.** Drafted §14, walked all five decisions one-by-one with numeric examples, locked
+them (user diverged from several recommendations), reconciled §13 (D-A18/D-A19/D-A7 superseded → pointers
+added), flipped the top-of-file banner + §14 status to APPROVED v1.0.
+
+**Decisions LOCKED (D1–D5):**
+- **D1 = flat-finite spot + decay** (block curve deferred to v2). Kill-shot-proven; zero MILP change.
+- **D2 = BUILD belly/freighter + deferred-air NOW** (user chose richer cost↔OTP over LEAN). **Phase 1
+  grows** to include the schedule-substrate rework. Charter still v2.
+- **D3 = SWEEP BOTH SETTINGS** on all three knobs (user wants to see them play out, accepts larger
+  instance count): composition {0.55, 0.70}, `hard_bsa_frac` {0.35, 0.50}, τ {normal 1.0–1.15, stress
+  ≤0.8}. Tractability must re-confirm budget at the expanded factorial.
+- **D4 = report BOTH OTP forms** — strict binary AND three-state (fallback% + tardiness-p95 + grace-band);
+  narrative leads with fallback%+p95.
+- **D5 = TWO cost numbers, kept SEPARATE, never summed** — `real_cost` and `fallback_penalty` side by
+  side. **Capacity/consolidation split + ψ_cap RETIRED** (user: confounded by IATA weight-break rating,
+  "garbage"). Savings reported as a pair: real-money (`L2_real$`/`%`, `Total_real$`/`%` off matching real
+  bases) and fallback-penalty reduction (`L2_pen$`) separately. C.10 tardiness stays out of both.
+
+**Two user corrections folded:** (1) savings percents normalized each by its OWN base (no mixed
+numerator/denominator) — replan off M₁', total off H₀. (2) NEVER combine real_cost + fallback_penalty
+into a "total cash" — the open-book arm spends MORE real money to avoid the fake fallback penalty;
+combining hides that trade.
+
+**§14 covers:**
+- **§14.0** the S45 problem (L2 = 100% consolidation / 0% capacity, κ-inert) + the 3-mechanism fix.
+- **§14.1** per-lane `τ_ℓ` generalizing κ (short/balanced/slack bands; analytic-demand mean; CRN/
+  supply-independence preserved; `spot_supply` stream).
+- **§14.2** time-decaying capacity — the **corrected** decay model verbatim from the kill-shot: LINEAR
+  booking curve `φ_a(Δt)` (D-T1) + per-flight jitter (D-T2b) on a `cap_decay` stream; **only the FREE
+  pool decays** (spot `booked + (C0−booked)·φ`; soft-BSA `used + round((N−used)·φ)`, used ULDs counted
+  **per commodity-group**; hard-BSA reserved); **per-arm/per-cycle firm floor** prevents retro-
+  infeasibility; zero MILP constraint change.
+- **§14.3** arrival spread — per-tier lead-time bucket mixture (3×4 weight matrix; within-tier EXPRESS
+  late tail; fixed-draw-count CRN; no planted scenario per D-T3).
+- **§14.4** composition + hard-BSA wiring (BUILT-NOT-GENERATED fix; $4.2 contract < $5.5 spot re-anchor).
+- **§14.5** the 3 metric families (cost/L2 split + `ψ_cap≥0.30` gate; 3 delivery states + strict door-OTP
+  def; fallback 3-cause split) + sourced calibration target bands.
+- **§14.6** **D1–D5** as recommendations for one-pass approval (D1 flat-finite+decay / D2 belly+deferred
+  defer / D3 realism corrections / D4 rich OTP / D5 sound L2 attribution) + the LEAN path.
+- **§14.7** what it supersedes in §13 (D-A18 κ→τ_ℓ; D-A19 spot cap decision-clock-dependent; D-A7 arrival
+  flag→mixture). **§14.8** Phase-0 DoD.
+
+**Phase 1 PROGRESS (S47) — slice 1a region-to-region tightness core BUILT + isolation-tested (suite
+311→316, ruff clean).** User reframed the tightness axis from per-lane → **region-to-region** (a HAWB's
+lane is an optimizer decision under D-A24, but its REGION is a demand attribute fixed by its door, so
+`τ_R = cap/demand` is well-defined with no `q_ℓ` geometry guesswork). Confirmed: **1 East-Asia origin
+region × 3 US dest regions (LAX/SFO/ORD) = 3 region-pairs.** Built in `data/synthetic/air_generator.py`:
+`_expected_cw_mean` (analytic `E[cw_k]`≈552 kg, CRN-safe), `_size_total_supply` (`S=τ·D`),
+`_dest_region_shares` (`q_R` = geometric nearest-gateway share, deterministic haversine grid; ORD largest
+by geometry), `_draw_region_tightness` (`τ_R` per short/bal/slack band, rescaled so `Σ q_R·τ_R = τ`
+exactly, ordering preserved + reproducible), `_size_region_supply` (`S_R`, sums to `τ·D`). +5 tests in
+`tests/test_network_supply.py`. §14.1 updated to region-to-region. Density band left at U(120,240) for now
+(revisit Phase-4 calibration — user deferred).
+
+**Slice 1a WIRING DONE (S47, suite 316→320, ruff clean).** `GenConfig` gained `tau` / `region_mix` /
+`contracted_share`; added a dedicated **`region_tightness`** RNG stream (`scenario_db.RNG_STREAMS`);
+refactored the supply draw into `_spread_positions` (shared core, legacy κ path byte-unchanged) + new
+`_draw_region_network_supply` (per-region `N_R = round(S_R·contracted_share/1500)`, spread over the
+region's contracted flights). `generate_air_instance` now DISPATCHES: `tau` set ⇒ region-to-region path,
+else legacy κ path. Verified: the **CRN gate** (`test_tau_does_not_perturb_demand` — varying τ leaves
+hawbs byte-identical) and a **build+solve isolation test** (region instance → `build_geo_air_graph` → real
+HiGHS OPTIMAL). Topology: exactly 3 contracted offers HKG→LAX/ORD/SFO = one per region.
+
+**Slice 1b DONE (S47, suite 320→323, ruff clean).** Composition + hard-BSA + rate re-anchor, region path:
+- **Rate re-anchor (the S45 fix):** `_CONTRACT_RATE=4.2`, `_SPOT_BASE=5.5` constants; contracted now sits
+  below spot (≥$4.675 after the 0.85–1.18 regime mult) so contracted is worth filling.
+- **Hard-BSA generation (`_split_contracted`):** splits contracted flights into a HARD (`equalized`,
+  take-or-pay, `A_c=positions·pivot`, `r_c`) + SOFT (`per_flight`, `r_a`, pivot) contract. arc→contract
+  is 1:1 in the MILP, so the split is by whole flight, **short-region-first** (`hard_bsa_frac` target,
+  increasing-τ_R order) — the non-decaying hard reservoir lands on the contested region (§14.2 mechanism).
+  `hard_bsa_frac` added to `GenConfig` (default 0.35; D3-swept {0.35,0.50}). Coarse at proof scale
+  (whole-flight granularity), smooth at forwarder scale.
+- **Spot sized from `S_R` (`_build_region_rate_catalog`):** US-bound region spot caps =
+  `(1−contracted_share)·S_R / n_region_spot_arcs`; feeder/intra-Asia spot arcs keep the legacy band cap
+  (don't bottleneck routing). Spot re-anchored to `$5.5 × regime mult`.
+- `generate_air_instance` dispatches the region catalog when `tau` set. +3 tests (split conservation +
+  short-first; zero/full-frac edges; contracted<spot). **Sanity-checked** (τ=0.9, n=120): per-region τ
+  realizes LAX 0.72 (short) / ORD 0.92 (bal) / SFO 1.25 (slack), wtd-mean ≈ τ; hard BSA on LAX. ✅
+- **Spot regime-inversion (realism S3) + density-floor widening (S4) deferred to Phase-4 calibration.**
+
+**▶ NEXT — slice 1c (arrival spread):** replace the binary `tier_coupled_arrival` flag with the per-tier
+lead-time bucket mixture (3×4 weight matrix, within-tier EXPRESS late tail; fixed-draw-count CRN) in
+`_gen_arrivals`. Then **+ D2** belly/freighter `deck` tags + deferred-air arc. Then Phase 2 (productionize
+`cap_decay`) → 3 (scorer: two-number real/penalty cost + both OTP forms) → 4 (calibrate + factorial sweep
+= thesis number). **User wants a full re-run once implementation is done.**
+
+**SIGNED OFF after slice 1b (S47).** Stopping point: Phase 0 + Phase 1 slices 1a & 1b complete and
+committed; suite 323 green, ruff clean. **Resume at slice 1c (arrival spread)** — see CONTEXT RESUME HERE
+for the built-component inventory + the open scoping Q (wire region/τ supply into `generate_arrival_scenario`?).
+No long runs were left active. Scratch scripts (`scale_probe*`, `lp_gap_probe`, `mfb_lab`, etc.) remain
+untracked per prior sessions. Declined an autonomous overnight run of 1c/D2/Phase2/Phase3 — building
+attended instead.
+
+---
+
+## 2026-06-27 (Session 46 — S46 capacity redesign: 7-agent design fan-out → kill-shot BUILT & PASSED across 5 seeds (capacity binds, open-book dominates) → decay model corrected WITH the user (booked-fixed / only-free-decays / per-group ULDs) → full build SCOPED (Phase 0–5 + D1–D5). `src/replay.py` cap_decay hook added; 311 still green, replay.py ruff-clean. Kill-shot is SCRATCH — productionization is S47's Phase 0.)
+
+**The arc.** Opened on the parked Stage-3 A/B/C fork; the user took it much further — redesign the whole air sim to (1) model ALL capacity types, (2) make demand>supply so some lanes go short, (3) a single supply/demand tightness dial, measuring **cost / OTP / fallback-incidence**, calibrated against all three.
+
+**7-agent design fan-out → `docs/design/s46_capacity_redesign/` (01 architecture / 02 realism / 03 metrics / 04 tractability / 05 redteam / 06 temporal).**
+- **01 Architecture:** single dial `τ = ΣCapacity/ΣDemand`; per-lane `τ_ℓ` short/balanced/slack buckets; hard-BSA wired in + re-anchored below spot; increasing-block spot; belly/freighter + deferred-air topology; instance ladder C0→C3.
+- **02 Realism (2 BLOCKING):** τ<1 network-wide = PEAK not normal (make τ≈1.0–1.15 base, τ≤0.8 a labeled stress arm); 0.70 contracted too high for mid-market (→0.5–0.6, `hard_bsa_frac` 0.3–0.4); base spot block too wide.
+- **03 Metrics:** defined the 3 families + sourced targets (carrier OTP 62.7% DAP = leg-level; door-SLA 80–92% INFERRED; roll/fallback 2–8% normal / 15–30% tight; replan-savings MRN).
+- **04 Tractability:** ladder solves via the per-cycle replay decomposition (binding free-set ~63 at n=120, never the full book); capacity machinery LP-cheap; binary driver = HAWB count.
+- **05 Red-team (2 FATAL):** the design RISKED reproducing S45 — unlimited flat fallback + strict price ladder ⇒ both arms could spill identical kg ⇒ `L2_capacity≈0`. Verdict uncertain-leaning-NO; kill-shot mandated before build.
+- **06 Temporal (the user's insight):** time-decaying capacity + within-tier arrival spread. A late captive EXPRESS hits decayed capacity → open-book bumps an untendered shipment off the reserved BSA to seat it; single-pass can't → fallback ⇒ arms route DIFFERENT per-tier kg ⇒ L2 gets a real capacity component. Defeats F1/F2 conditionally.
+
+**Locked decisions (user):** D-T1 LINEAR booking curve; D-T2a decay tied to FREE-vs-RESERVED (revised mid-session, see below); D-T2b per-flight jitter; D-T3 NO planted scenario — scale n (≈70 ⇒ express ~12–16 ⇒ P(≥1 late express)≈0.97).
+
+**Kill-shot BUILT (`scripts/killshot_s46.py` + a minimal default-off `cap_decay` hook on `run_replay` in `src/replay.py`; suite 311 green, replay.py ruff-clean).** n=70 / 7-day instance, one short LAX lane (τ≈0.75), contracted split soft(`per_flight`)+hard(`equalized`) both < $5.5 spot, time-decaying spot, M1p vs M1, `mip_rel_gap=0.005` threads=1 real HiGHS. **Decisive scalar = total chargeable-kg per capacity tier per arm** (the number S45 never computed; there it was 0).
+
+**RESULTS — PASS (capacity binds at proof scale):**
+- **W-off, 4 clean seeds (46/7/21/99):** per-tier kg differ 4/4 (`fallback Δ≠0`); M1 cheaper 4/4 ($18.7–35.1k); fallback M1≤M1p 4/4; tardiness-p95 M1≪M1p 4/4. Capacity ≈ $9–13k of L2 (was **$0** in S45).
+- **W-on** (calibrated tier-quadratic tardiness `_RECOURSE_W`=1.3/0.65/0.32 — was inert because `tardiness_weight_scale` defaults 0 and only the recourse path stamped it): **OTP jumps into the realistic 80–92% band**; M1 dominates cost + fallback + tardiness-severity. Binary OTP-COUNT is mixed (M1 spreads mild lateness under the quadratic penalty, so the count penalizes it; **fallback% and p95 favor M1 5/5**).
+
+**DECAY MODEL CORRECTED — the key fix (user-driven).** Decay-on crashed M1p (INFEASIBLE cascade from cycle 17). Root cause = a MODELING ERROR: decaying soft-BSA. A soft-BSA is a RESERVED block; a USED ULD is committed (paid via the pivot) and does not shrink; only the FREE pool decays. The old hook shrank the WHOLE allotment then floored at AGGREGATE pinned weight (undercounts ULDs across commodity-groups → infeasible). **Corrected: only the free portion decays; booked capacity fixed; used ULDs counted PER commodity-group.** spot `avail = booked + (nom−booked)·φ`; soft-BSA `avail = used_ULDs + round((N−used_ULDs)·φ)`; hard-BSA fully reserved. **Verified feasible (70/70) across ALL 5 seeds decay-on W-on — all PASS** (L2 $17.6–77.2k; fallback M1≤M1p 5/5; p95 M1≪M1p 5/5). Also added: per-arm pin-set passed to the decay; delayed-by-tier breakdown in the killshot.
+
+**OTP definition (read from `score_run`):** on-time iff `arrival ≤ Δ_k` (strict, committed deadline). Late-but-before-`T^abs` = delayed (not on-time). Fallback = not on-time (arrives at `T^abs`). The delayed bucket INCLUDES fallback. Metric nuance: the strict binary count rewards M1p's "few catastrophic + rest dead-on-time" over M1's "many mildly-late + none catastrophic" — backwards from shipper value → D4 (grace-band / lead-with-p95+fallback%).
+
+**FULL BUILD SCOPED (the closing deliverable, to record + start S47):**
+- **Phase 0 — methodology gate (approval-required, no code):** amend `arrival_only_replan_methodology.md` for τ_ℓ tightness, capacity composition + hard-BSA, the corrected decay model, arrival spread, the 3 metrics + targets, the OTP definition. Resolve D1–D5 here.
+- **Phase 1 — generator** (1a τ_ℓ + short/bal/slack; 1b composition + hard-BSA gen + rate re-anchor; 1c arrival spread; 1d *[v2]* increasing-block spot + belly/deferred topology).
+- **Phase 2 — decay in the real planner** (productionize the corrected `cap_decay`; keep per-arm pinning; tests: no-cascade / conservation / determinism).
+- **Phase 3 — scorer/metrics** (3 families; grace-band OTP; sounder L2 capacity-vs-consolidation attribution).
+- **Phase 4 — calibrate + sweep** = the thesis number (tune τ/bands/composition to realistic ranges; run ladder C0→C2; multi-seed headline).
+- **Phase 5 — tractability** (mostly de-risked).
+- **Decisions:** D1 spot flat-finite+decay vs increasing-block (rec FLAT) · D2 belly+deferred v2 · D3 realism knobs (composition ~0.55 / `hard_bsa_frac` ~0.35 / τ base 1.0–1.15, τ≤0.8 stress) · D4 OTP metric · D5 L2 attribution. **Recommended LEAN path (defer 1d).**
+
+**▶ S47 STARTS HERE: Phase 0 — draft the methodology amendment with D1–D5 baked in as recommendations, for one-pass user approval. Then Phase 1.**
+
+**Committed this sign-off:** `src/replay.py` (cap_decay hook), `scripts/killshot_s46.py` (the proof), `docs/design/s46_capacity_redesign/` (6 docs), trackers. Other scratch scripts left untracked. PDF NOT recompiled (3+ behind, user owns). Kill-shot is scratch — Phase-0/1 rebuild it properly.
+
+---
+
+## 2026-06-25 (Session 45 — standing review agents (calibration/seam/red-team) → A1 (κ-inert L2) + A2 (gap noise floor) VERIFIED → L2 decomposition: replan value is consolidation, NOT capacity → spot-pricing redesign designed, pressure-tested, and SHELVED as not-the-fix. No src/tests code changed; 311 still green. Strategic fork parked for S46.)
+
+**Pure analysis/design session — no `src/`/`tests/` code touched (suite unchanged at 311 passed).** Began by running the three overdue standing review agents (due S43); they reshaped the whole session.
+
+**Standing review agents (`docs/critique/18` calibration / `19` interface-seam / `20` backtest red-team).** Verdicts: **A1 (NEW, red-team + calibration F-A) — κ does not drive L2.** **A2 (NEW) — L2 is a difference of two 0.5%-gap objectives; the ~$180 gap budget overlaps L2 ($137–$1056) ⇒ negative L2 + chain violations on real seeds.** **SEAM BLOCKING — `route_eta_under_disruptions` returns `broken=True` for routes `route_reliability` admits via `max(dep,clock)` "catch the next cycle"**, so the §6 disruption gate silently no-ops for 1–7 of 12 routes/scenario (a cancel or +500h delay triggers no replan). S36 wins confirmed: F4 fallback-drift RESOLVED, R4 supply-freeze + disruption-inertness DEFEATED-by-build.
+
+**Verified A1 + A2 with own eyes** (`scratchpad/repro_a1_a2.py`): L2 **byte-identical across κ∈{0.5,1,2,8}** for 5/6 seeds (mean $377→$420→$386; κ=8 ≠ ≈0). A2: seed-5 negative L2 (−$137) **vanishes at mip_rel_gap=1e-4** (pure gap noise); seed-3 M₀<M₁′ ($67) **persists tight** = a realized-vs-planned nesting gap, NOT solver gap (red-team had conflated the two).
+
+**Pricing/capacity redesign thread (user-directed, to fix A1).** User: "contracted should be cheaper than spot, spot shouldn't be unbounded at a fixed price — model tiered (increasing-block) finite spot." Ran a **pipeline of agents**: (1) **calibration** (`docs/design/air_pricing_calibration_s45.md`, sourced: transpac spot ~$5.5/kg Xeneta, contract ~$4.2, increasing-block curve 1.2×/block, finite ~11k kg/lane-wk ceiling, fallback 2.5×, ±1–4% WoW vol); (2) **design** (`docs/design/air_pricing_capacity_redesign_s45.md` — convex per-lane increasing-block tariff, NO binaries, BLK-1c-safe). **Decisions:** OPEN-1 = per lane-day; OPEN-3 = **Mechanism A** (κ shrinks contracted only — user: contracted is a bought allotment, an earlier decision; spot scarcity is endogenous market, not a κ dial). OPEN-2 sent to **composition research** (`docs/design/air_spot_composition_research_s45.md`): spot is a SINGLE all-in rate (weight-band embedded, Freightos), and transpac cheap spot is **thin** (<20% spot share) ⇒ Mechanism A *can* bind if the cheap block is calibrated thin.
+
+**PRESSURE-TEST before writing the methodology amendment (user-requested) → the redesign is SHELVED.** Two agents: (a) **L2 decomposition** (`docs/design/l2_decomposition_s45.md`) — **the killer.** Across seed1/2/0, M₁ and M₁′ route **byte-identical total spot kg, ZERO contracted, ZERO fallback**. **L2 is 100% consolidation reshuffle** (fewer/fatter MAWBs into cheaper IATA weight-breaks + gateway swaps), **0% capacity.** The block curve prices total-kg-per-lane (held equal by both arms) ⇒ amplifies L2 by **$0**. **Root cause:** contracted is NEVER used — the BSA pivot floor (~1250 kg/ULD min-bill) makes it ~$5.7/kg for ~700 kg lane cargo (worse than spot), and supply⟂demand mismatch scatters positions onto demand-less flights. **Capacity can't bind at n=12 — A1 is a SCALE problem, not a pricing problem.** (b) **Adversarial review** (`docs/design/redesign_pressuretest_s45.md`): OPEN-2's undiscounted-base premium **inverts** the weight discount (real formulation bug); loose-corner null won't zero (consolidation is capacity-independent); convex/no-binary tractability claim OK.
+
+**This confirms `project_air_replan_value_source`'s value half (re-consolidate the open book) and refutes its capacity-sweep half** (savings DON'T scale with capacity tightness at proof scale). Memory written: `project_l2_decomposition_s45`; `project_air_replan_value_source` updated; review-cadence bumped (S45→S52).
+
+**▶ RESUME S46 — ask the user the Stage-3 strategic fork FIRST (deferred, user tired):**
+- **A (recommended)** — re-axis the sweep to what drives L2: arrival density / α lumpiness / book size / λ. Thesis = "open-book re-consolidation saves X% vs frozen single-pass." Keep finite spot pricing only as a *defensibility* fix, not the κ-fix.
+- **B** — forwarder scale (100s of HAWBs so ULDs fill) + re-anchor contracted below spot, to make capacity bind. Big build; reopens BLK-1c at scale.
+- **C** — both (A now, B later).
+Independent of the fork: **(1) the SEAM BLOCKING gate bug** (disruption gate no-ops on catch-next-cycle routes) — fix before any more 2c-7; **(2) the A2 tight-gap fix** (re-solve headline ≤1e-4). 2c-7 slice 1b is now downstream of the fork (don't build on a thesis axis that may be retired).
+
+---
+
+## 2026-06-24 (Session 44 — H₀ daily cadence + 2c-7 slice 1 (disruption injection + §6 refresh/gate) + recourse tardiness calibration + `_disrupted_sim` foundation. 310 passed, ruff clean. NOT yet committed.)
+
+**Recourse tardiness penalty CALIBRATED (OR subagent).** Recourse re-solve uses option (i): tier-differentiated
+**quadratic** tardiness penalty (reuses the EXISTING C.10 PWL machinery — `pen_k ≥ W_k·τ_k²`, tangent cuts at
+α=(0,.25,.5,.75,1) — NOT built anew; just calibrate `tardiness_weight`). **W_EXPRESS=1.3, W_STANDARD=0.65,
+W_DEFERRED=0.32 ($/h²)**, ratio 4:2:1 (matches `TIER_SPECS.w_sp`). Anchored: EXPRESS full-span penalty ≈ fallback
+gap (~$16.4k) so a route landing at T^abs is ~as-bad-as fallback but still preferred; crosses the ~$4k route-delta
+at ~55h late (flips meaningfully-late cheap routes, not marginal ones). PWL worst-case tangent gap 1.56% — existing
+grid fine. Stamp the FLAT tier weight (not generator's W·weight_kg) so tier is the priority lever. **Finding: the
+$40k fallback (critique-13 N1) is STALE — live `FallbackPolicy` gives ~$16-18k** (doc/memory drift, fix at sign-off).
+
+**Integration verified for slice 2:** `load()`'s Hawb carries the real Δ_k (`soft_deadline_h`==`effective_deadline_at`)
++ T^abs (`deadline_abs_h`==backstop), so recourse only sets `tardiness_weight`. `Offer.legs` is a replaceable tuple
+(a flight_id can span multiple legs — multi-stop — they slip together). **`_disrupted_sim(sim, delays, cancels)`
+BUILT + tested** (delays slip dep+arr by delta on every matching leg; cancel drops the offer; empty ⇒ same object).
+
+**DESIGN REALIZATION:** disruption threaded **loop-wide** (every plan build from realization on uses the adjusted
+graph). But recovery (reroute) and ledger-conservation ARE separable after all — the MILP's capacity comes from
+rates, not the audit ledger, so the reroute is capacity-correct with the ledger still audit-only. So: 2a recovery
+now, 2b ledger conservation next.
+
+**2c-7 slice 2a — RECOVERY MECHANISM BUILT (311 passed, ruff clean).** Pieces: `ReplayState.release(hawb,arc)`
+(unlock), `_flown_prefix` (walk the committed route under the disruption → immutable flown prefix before the
+break), `_RECOURSE_W={1:1.3,2:.65,3:.32}` by tier. Loop: each cycle bakes realized disruptions into `sim_t`
+(=sim when none ⇒ headline unchanged) and threads it through the plan; a flagged-and-not-yet-`handled` firm
+shipment is unlocked from its prefix (suffix pins released), gets recourse-W stamped on its hawb, and the cycle's
+M1 solve over `sim_t` re-routes it; then re-tendered + `tendered_route_arcs` refreshed from a stable UNDISRUPTED
+graph `ag_orig` (so the §6 walk never double-counts the delay). `handled` set stops re-flagging an already-
+recovered-but-still-late shipment (infinite-replan guard). M1-only; ledger stays audit-only.
+**Recovery demonstrated:** cancel a firm shipment's flight ⇒ it re-routes via an ALTERNATE dest gateway to the
+SAME door (region→region), origin-ground prefix preserved, **promise Δ_k frozen** (no renegotiation), deterministic.
++3 disruption tests (cancel-reroute-and-freeze-promise, strand-past-T^abs→deferred-fallback raises "slice 3",
+`_disrupted_sim` shift/drop). Absorbable no-op + unrealized-inert tests still green.
+
+**Scope notes / deferred:** recovery is via cancel-from-origin + arc-boundary breaks; a break INTERNAL to a
+multi-leg interline offer (cargo at an intermediate hub mid-arc) needs leg-level prefix splitting — deferred.
+Recovery-to-fallback when nothing reaches by T^abs raises "slice 3" (deferred). M1p/M0 recourse deferred.
+
+**BUILD REQUIREMENT locked (S44 design discussion, methodology §6.1) — mid-shipment recourse anchoring + node-
+anchored fallback, for BOTH sim AND the production air planner:** an in-transit shipment is replanned ONLY on a
+degrading disruption, and recovery anchors at the **head of the last DEPARTED arc** (the cargo will arrive there
+with certainty), NOT the origin, NOT the tail. The origin→dest fallback is structurally unusable mid-transit
+(origin outflow spent on the flown prefix), so emit a **node-anchored fallback** from the anchor node → dest door:
+arrives T^abs, cost `1.5×longest-UB(anchor→dest)` or `trivial=1.0` if no real path (then it's the only exit), cost
+ADDED to the sunk prefix. **Consequence: my current `_flown_prefix` (break-point walk) over-commits an in-transit
+shipment — replace with "prefix = arcs departed by the decision clock; anchor = head of last departed arc."**
+
+**Step 1a DONE — `_flown_prefix` is now departed-clock (methodology §6.1).** Prefix = arcs DEPARTED by the
+decision clock `now_h=t` (air leg at its delayed dep; ground at the running clock); anchor = head of the last
+departed arc. A disruption known BEFORE the cargo departs ⇒ prefix = origin ground ⇒ reroute from origin (the
+cancel test reroutes hawb-0 via an alt gateway, exactly this). +1 unit test (`test_flown_prefix_is_departed_by_
+decision_clock`). 311 passed, ruff clean. **Finding while building:** the old 1000h-delay "strand" test was
+pathological — a delay BEYOND T^abs prunes the flight from the graph like a cancel, but `route_eta` treats a
+mega-delay as "rides late" (not broken), so an ALREADY-LATE shipment sharing that flight isn't flagged (its miss
+predates the disruption) yet stays pinned to a now-pruned flight ⇒ INFEASIBLE. Realistic delays (hours) don't
+prune, so this doesn't arise; but **delay-past-T^abs should be treated as a cancel in the gate** (a 1b/gate fix).
+Replaced that test with the unit test.
+
+**▶ NEXT — step 1b (node-anchored fallback), bigger than first scoped; needs three things together:** (i) the
+graph-injection mechanism (dynamic FALLBACK arc anchor→dest door, T^abs, `1.5×UB(anchor→dest)`/`trivial`, added to
+the sunk prefix; resolve dynamic arcs alongside `ag_orig`); (ii) the **gate fix** so a non-flagged shipment whose
+pinned flight is PRUNED in `sim_t` (cancel, or delay-past-T^abs) is also flagged/unlocked — else its stale pin
+breaks the solve; (iii) a **multi-arc test bed** (seed-3 M1 routes are single-leg or single interline arcs, so a
+true in-transit strand can't be constructed there — same blocker as the connection-break fixture). Removes the
+slice-3 raise. Then (b) 2b ledger conservation
+(populate real `tendered`; `release()` returns the slot to free; relax the reconcile tendered-monotonicity guard to
+allow a decrease ONLY via an explicit release; assert conservation through the unlock — the existing `tendered==0`
+audit test flips to a conservation assertion). Then interline-internal break (leg-level prefix). Then re-measure
+MFBlink lift → Stage 3.
+
+Long design discussion with the user re-opened the 2c-7 integration question and reshaped two things.
+
+**Cadence model (rejected my A/B framing; landed on a third shape).** A disruption is not a special
+event needing its own cycle — it's current state read by the periodic refresh. Then the user split
+cadence by arm: **machine arms (M0/M1p/M1/PIH) plan at every event** (unchanged — automated, harmless
+since anything un-tendered can re-plan); **H₀ plans once a day** (human batch). Short-fuse arrivals
+under H₀ (window holds no daily run) are booked **ad-hoc at their cutoff**, NOT dropped to fallback.
+
+**Unit 1 — H₀ daily cadence (BUILT, `src/replay.py`).** New `_daily_times`: 24h grid anchored at first
+arrival + short-fuse cutoff inserts (guarantees every shipment has a run in `[known_at, tender_at]`).
+`run_replay` cadence now arm-split. `_plan_cycle_h0` places every newly-arrived shipment per daily run
+(was: only at-cutoff); route is standalone/frozen so timing only changes which day's cargo bills
+together. Tender rule generalized to `tender_at < next_t` ("commit before the next run") — **proven
+byte-identical to the old `<= t` for the event-driven arms**, so machine arms don't move (full
+determinism/chain test set passes unchanged). +2 cadence-helper tests; renamed the H₀ commit test.
+
+**Unit 2 slice 1 — disruption injection + §6 refresh/gate (BUILT).** `Disruption(flight_id, kind∈
+{delay,cancel}, delay_h, realized_at)` (delay_h = delta on dep+arr; user confirmed delta over absolute);
+`run_replay(..., disruptions=None)`. New `route_eta_under_disruptions` in `air_transit_time.py` — a
+**hard-departure** walk (a delayed flight that lands too late MISSES the connection; cancel ⇒ never
+operates) that **reduces to `route_reliability`'s mean for any feasible route with no disruption** ⇒
+the refresh is provably inert in the headline. `_refresh_active_shipments` runs at each cycle top over
+firm routes that fly a disrupted flight; **gates on the disruption's EFFECT, not the absolute deadline**:
+replan iff it newly breaks a feasible route OR degrades a was-on-time route to late (the user's
+"originally on-time but now delayed"). Already-late / already-infeasible-at-baseline shipments are NOT
+flagged (pre-existing planning miss, not the disruption's doing). Slice-1 flags raise `NotImplementedError`
+(the in-loop unlock/re-root recourse is slice 2). +3 tests: unrealized-is-inert, absorbable-is-noop,
+breaking-delay-trips-the-gate (proves it's not a vacuous no-op).
+
+**Finding surfaced (diagnostic):** seed-3 has committed routes that are already late at baseline (forced
+misses under tight capacity) and one (`hawb-7`) that the hard walk considers a broken connection while the
+MILP admitted it — the MILP's time model uses `max(dep,clock)` (soft departures), so it can commit a route
+the physical hard walk says misses its connection. Pre-existing modeling artifact; the gate explicitly
+excludes baseline-broken/late so recourse doesn't react to it. Worth a proper look (does the graph admit
+physically-infeasible connections?) but out of scope for 2c-7.
+
+**Reconciliation flags (defer to sign-off unless asked):** (1) methodology **D-A14** says "batch-cutoff
+H₀" — now daily-batch; reconcile the doc + the `project_*` memory. (2) **Finding 1 (L1 sign)** shifts: H₀
+now commits at the pre-cutoff daily run (earlier than batch-at-cutoff, still later than M₁′ reveal) ⇒ L1
+moves, **L2 headline untouched** (both arms machine/event-driven). Stage-3 measurement concern.
+
+**▶ NEXT: 2c-7 slice 2** — connection-break fixture: unlock future legs + prefix-pin re-root + ledger
+return/conservation (replace the slice-1 `NotImplementedError` with the actual recourse). Then slice 3
+(cancellation). Per the locked design: narrow unlock (only the disrupted shipment), accept-if-improves
+(do-nothing is the floor), tendered reservations protect other committed shipments. Then re-measure
+MFBlink lift across cells → Stage 3. Standing review agents (calibration/seam/red-team) still due.
+
+---
+
+## 2026-06-24 (Session 43 — 2c-6: H₀ human baseline + π_hind clairvoyant LB built. 304 passed, ruff clean. NOT yet committed — sign-off commits it. Two findings need user.)
+
+Built the last two replay arms in `src/replay.py` (+8 tests in `tests/test_replay_loop.py`, now
+24 there / 304 total). `_ARMS` now `{M0, M1p, M1, H0, PIH}`.
+
+**Design first (subagent).** Spawned a subagent to write a realistic H₀ consolidation policy
+(`docs/design/h0_human_consolidation_policy.md`) after the user rejected my first two AskUserQuestion
+framings: a human ALWAYS consolidates (fills ULDs, chases break weights) — H₀'s suboptimality is
+*myopia* (no joint cross-shipment optimization, no reshuffle, no lookahead), NOT failure to
+consolidate. User approved the spec's defaults (standalone routing, current-batch break-chase).
+
+**2c-6 H₀ (`_plan_cycle_h0`).** Batch-at-cutoff (D-A14): each shipment placed at its CUTOFF by its
+own cheapest STANDALONE route (a singleton `solve([k])` — one box ⇒ no consolidation decision, so
+the engine makes zero multi-shipment tradeoff), priors frozen. The committed book is billed by one
+all-pinned solve (consolidation/break-rating/ULD-packing emerge from co-routed cargo — no second
+billing code path to drift from the MILP). Capacity contention (naive standalone routes
+over-subscribe a capped arc ⇒ INFEASIBLE all-pinned solve) handled by **fallback-roll**: roll
+marginal batch shipments (largest-cw first) to the fallback arc until feasible; MILP is the
+feasibility arbiter (no ledger). Verified on seed-1 n=8 (cycle 11 was INFEASIBLE → now OPTIMAL,
+2 HAWBs rolled).
+
+**2c-6 π_hind (`PIH` arm).** One full-book cycle (cadence collapsed to the terminal time), no pins
+⇒ the clairvoyant optimum. Dispatches through the M1 single-solve branch (no priors to pin).
+
+**TWO FINDINGS for the user (surfaced, not yet acted on):**
+1. **L1 can be ≤ 0 (timing, not a bug).** H₀ commits at cutoff (more info); M₁' at reveal (less).
+   So H₀'s late-commit can beat M₁' — measured L1 ≈ −$258 at seed-2 κ=2 (mirror of L2 ≈ +$258).
+   Methodology D-A15 anticipates this (timing set L2-favorable, NOT a claimed bound); §4 line ~59
+   still writes the full chain as guaranteed. Reconcile: report L1 honestly (value lives in the
+   within-cycle rung C(M₀)−C(M₁')) and/or add on-arrival H₀ (commits at reveal ⇒ L1≥0).
+2. **Fallback-roll spill is harsh** (fallback = T^abs late + ~$40k). Roll-to-next-cheapest-FLIGHT
+   is the realism refinement; it moves H₀ cost/OTP at tight cells (feeds L1). Decide before Stage 3.
+   Also: π_hind is a LB only within mip_rel_gap (0.5%); exact regret floor is Stage 3.
+
+Docstring chain claim softened (H₀ rung not guaranteed). Tests assert structural H₀ properties
+(cutoff-commit + freeze, standalone-routing == singleton solve on a loose cell, fallback-roll on
+seed-1, deterministic, scorer writes realized+metrics with l1 NULL) + the guaranteed rungs with a
+0.5% relative gap tolerance.
+
+**SIGNED OFF mid-2c-7 design.** Started 2c-7 (disruption recourse + 3 fixtures): mapped the infra
+(`leg_actuals` per-flight frozen actuals, ledger tendered/committed split columns, `planning_runs.
+trigger='disruption'` all already exist) and read methodology §6. **⚠ OPEN QUESTION TO ASK FIRST ON
+RESUME (user explicitly asked to be re-asked this immediately):** how recourse integrates with the
+loop — **(A) in-loop disruption cycle** (pass `disruptions=[Disruption(flight, kind, delay_h,
+realized_at)]` to `run_replay`; a `trigger='disruption'` cycle unlocks affected firm shipments'
+future legs → returns capacity → replans in-place; most faithful to §6, more wiring) vs **(B)
+standalone `recover_from_disruption(run, disruption)` fn** on a completed firm plan, tested directly
+by the 3 fixtures (run_replay untouched, isolated/clean; live wiring deferred). No recommendation
+locked; user wanted to decide on resume. After that: build absorbable-delay no-op POC first
+(validates the disruption interface w/o needing unlock), then connection-break + cancellation
+(unlock + replan-from-current + ledger split + conservation assert). **Findings 1–2 (negative-L1
+timing, fallback-roll harshness) BANKED for Stage 3** per user. **Standing review agents
+(calibration/seam/red-team) due S43 — still not run.**
+
+---
+
+## 2026-06-23 (Session 42 — 2c replay machinery: 2c-3 loop + 2c-4 M₀/M₁′/M₁ arms + 2c-5 scorer. 296 passed, ruff clean. NOT yet committed at time of writing — sign-off commits it.)
+
+Built three 2c slices on top of `ReplayState`, all in `src/replay.py` (+ `tests/test_replay_loop.py`,
+16 tests). The proof machinery's core (the three replan arms + the scorer) is now in place; BLK-1c
+being resolved (S41) made the per-cycle solves sub-second, which unblocked this.
+
+**2c-3 — `run_replay` M₁ open-book skeleton.** Walks an **event-driven cadence** (sorted distinct
+`known_at` ∪ `tender_at` — every reveal re-plans, every cutoff tenders, no cutoff missed). Each
+cycle: `advance` → `visible()` → build the graph **over the visible subset** (solve builds vars from
+`air_graph.subgraphs`, so the book is scoped by rebuilding over visible HAWBs; per-HAWB geo
+resolution is deterministic+independent ⇒ subgraphs identical to the full build) → `solve` with
+tendered shipments hard-pinned → tender every shipment past its cutoff (pin its full route for all
+future cycles, freeze `booking_promise`) → record §7 snapshots (`planning_runs` + immutable `routes`
++ `route_legs`) → reconcile the ledger. **Irreversibility is enforced by the MILP pins, not the
+ledger**, so the ledger is audit-only this slice: `tendered=0`, whole claim → `committed_untendered`
+(spot Σcw exact; contracted η). The tendered/untendered split over shared ULD positions is deferred
+to the conservation fixtures (2c-7), where it feeds back. Tender happens BEFORE snapshotting so the
+cutoff cycle's snapshot is already `firm`.
+
+**2c-4 — the M₀ and M₁′ arms.** `run_replay` now dispatches on `arm ∈ {M0, M1p, M1}`:
+- **M1** open-book — pin only tendered; re-optimize the whole un-tendered book.
+- **M1p** single-pass — additionally pin every PRIOR-cycle placement; route frozen from FIRST
+  placement (proven stronger than M1's freeze-at-tender).
+- **M0** greedy — priors pinned, newcomers placed one at a time (unprocessed newcomers excluded
+  from the model so they can't influence the placement ⇒ myopic), then a final all-pinned solve for
+  a consistent snapshot/ledger/cost.
+Tests prove the cost chain `C(M0) ≥ C(M1p) ≥ C(M1)` with **strict divergence** at a tight cell
+(seed 2, κ=2, `tier_coupled_arrival=True`): open-book books ~$258 cheaper committed routes. At the
+loose default cell all three converge (L2≈0, expected).
+
+**2c-5 — `score_run` (the scorer).** Scores one arm's committed plan vs the FROZEN actuals (§3/§6,
+D-A12): realized arrival = the deterministic running-clock walk = **`route_reliability(route)[0]`**
+(the "deterministic Â calculator" the methodology keeps; s=0 ⇒ scheduled block per air leg, mean per
+ground — no RNG reopened); OTP = `A ≤ Δ_k` against `booking_promise` (frozen, not the replan-mutable
+deadline); realized freight cost = a **final all-pinned solve** of the committed plan (EXCLUDES C.10
+— inert at W=0); fallback arc ⇒ arrives at `T^abs`, late by definition. Writes `realized` + `metrics`
+(total_cost / otp / fallback_count). **The cross-arm L1/L2 decomposition + the L2_reshuffle/
+L2_fallback split stay at Stage 3** (per methodology §6, "implemented in the 3c harness") ⇒
+`metrics.l1`/`l2_*` left NULL here. Scorer cost chain re-verified across arms.
+
+**Quality: 296 passed** (S41 280 → +16 replay-loop tests; the 16 includes determinism, ledger
+conservation, frozen-route, arm-validation, scorer-arrival-matches-walk, cost-chain). Ruff clean
+src/tests. `src` stays free of a module-level `data.synthetic` dependency (build/load imported
+locally inside the loop — the glue). The 6 S41 scratch scripts remain untracked per user.
+
+**▶ NEXT (S43): 2c-6** — H₀ heuristic (batch-at-cutoff spreadsheet baseline) + π_hind (all demand
+known at t=0, solved once — the clairvoyant lower bound). Then **2c-7** recourse fixtures
+(methodology §6; this is where the tendered/untendered ULD-ledger split lands). Then re-measure the
+**MFBlink lift across more (κ,α,λ) cells** (BLK-1c instance-specificity caveat) → **Stage 3** sweep =
+the thesis number. **Standing review agents due S43** (calibration / seam / red-team; last S36).
+
+---
+
+## 2026-06-23 (Session 41 — BLK-1c RESOLVED: MFBlink LP cut (~98% root-gap closure, 157s→0.2s) + gap-aware billing-validator fix + C.10 skip; committed 27ea807. 280 passed, ruff clean.)
+
+Session was a scalability/runtime review of the air formulation, prompted by the S39 BLK-1c
+risk. It ended with BLK-1c effectively resolved on the hard cells.
+
+**1. Measured, didn't guess.** Wrote `scripts/lp_gap_probe.py` (rebuilds the model exactly as
+`solve()`, relaxes integers, reports per-family root fractionality + MIP gap) and ran it on the
+hard seed-2 (κ=1,α=1) cell: **root integrality gap 31.5%** (LP 30,687.7 vs Z* 44,782.3, 106s to
+prove). Fractionality breakdown overturned my prior hypothesis — **η (BSA/ULD bin-packing) is
+fully integral at the root**; the looseness is entirely in `z` (3.0 mass), `γ` (3.0), `x` (7.34),
+all at ~0.488. So C.5b/C.13b were NOT the culprit (my S40-era guess was wrong).
+
+**2. OR deep-dive subagent** (general-purpose, OR-framed; ~42min, 108 tool calls). Verdict: the
+ENTIRE gap is one weak linearization — the **`min_flat_breaks` big-M bucket-weight
+disaggregation**. Confirmed (and measured zero/negative lift for): the user's mutual-exclusivity
+intuition (already implied by C.1 flow conservation — 0 bound lift), perspective reformulation
+(inapplicable — the on-cost `m·CW` is linear, not strictly convex), tighter big-M (0 lift —
+it's the missing aggregate link, not M magnitude), flow-cover (η integral), clique-on-z (fixed
+charge already counted). Pareto-dominance ceiling = 44% of MAWB candidates droppable statically
+(parked; must recompute vs remaining ledger capacity in replay).
+
+**3. The fix — MFBlink cut** (`_build_min_flat_breaks_cost`, `air_milp.py`): one valid row per
+MFB MAWB, `Σ_b BW_{a,g,b} ≥ CW_{a,g}`. Valid (at integer the selected break has BW≥CW, others 0,
+so the sum ≥ CW; redundant at integer feasibility ⇒ pure cut, Z* unchanged). It bites the
+relaxation: fractional γ makes the per-break `BW ≥ CW − M(1−γ)` rows slack, letting all BW→0 and
+the MFB cost read ≈$0; the link forbids that. Measured: **seed-2 31.5%→0.55%, 106s→0.1s**;
+replicated seed-0 (97.5%); κ-invariant (the MFB structure is on κ-independent spot/flat lanes).
+All six previously-hard seed-2 cells now solve in **0.2s** at the deterministic 0.5% gap.
+
+**4. Latent billing-validator bug (the cut surfaced it; would've bitten 2c regardless).**
+`_check_billing` gated over-billing on `status == "OPTIMAL"`, but since S39's `mip_rel_gap=0.005`,
+`kOptimal` means within-gap, NOT exact — a gap-stopped incumbent can legitimately leave a MAWB one
+break above cheapest (got $1510 vs closed-form $1496.55 on `ci_tpe_lax_thru` DGR:ambient,
+mip_gap 0.0027), which crashed `solve()`. Fixed: gate over-billing on the actual gap
+(`exact ⟺ mip_gap ≤ 1e-9`); under-billing still always raises. Threaded `mip_gap` through
+`_validate_billing`/`_validate_bsa` (replaces the `status` param).
+
+**5. C.10 skip when all W_k=0** (the proof default): skip the whole tardiness build (pen∈[0,0],
+trivial PWL cuts) — −45 cols / −105 rows on the seed-2 cell; full C.10 still built when any W_k>0.
+
+**6. tex reconciled** (`air_freight_routing.tex`, §lin-bucket + §objective): MFBlink constraint
+`Eq. mfb-link` with validity + the 90kg/$625→$765 numeric example; gap-aware validator note;
+summary-table row + code-annotation. **PDF now 3 compiles behind** (S38+S39+S41) — NOT recompiled.
+
+**7. Commit `27ea807`** staged `air_milp.py` + `tex` + `test_air_milp.py`. This ALSO picked up
+**previously-uncommitted S40 code**: `MilpParams.__post_init__` (c_fix>0 floor) + the C.2b-drop +
+2 tests. The S40 sign-off (`b24d37b`) staged only the 3 tracker `.md`s, and 2c-2 (`45528c0`) staged
+only `data/synthetic`+`scripts`+arrival tests — neither staged the c_fix/C.2b code/tex/test, so the
+S40 model change sat uncommitted for a session (sign-off staging gap; trackers said "done"). PDF +
+6 scratch scripts (`lp_gap_probe`, `mfb_lab`, `cut_lab`, `cut_introspect`, `frac_diag`,
+`pareto_ceiling`) left untracked as-is per user.
+
+**▶ NEXT (S42): 2c-3 — replay-loop skeleton (M₁ open-book)** on `ReplayState`, now UNBLOCKED (solves
+sub-second). Walk clock → `visible()` → `solve` (pin tendered via `tendered_set()`, to
+`mip_rel_gap=0.005`) → extract per-arc allocation → `reconcile` → tender HAWBs with
+`tender_at ≤ clock`; record snapshots, no scorer yet. **Instance-specificity caveat:** MFBlink lift
+confirmed on seed-2 + seed-0 only — re-measure with `lp_gap_probe.py`/`mfb_lab.py` across more
+(κ,α,λ) cells/seeds before fully locking BLK-1c closed. Standing review agents due S43.
+
+---
+
+## 2026-06-17 (Session 40 — 2c-2 `tender_at` wiring DONE. 278 passed, ruff clean. IN PROGRESS.)
+
+**2c-2 — `tender_at` (binding cutoff, D-A1).** The `shipments.tender_at` column already existed
+(`scenario_db.py`); what was missing was the generator/persistence side. Wired it end-to-end:
+(1) added `tender_at: float` to `HawbArrival` (between `ready_at` and `effective_deadline_at`);
+(2) `_gen_arrivals` carries the binding `cutoff` (= `d_star.cutoff_utc_h`, the d* contracted-leg cutoff)
+through `meta["tender"]` → `HawbArrival.tender_at` (stable across the pass-2 `latest_ready` clamp, which
+only moves `known_at`); (3) `scenario_io._persist_hawbs` writes `tender_at` in the arrival branch (static
+instances leave it NULL). Tests: round-trip assert in `test_arrival_persistence`, added to the CRN
+determinism signature in `test_arrival_stream`, and the lifecycle invariant
+`known_at ≤ ready_at ≤ tender_at ≤ effective_deadline_at < backstop` (renamed
+`test_known_before_ready_before_tender_before_deadline`). Also ruff-cleaned `scripts/` (3 pre-existing
+E501 from the S39 commit, never linted) — src/tests/data/scripts now clean (`pitch_deck/` 422 are
+pre-existing, out of the project's lint scope). `load()` does NOT yet reconstruct the arrival stream
+(only `Hawb`), so `tender_at` round-trips via the persisted `shipments` column, not a `HawbArrival` rebuild
+— the deferred "`load()` partial-inverse for arrivals" still stands (2c-3 reads the column).
+
+**▶ NEXT: 2c-3 — replay-loop skeleton (M₁ open-book)** on `ReplayState`: walk clock → `visible()` →
+`solve` (pin tendered via `tendered_set()`, **to `mip_rel_gap=0.005`, not a time cap**) → extract per-arc
+allocation → `reconcile` → tender HAWBs with `tender_at ≤ clock`. Record snapshots; no scorer yet.
+
+---
+
+## 2026-06-17 (Session 39 — BLK-1c tractability probe (B5/safety-valve disproven) + mip_rel_gap=0.005 deterministic stop + model naming/.lp dump + status-aware billing-validator bug fix + value-bound test tolerance + full LaTeX code-annotation reconcile. 278 passed, ruff clean. Committed 79c5ac7.)
+
+Resumed at the S39 entry-point ("continue 2c"). Before building 2c-2, ran a **tractability probe**
+on BLK-1c (the critique-17 red-team's standing objection) — and it changed the plan.
+
+**1. Tractability probe (scripts/probe_tractability.py + scripts/seed2_repro.py).** Mirrored the
+critique cell (arrival instance, n=15, days=7) across seed × κ × α with a finite HiGHS budget.
+Findings: (a) **huge instance/seed variance** — same κ=1/α=1 cell ranges 20s→157s by seed; **seed 2
+is the consistently hard instance** across every κ/α (κ/α barely move solve time; it's
+consolidation/capacity branching, exactly BLK-1b). (b) **The S38 safety-valve (time-limit + incumbent)
+is unusable for the proof, three ways:** the wall-clock `time_limit` is *soft* (limit 120s → ran ~200s;
+HiGHS checks only at node boundaries); the TIME_LIMIT incumbent is **machine-load-dependent**
+(same instance/seed: ~15s/UB45212/gap19.8% under CPU contention vs ~200s/UB44782/gap5.3% clean) →
+**non-deterministic**, violating the proof's bit-identical requirement; and the residual gap (6–9% at
+60s, ~5% at 120s) is **same-order-as L2**, so a capped incumbent would swamp the headline savings.
+Bounds: instance is fixed-size **73 nodes / 240 arcs / 176 MAWBs / 2075 cols × 2803 rows**; tighter
+supply (κ=2) → higher cost UB + looser dual bound (LB collapses, e.g. 19.8% gap).
+
+**2. Decision (D1/D2 + solver policy).** **`mip_rel_gap=0.005`** added to `MilpParams` — a
+*deterministic* 0.5% relative-gap stop is the sound termination for any cost entering the L2
+decomposition (reproducible across machines); `time_limit_s` demoted to a soft backstop; `mip_gap`
+now reports the real residual (never hardcoded 0); +`dual_bound`/`num_col`/`num_row` on `AirSolution`.
+**D1 = global 0.005** (no test broke — tiny instances still prove exact optimality inside 0.5%); the
+test-side policy was applied anyway per user: `tests/conftest.within_rel()` (0.5% band) on **26
+objective value-bound assertions** (determinism/relational/difference/physical-quantity checks kept
+exact). **D2 = pin subsection** (option A).
+
+**3. Billing-validator bug fix (found by the probe).** `_validate_billing`/`_validate_bsa` asserted
+*exact* billing equality — valid only at optimality. On a TIME_LIMIT incumbent the billing vars aren't
+tight, so harmless over-billing tripped the assert and **crashed solve()** intermittently (incumbent-
+dependent), defeating the BLK-1 incumbent path. Fixed with status-aware `_check_billing`: under-billing
+(cost below the tariff floor) always raises; over-billing tolerated when not OPTIMAL.
+
+**4. Model naming + .lp dump (Step 2).** `MilpParams.debug` names every var+constraint with its
+tex-matching label; `output_lp_file` writes a 1:1 `air_model.lp` (LP-name-sanitized `[ ] : -` →
+`( ) . _`; HiGHS reverts the whole model to c0/r0 if any name is LP-invalid). Default off ⇒ zero
+overhead. Verified via highspy first (addVariable/addConstr take `name=`; passColName/passRowName).
+
+**5. LaTeX reconcile + code annotation (Step 1).** `model/air_freight_routing.tex`: added **C.5d spot
+cap** subsection (`_build_spot_cap`), **reframed C.12** to a pin-constraint family (`pin[k,a]`,
+`_build_pins`, D-A11, with variable-fixing-equivalence note), documented the **Wt/Wv inlining**
+discrepancy, added a **solver-settings** paragraph. Code-name annotations `(code …)` throughout: every
+C.x header (row labels + `_build_*`), sets/variables/post-solve tables, **all parameter tables**
+(per-HAWB/ground/air/rate-family/per-contract/service-product/other/ULD/supply-types/BSA/surcharge —
+deferred/ingestion items flagged), objective term-map, linearization (`FLATmin/cw`, `MFB*`, pivot,
+PWL). Compile-checked (0 raw underscores in `\texttt`, align envs balanced); **PDF intentionally not
+recompiled** (user owns compile) → now 2 compiles behind.
+
+**▶ RESUME (Session 40):** **2c-2 — populate `tender_at`** (= binding cutoff, D-A1; still UNSET in
+generator/persistence). Then 2c-3 replay loop (M₁ open-book on `ReplayState`, **solving each cycle to
+`mip_rel_gap=0.005`, NOT a time cap** — the probe's key lesson) → 2c-4 M₀/M₁′ arms → 2c-5 scorer →
+2c-6 H₀/π_hind → 2c-7 recourse fixtures → Stage 3 (κ,α,λ) sweep. **BLK-1c is the gating risk on Stage
+3**: before the full sweep, run a small mini-sweep at the 0.5% gap to confirm wall-time is tolerable
+(parallelize across independent cells; keep threads=1 per solve for determinism). **Standing review
+agents next due S43** (last S36). `scripts/` are scratch (committed for reuse, not proof infra).
+
+---
+
 ## 2026-06-15 (Session 38 — critique-17 triage CLEARED + M₀/M₁′ decomposition reshape + F1 Slice C + N3 ReplayState + 2c-1 MILP pinning. 278 passed, ruff clean.)
 
 Big build session off the S37 critique. Suite 255 → 278, ruff clean throughout.

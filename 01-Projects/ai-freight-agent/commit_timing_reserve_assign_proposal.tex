@@ -1,0 +1,415 @@
+\documentclass[11pt]{article}
+
+% =====================================================================
+%  Commit-Timing / Reserve-vs-Assign --- design proposal for REVIEW
+%  Session 52. NOT approved, NOT built. Do not compile automatically.
+% =====================================================================
+
+\usepackage[margin=1in]{geometry}
+\usepackage{amsmath,amssymb}
+\usepackage{booktabs}
+\usepackage{array}
+\usepackage{xcolor}
+\usepackage{enumitem}
+\usepackage{mdframed}
+\usepackage{hyperref}
+
+\newcommand{\cw}{\mathrm{cw}}
+\newcommand{\Acut}{A_{\mathrm{cut}}}
+\newcommand{\resv}{r}
+\newcommand{\Cz}{C^{0}}
+\newcommand{\avail}{\mathrm{avail}}
+\newcommand{\code}[1]{\texttt{#1}}
+\newcommand{\note}[1]{\textcolor{gray}{\small #1}}
+
+\title{\textbf{Commit-Timing: Reserve-Space vs.\ Assign-Cargo}\\[2pt]
+\large A design proposal for review --- five-agent deep dive, Session 52}
+\author{}
+\date{}
+
+\begin{document}
+\maketitle
+\vspace{-3em}
+
+\begin{mdframed}[backgroundcolor=black!4,linewidth=0.4pt]
+\textbf{Status: PROPOSAL --- not approved, not built.} This document states the model as it stands,
+the change four expert lenses converged on, and the red-team's objections, each pinned to a small
+hand-checkable numeric example. Every proposed change is shown as \emph{before} $\to$ \emph{after}
+math. \textbf{Nothing here has been coded.} It relaxes a locked decision (D-A1) and so needs sign-off
+before any build. Governing methodology: \code{model/arrival\_only\_replan\_methodology.md} \S14.2/\S14.3.
+\end{mdframed}
+
+% =====================================================================
+\section{Scope and how to read this}
+The S51 diagnostics proved the model's failure is \emph{when cargo commits}, not the (grounded, correct)
+capacity decay. Five agents --- industry consultant, operations scientist, air-planning veteran, airline
+revenue-management scientist, and an adversarial red-team --- read the code independently. The four
+constructive lenses converged on one structural change (\S\ref{sec:proposal}). The red-team
+(\S\ref{sec:redteam}) accepts the direction but reorders the priority and adds guards without which the
+change would manufacture the result. Read \S\ref{sec:asbuilt} (what exists) $\to$ \S\ref{sec:proposal}
+(the fix, with math) $\to$ \S\ref{sec:redteam} (the attack) $\to$ \S\ref{sec:decisions} (what you must decide).
+
+\paragraph{Grounding (S52 research).} The core premise --- a forwarder reserves flight-capacity
+\emph{quantity} early on estimated weight and finalizes the exact cargo late at a documentation/cargo
+cutoff --- was verified against IATA primary standards, carrier tariffs, and peer-reviewed air-cargo
+revenue-management literature (deep-research, 64 claims upheld / 10 refuted;
+\code{docs/design/air\_cargo\_reserve\_assign\_grounding\_s52.md}). It is \textbf{standard practice}
+(allotment/BSA two-stage; IATA RP\,1670 booking-before-acceptance with weight/piece reconciliation at
+acceptance). Three findings are folded into the changes below: reserved-but-unused space \emph{costs
+money} (grounds Change 4); the \code{dep$-$48h} soft-BSA cliff is \emph{one calibration point, not a
+universal constant}; and the spot reserve must be framed as \emph{consolidation-style space-holding}, not
+a single-consignment spot booking (see \S\ref{sec:decisions}).
+
+% =====================================================================
+\section{Notation}\label{sec:notation}
+\begin{center}
+\begin{tabular}{@{}ll@{}}
+\toprule
+Symbol & Meaning \\
+\midrule
+$a$ & a spot arc (a bookable flight/leg segment carrying overflow cargo) \\
+$t$ & wall clock (hours); a decision cycle fires at each event time \\
+$\tau_a(t)=\frac{\text{cutoff}_a-t}{24}$ & days remaining to arc $a$'s cargo cutoff \\
+$\Cz_a$ & nominal spot capacity on arc $a$ (chargeable kg) \\
+$\Acut{}_{,a}\in[0,1]$ & \emph{cutoff bookable fraction} --- free spot left at $\tau=0$ (freighter $\approx0.13$, belly $\approx0.22$) \\
+$\lambda_a$ & fill rate, $\sim\!U(0.10,0.16)$ per day \\
+$\varphi_a(\tau)$ & spot \emph{available fraction} (the booking curve), Eq.~\eqref{eq:phi} \\
+$b_a$ & tendered (hard-pinned) chargeable weight already committed on $a$ \\
+$\cw_k$ & chargeable weight of HAWB $k$ \\
+$x_{k,a}\in\{0,1\}$ & MILP decision: HAWB $k$ routes on arc $a$ \\
+$p^{\mathrm{spot}}_a$ & spot price (\$/kg); \textbf{flat in $\tau$} (no close-in markdown --- researched) \\
+\midrule
+\multicolumn{2}{@{}l}{\emph{New in this proposal:}}\\
+$\resv_a$ & \textbf{reserved} spot on $a$ (cargo-agnostic, monotone in $t$) --- the new primitive \\
+$c^{\mathrm{hold}}$ & price charged on reserved-but-unfilled spot (the option premium) \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+% =====================================================================
+\section{The model as built today}\label{sec:asbuilt}
+
+\paragraph{Booking curve (grounded, correct --- not changing).} Spot availability is convex/back-loaded
+(\code{src/cap\_decay.py:phi}):
+\begin{equation}\label{eq:phi}
+\varphi_a(\tau) \;=\; \Acut{}_{,a} + \bigl(1-\Acut{}_{,a}\bigr)\bigl(1-e^{-\lambda_a \tau}\bigr)\;\in\;[\Acut{}_{,a},\,1].
+\end{equation}
+Only spot decays; both BSA tiers are firm.
+
+\paragraph{Available spot (Model-Y, S51).} On each cycle the solver sees
+(\code{cap\_decay.\_\_call\_\_}, line~136):
+\begin{equation}\label{eq:availnow}
+\avail_a(t) \;=\; b_a \;+\; \max\!\bigl(0,\ \Cz_a - b_a\bigr)\,\varphi_a(\tau_a(t)),
+\qquad
+b_a=\!\!\sum_{k:\ \text{tendered on }a}\!\!\cw_k .
+\end{equation}
+Only \emph{tendered} kg is floored against decay --- the ``tendered-only'' Model-Y protection.
+
+\paragraph{The monolithic commit.} \code{tender\_at}${}={}$\code{cutoff} (T$-$6h). One event
+(\code{ReplayState.mark\_tendered}) does three jobs at once: (i) hard-pins the route $x_{k,a}\!=\!1$;
+(ii) freezes the cargo$\to$ULD assignment; (iii) is the \emph{only} thing that sets $b_a$ in
+Eq.~\eqref{eq:availnow}, i.e.\ the only decay protection. Cargo is revealed at
+$\text{known\_at}=\text{cutoff}-\text{book\_lead}$, median book\_lead $\approx1.9$ days.
+
+\paragraph{Arms and decomposition.} $H_0$ (human) $\ge M_0$ (greedy) $\ge M_1'$ (single-pass: hard-pins
+\emph{all} placed priors) $\ge M_1$ (open-book: pins \emph{only} tendered) $\ge \pi_{\text{hind}}$.
+Reported: $L_1=C(H_0)-C(M_1')$, headline $L_2=C(M_1')-C(M_1)$.
+
+\begin{mdframed}[backgroundcolor=blue!4,linewidth=0.4pt]
+\textbf{Example A --- the whole problem in one arc.} Freighter arc, $\Cz=1000$ kg, $\Acut=0.13$,
+$\lambda=0.13$. Evaluate $\varphi$ (Eq.~\ref{eq:phi}) at three lead times:
+\[
+\begin{array}{lll}
+\tau=0 \text{ (cutoff)} : & \varphi=0.13 & \Rightarrow \avail = 1000\cdot0.13 = \mathbf{130\ kg}\\
+\tau=1.9\text{d (today's reveal)} : & \varphi=0.13+0.87(1-e^{-0.247})=0.32 & \Rightarrow 1000\cdot0.32=\mathbf{321\ kg}\\
+\tau=5\text{d (grounded reveal)} : & \varphi=0.13+0.87(1-e^{-0.65})=0.55 & \Rightarrow 1000\cdot0.55=\mathbf{546\ kg}
+\end{array}
+\]
+Because tender fires at $\tau=0$, every arm buys space at $\varphi=0.13$ --- the steep tail --- no matter
+how early the cargo was known. \emph{That} is the ``100\% of degradation is decay'' finding: it is really
+a commit-timing artifact.
+\end{mdframed}
+
+\paragraph{Diagnosed defect (terse).} Clairvoyant on \emph{undecayed} supply hits the instance ceiling
+($\sim$9\% fallback / 60\% OTP). No-decay staged $M_1\approx$ clairvoyant. So the staged degradation is
+entirely Eq.~\eqref{eq:phi} biting at $\tau\!\to\!0$. The decay is right; the \emph{commit clock} is wrong.
+
+% =====================================================================
+\section{Proposed change --- the four-agent converged design}\label{sec:proposal}
+
+\noindent\textbf{One idea:} split the single \code{tender} event into two, because on a real desk they
+are two events on two clocks:
+\begin{itemize}[leftmargin=1.4em,itemsep=1pt]
+\item \textbf{Reserve space} (early, at reveal): lock a \emph{quantity} of spot, \emph{without} naming which
+HAWB fills it. This defeats decay.
+\item \textbf{Assign cargo} (late, until each HAWB's cutoff): keep $x_{k,a}$ fluid so later arrivals can
+re-consolidate. The final hard-pin tender stays at the cutoff --- unchanged.
+\end{itemize}
+
+\subsection{Change 1 --- the reserved-capacity primitive}
+Add per-arc $\resv_a\ge0$, \textbf{monotone non-decreasing across cycles}
+($\resv_a^{(t+1)}\ge \resv_a^{(t)}$ --- reserving is irreversible, the analogue of a tender but on
+space, not a box). Set at \code{reserve\_at}${}={}$\code{known\_at}, \emph{no HAWB pin}.
+\note{GROUNDED framing (S52): $\resv_a$ represents \emph{consolidation- / allotment-style} space-holding
+--- a forwarder reserving MAWB/allotment space it will fill with house cargo (cargo identity finalized at
+cutoff, per IATA RP\,1670). It is \emph{not} a single-consignment spot booking, whose FWB already names
+the shipment. The clean reserve/assign separation is defended at exactly that granularity.}
+
+\subsection{Change 2 --- decay floor becomes reserve-aware}
+\begin{align}
+\text{\emph{before} (Eq.\,\ref{eq:availnow}):}\quad & \avail_a=b_a+\max(0,\Cz_a-b_a)\,\varphi_a(\tau),\\
+\text{\emph{after}:}\quad & \boxed{\ \avail_a=f_a+\max(0,\Cz_a-f_a)\,\varphi_a(\tau),\qquad f_a=\max(\resv_a,\,b_a)\ }\label{eq:availnew}
+\end{align}
+Reserved space is off the market: the floor $f_a$ never decays; only the \emph{unreserved} remainder
+$(\Cz_a-f_a)$ rides the curve. \note{One-line code change in \code{cap\_decay.\_\_call\_\_}: replace
+$b_a$ with $f_a$.}
+
+\begin{mdframed}[backgroundcolor=blue!4,linewidth=0.4pt]
+\textbf{Example B --- reserve defeats decay.} Same arc as A ($\Cz=1000$). At reveal ($\tau=5$d) the plan
+wants 400 kg of revealed cargo on this arc.
+\begin{itemize}[leftmargin=1.4em,itemsep=0pt]
+\item \emph{Today} (no reserve): the 400 kg is \emph{placed} but not tendered, so $b_a=0$. By cutoff
+$\avail=1000\cdot0.13=130$. The placement no longer fits $\Rightarrow$ \textbf{270 kg spill to fallback}.
+\item \emph{Proposed} (reserve $\resv_a=400$ at reveal): $f_a=\max(400,0)=400$, so at cutoff
+$\avail=400+\max(0,600)\cdot0.13=400+78=\mathbf{478\ kg}$. The 400 kg fits; \emph{which} 400 kg fills it is
+decided at cutoff. \textbf{0 kg to fallback.}
+\end{itemize}
+\textbf{Billing (option premium, Change 4).} If only 380 kg of cargo is actually assigned to the reserved
+400, pay spot on the idle 20 kg: $20\cdot p^{\mathrm{spot}}=20\cdot5.5=\$110$. Reserving is not free.
+\end{mdframed}
+
+\subsection{Change 3 --- symmetric arms: decouple the decay floor from the assignment pin}
+This is the crux, and it is where the red-team agrees (\S\ref{sec:redteam}). \textbf{Both} $M_1$ and $M_1'$
+reserve space on the same schedule and the same policy. The \emph{only} surviving difference:
+\begin{center}
+\begin{tabular}{@{}lll@{}}
+\toprule
+& reserve floor $\resv_a$ & assignment $x_{k,a}$ of untendered cargo \\
+\midrule
+$M_1$ (open-book) & yes (Change 1--2) & \textbf{fluid} --- re-solved every cycle until each HAWB's cutoff \\
+$M_1'$ (single-pass) & yes (Change 1--2) & \textbf{frozen} at first placement \\
+\bottomrule
+\end{tabular}
+\end{center}
+So open-book value $=$ freedom to \emph{re-assign} cargo within an identical reserved envelope --- nothing else.
+
+\subsection{Change 4 --- reservation friction (the honesty guard)}
+Add to \code{real\_cost} the option premium on reserved-but-unfilled spot:
+\begin{equation}\label{eq:hold}
+C^{\mathrm{hold}} \;=\; \sum_a p^{\mathrm{spot}}_a\cdot \max\!\Bigl(0,\ \resv_a-\textstyle\sum_k \cw_k x_{k,a}\Bigr).
+\end{equation}
+Without this, reserving is free $\Rightarrow$ an arm reserves everything and decay never binds (the exact
+artifact the S51 review killed for the placement-floor). Soft-BSA already has this via its \code{dep$-$48h}
+washout; Eq.~\eqref{eq:hold} gives spot the same discipline.
+\note{GROUNDED (S52): reserved-but-unused air capacity really does carry cost --- hard-BSA pay-regardless
+/ minimum chargeable (pivot) weight; soft-BSA minimum-utilization; spot no-show fees (e.g.\ AA Cargo
+\$300, >250\,kg, cancel-before-cutoff free). The "settle only on actual usage" alternative was refuted as
+non-universal. So charging reserved-but-unfilled spot is realistic, not a convenience.}
+
+\subsection{Change 5 --- reserve quantity is forecast-only (hindsight / CRN guard)}
+$\resv_a$ is set from the \emph{revealed-so-far} book plus the \emph{analytic} expected residual
+(\code{air\_generator.\_expected\_residual}), never from realized future arrivals. That path reads
+\textbf{zero} demand draws, so CRN is preserved (demand byte-identical across $\tau,\alpha,\rho$, and the
+new reserve knob). \note{A real desk reserves on forecast and is sometimes wrong --- that is the point.}
+
+\subsection{Change 6 --- book-lead lengthened to grounded reality}
+Shift \code{LeadBucketConfig.ranges} so the median lead $\approx5$ days (mass in the final 1--2 weeks,
+keeping tier direction: express latest, deferred earliest). CRN-safe --- same draw count/order, only the
+range moves. \emph{Necessary but not sufficient} (see red-team R4): it only creates the \emph{window} in
+which reserving can act; without Changes 1--3 the lock is still at the cutoff.
+
+\subsection{Change 7 --- BSA-first + swap: already latent, no new constraint}
+Cost-min already fills tiers hard-BSA ($\approx$free) $\to$ soft-BSA ($\sim$\$4.2) $\to$ spot
+($\sim$\$5.5, decaying) $\to$ fallback. Early flexible cargo squats cheap BSA; a late captive is pushed to
+decayed spot. But $M_1$ pins only tendered cargo, so BSA assignment is fluid until cutoff --- $M_1$ can
+\emph{already} bump an early flexible HAWB off BSA to seat a late captive, re-seating the flexible on spot.
+The swap needs no new constraint; it needs only (a) fresh reserved spot to exist for the bumped HAWB and
+(b) the longer book-lead. Its feasibility bound is the \textbf{swap-slack}
+\begin{equation}\label{eq:theta}
+\Theta(t)=\sum_{a\in\text{fresh spot}}\!\!\bigl[\avail_a(t)-b_a\bigr]\;-\!\!\sum_{k\in\text{bumpable flexible}}\!\!\cw_k,
+\end{equation}
+monotone decreasing in $t$. \textbf{$L_2$ value lives entirely where $\Theta(t)>0$}: once spot decays shut,
+the swap chain breaks.
+
+\begin{mdframed}[backgroundcolor=blue!4,linewidth=0.4pt]
+\textbf{Example C --- where a real $L_2$ comes from (and where it vanishes).}
+One flight. Reliable cheap tier (hard BSA) $=300$ kg, free. Reservable fresh spot $=300$ kg (reserved at
+day 0, \$5.5/kg); unreserved spot decays to $\approx0$ by cutoff. Two HAWBs, each 300 kg:
+$E$ (early, flexible, loose deadline --- can ride spot); $C$ (late express, tight --- \emph{only} BSA meets
+its deadline). Fallback $=1.5\times$worst spot $=\$8.25$/kg.
+\smallskip
+
+\emph{$M_1'$ (frozen assignment).} Day 0, only $E$ is known; single-pass optimally puts $E$ on the free
+BSA. Both arms reserve the 300 fresh spot. Day 4, $C$ arrives needing BSA --- but $E$ froze it.
+$C$ cannot use spot (deadline) $\to$ \textbf{fallback}.
+\[
+\text{real\_cost}(M_1')=\underbrace{0}_{E\text{ on BSA}},\quad \text{fallback\_penalty}=300\cdot8.25=\$2475,\quad \text{fallback\%}=50\%.
+\]
+
+\emph{$M_1$ (fluid assignment $=$ swap).} Day 4, re-assign: $C\!\to\!$BSA (free), $E\!\to\!$reserved spot.
+\[
+\text{real\_cost}(M_1)=\underbrace{0}_{C\text{ on BSA}}+\underbrace{300\cdot5.5}_{E\text{ on spot}}=\$1650,\quad \text{fallback\_penalty}=0,\quad \text{fallback\%}=0\%.
+\]
+
+\textbf{Read it honestly:} $M_1$ delivers 100\% vs 50\%, at \emph{$+\$1650$ real cost} and
+\emph{$-\$2475$ fallback}. Open-book's win is \textbf{service}, and it \emph{spends more real money} to
+avoid the relief valve.
+
+\textbf{The $L_2$-real mirage:} naively, $\text{real\_cost}(M_1')-\text{real\_cost}(M_1)=0-1650=\mathbf{-\$1650}$
+--- ``$M_1$ is worse.'' False: $M_1'$ looks cheap only by stranding $C$. This is exactly why $L_2$-real\%
+is retired.
+
+\textbf{The null:} raise hard BSA to $\ge600$. Now both arms put $C$ on BSA and $E$ anywhere; both deliver
+100\%; $L_2\to0$. \emph{$L_2$ exists only under contention} --- which is the correct, falsifiable behavior.
+\end{mdframed}
+
+% =====================================================================
+\section{Red-team feedback}\label{sec:redteam}
+
+The red-team accepts reserve-vs-assign but makes one reframing and several guard demands. \textbf{Its
+headline: the current $M_1'$ is a strawman, and the entire ``57\% to fallback'' result rides on it.}
+
+\subsection{R1 --- $M_1'$ is incoherent today; symmetry is mandatory}
+Under Model-Y, $M_1'$ hard-pins its placed-but-untendered route priors (commits the \emph{route} early)
+but gets \emph{no} decay floor for them ($b_a$ counts only tendered). So when spot decays, the pinned solve
+goes infeasible and \code{\_repair\_frozen\_infeasible} dumps the prior to fallback. That is an
+\textbf{incoherent half-commitment}: commit the route, refuse to hold the space. No planner does that ---
+committing \emph{is} holding.
+
+\begin{mdframed}[backgroundcolor=red!5,linewidth=0.4pt]
+\textbf{Example D --- the strawman, and its fix (reuses Example B's arc).} $M_1'$ places 400 kg on the arc
+at reveal and \emph{pins the route}.
+\begin{itemize}[leftmargin=1.4em,itemsep=0pt]
+\item \emph{Today:} route pinned, but $b_a=0$ (not tendered). At cutoff $\avail=130<400$ $\to$ solve
+infeasible $\to$ \textbf{270 kg dumped to fallback}. This dump is manufactured by the arm's own
+incoherence, \emph{not} by rigidity being expensive.
+\item \emph{Proposed (symmetric reserve):} $M_1'$ also sets $\resv_a=400$ (Change 3). $f_a=400$,
+$\avail=478\ge400$, feasible, \textbf{0 dumped}. Now $M_1'$ differs from $M_1$ only in that it froze
+\emph{which} boxes fill the 400.
+\end{itemize}
+\textbf{Priority flip:} the first job is not ``commit earlier'' --- it is ``let $M_1'$ hold the space it
+commits to.'' Book-lead, headline metric, and swap are all downstream of this.
+\end{mdframed}
+
+\subsection{R2 --- the service headline is the rigged quantity if symmetry is skipped}
+Retiring $L_2$-real\% and headlining fallback\%/OTP does \emph{not} launder the mirage: fallback\% is
+\emph{exactly} what the $M_1'$ strawman inflates. Service is a sound headline \emph{only after} R1 is fixed.
+
+\subsection{R3 --- do not headline ``total $=$ real $+$ tardiness''}
+A fallback HAWB is pinned to $t_k=T^{\mathrm{abs}}$ in C.10a, generating a large quadratic tardiness term.
+So ``total $=$ real $+$ tardiness'' is dominated by the same dumped-HAWB count as fallback\_penalty --- it
+re-imports the dump through the tardiness channel.
+
+\begin{mdframed}[backgroundcolor=red!5,linewidth=0.4pt]
+\textbf{Example E --- the tardiness channel double-counts the dump.} One express fallback HAWB lands at
+$T^{\mathrm{abs}}$; by the C.10 calibration (express full-span $\approx$ fallback gap) its quadratic
+penalty is $\sim\$2000$. So an arm that dumps $N$ express HAWBs carries $\sim\$2000\,N$ of ``tardiness''
+that is really just the fallback count wearing a cost hat. Summing it into a ``total'' tracks fallback\%,
+not routing quality. \textbf{Keep the channels separate} (D5): report \code{real\_cost},
+\code{fallback\_penalty}, and \code{tardiness\_penalty} each once; never collapse them.
+\end{mdframed}
+
+\subsection{R4 --- book-lead alone is inert; asymmetry can break the null}
+Under tender-at-cutoff, placing a route at $\varphi\approx0.9$ gets no protection (floor lands only at
+tender). So Change 6 does nothing without Changes 1--3. And if early-commit is granted to $M_1$ only, then
+even the \emph{abundant-capacity} loose corner produces $L_2>0$ --- the arms sample different points on the
+decay curve rather than resolving scarcity. That silently converts the negative control into a rig.
+
+\subsection{R5 --- the reserve accumulator is a CRN-leak vector}
+If $\resv_a$ is chosen by reading the visible book, it couples supply to demand and breaks the hard CRN
+gate. Change 5 (forecast-only, zero demand draws) is not optional; add an explicit test that varying the
+reserve knob leaves demand byte-identical.
+
+\subsection{R6 --- noise floor}
+$L_2$ is a difference of two $0.5\%$-gap objectives, and one fallback flip is worth
+$1.5\times$worst-spot $+$ a quadratic $T^{\mathrm{abs}}$ term --- larger than the whole real-cost delta.
+A single HAWB flipping fallback from incumbent noise can move the headline. Re-solve headline cells at two
+gaps ($0.005$ and $0.001$); the signal must exceed the movement. At proof scale ($n\approx70$) prefer
+solving headline cells to optimality.
+
+\subsection{R7 --- S45 reproduction risk / the falsification path}
+Nothing guarantees the arms route \emph{different} kg per capacity tier post-fix. If they move identical kg
+and differ only in MAWB grouping, this is S45 again (100\% consolidation, capacity inert) wearing a timing
+hat. \textbf{The honest outcome to accept:} after symmetric reserve, if across the $(\tau,\alpha,\rho)$
+grid $\text{real\_cost}(M_1')-\text{real\_cost}(M_1)\approx0$, fallback\% converge, and the controls pass,
+then \emph{open-book has no capacity/timing value at this scale} --- a publishable finding, not a failure to
+hide. The tell: the gap collapses the moment $M_1'$ can hold what it commits.
+
+% =====================================================================
+\section{Proposed estimator (retire $L_2$-real\%)}\label{sec:estimator}
+Report, per arm, kept \emph{separate} (D5):
+\begin{enumerate}[leftmargin=1.4em,itemsep=0pt]
+\item \textbf{Service:} fallback\% and OTP, plus the fallback 3-cause split (capacity-roll vs structural).
+\item \textbf{Cost channels, unsummed:} \code{real\_cost}, \code{fallback\_penalty}, \code{tardiness\_penalty}.
+\item \textbf{Mechanism:} chargeable-kg routed \emph{per capacity tier per arm} (the kill-shot
+decomposition --- proves capacity, not just permutation, is moving).
+\end{enumerate}
+Defensible claim shape: ``open-book routes $X$ more kg through real capacity and strands $Y$ fewer to
+capacity-roll fallback, at real-cost delta $Z$ (sign reported honestly).''
+
+% =====================================================================
+\section{Negative controls (must all pass \emph{after} the fix)}\label{sec:controls}
+\begin{center}
+\begin{tabular}{@{}lll@{}}
+\toprule
+\# & Control & Pass predicate \\
+\midrule
+NC1 & $\resv\equiv0$ \emph{or} \code{reserve\_at}$=$\code{cutoff} & byte-identical to today (primitive inert) \\
+NC2 & decay off ($\varphi\equiv1$) & $|L_2|<\mathrm{CI}$ \emph{and} service gap $\approx0$ \\
+NC3 & loose corner ($\tau{=}3$, abundant, long lead) & $|L_2|<\mathrm{CI}$, $|\Delta\text{fallback\%}|\le1$ HAWB \\
+NC4 & symmetric-commit (both freeze assignment) & $L_2\approx0$ (isolates assignment fluidity) \\
+NC5 & flat close-in pricing (already true) & benefit persists (a quantity story, not price) \\
+CRN & vary $\{\tau,\alpha,\rho,\resv\text{-knob},\varphi\}$ & demand byte-identical; reserve draws 0 demand bytes \\
+Noise & headline cells at gap $\{0.005,0.001\}$ & $|L_2|$ movement $<$ signal \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+% =====================================================================
+\section{Summary of proposed model changes}\label{sec:changes}
+\begin{center}
+\renewcommand{\arraystretch}{1.2}
+\begin{tabular}{@{}p{0.5cm}p{5.3cm}p{8.3cm}@{}}
+\toprule
+\# & Change & Math / where \\
+\midrule
+1 & Reserved primitive $\resv_a$ & new per-arc state, monotone $\resv_a^{(t+1)}\ge\resv_a^{(t)}$; set at \code{reserve\_at}$=$\code{known\_at}, no HAWB pin (\code{replay.py}) \\
+2 & Reserve-aware decay floor & Eq.~\eqref{eq:availnow}$\to$\eqref{eq:availnew}: $b_a\!\to\!f_a\!=\!\max(\resv_a,b_a)$ (\code{cap\_decay.\_\_call\_\_}) \\
+3 & Symmetric arms & both $M_1,M_1'$ get $\resv_a$; differ only in $x$ fluidity (\code{replay.py} arm branch); \textbf{kill the frozen-route/unheld-space dump} (\code{\_repair\_frozen\_infeasible}) \\
+4 & Reservation friction & Eq.~\eqref{eq:hold}: charge $p^{\mathrm{spot}}$ on $\max(0,\resv_a-\sum_k\cw_k x_{k,a})$ into \code{real\_cost} \\
+5 & Forecast-only reserve & $\resv_a$ from revealed book $+$ analytic $E[\text{residual}]$; 0 demand draws (CRN) \\
+6 & Book-lead $\to\sim$5d & shift \code{LeadBucketConfig.ranges}; CRN-safe \\
+7 & BSA swap (no new constraint) & already latent in $M_1$'s re-solve; bound by $\Theta(t)>0$, Eq.~\eqref{eq:theta} \\
+8 & Estimator & retire $L_2$-real\%; report \S\ref{sec:estimator} (service $+$ unsummed cost channels $+$ per-tier kg) \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\paragraph{What is NOT changing.} The booking curve Eq.~\eqref{eq:phi}; only-spot-decays; both BSA tiers
+firm; the \code{dep$-$48h} soft-BSA cliff; no close-in distress discount; and the hard-pin \emph{final}
+tender at the cutoff. The decay model is grounded and correct.
+\note{CALIBRATION note (S52): the \code{dep$-$48h} soft-BSA release cliff is \emph{one plausible point,
+not a universal constant} --- the "usually 48h" figure was refuted; real washout/release deadlines are
+contract/route-specific (\textasciitilde24--96h, sometimes "a few weeks"). Treat 48h as a sweepable
+calibration parameter; this also reconciles the earlier 48h-vs-2-week discrepancy (different events, wide
+dispersion).}
+
+% =====================================================================
+\section{Decisions needed before any build}\label{sec:decisions}
+\begin{enumerate}[leftmargin=1.4em,itemsep=1pt]
+\item \textbf{D-A1 amendment.} This splits \code{tender} into \code{reserve} $+$ \code{assign}, relaxing the
+locked ``tender-at-cutoff is the only lock.'' Approve the direction, or keep iterating the mechanism?
+\item \textbf{Reservation friction (Change 4).} Is ``bill reserved-unused spot at $p^{\mathrm{spot}}$
+$+$ the existing 48h soft-BSA washout'' the right friction, or a distinct hold/cancellation cost? This is
+the guard that keeps the whole thing honest.
+\item \textbf{Estimator (Change 8).} Confirm the D5-separated headline (\S\ref{sec:estimator}) over any
+summed ``total.''
+\item \textbf{Scope of $M_1'$ recoding (R1).} Making $M_1'$ coherent (symmetric reserve) is a
+behavior change to a built arm --- confirm before it is touched.
+\item \textbf{Methodology framing (grounded, S52).} State in the methodology that the spot reserve
+$\resv_a$ is \emph{consolidation- / allotment-style} space-holding (cargo identity finalized at cutoff,
+IATA RP\,1670), not a single-consignment spot booking. This defends the clean reserve/assign separation
+at the one granularity a reviewer would probe. Confirm this framing.
+\end{enumerate}
+
+\end{document}

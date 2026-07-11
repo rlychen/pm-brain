@@ -7,6 +7,68 @@
 
 ---
 
+## 2026-06-30 — TODO: H₀ human-baseline redesign (Session 49)
+
+**Status: PARKED — functional but a weak heuristic. User to supply pseudocode before redesign.**
+
+The H₀ human baseline (`src/h0_planner.py`, `greedy_consolidate` + `reroute_to_next_supply`) was
+rebuilt S49 from the old standalone-per-shipment routing (which dumped ~80% to fallback regardless of
+capacity) to a **supply-first, batch, best-fit-decreasing consolidation** policy with a knob-C
+reroute-to-next-supply repair. It is now *correct and feasible* (chain C(H₀) ≥ C(M₁') holds on total
+cost; billing never leaks INFEASIBLE) and capacity-responsive, BUT still strands **~29–51% to
+fallback** at proof scale — too high for the *competent* daily planner D-A14 specifies (the machine
+flies 97–99%). Root cause: daily-cadence myopia (cheap capacity filled by early-day batches; later
+arrivals find it frozen). Accepted S49 as a loose-but-valid baseline to unblock; **the L2 headline
+thesis (M₁ vs M₁') is unaffected** — H₀ only enters L1 (human-vs-machine).
+
+**Follow-up (when resumed):** user will provide pseudocode for a better H₀. Likely direction —
+reduce spurious fallback without adding lookahead (which belongs to M₁, not H₀). Until then H₀ stays
+as built. Tests updated to the new semantics: `test_h0_consolidates_batch_into_shared_supply`,
+`test_h0_reroutes_then_rolls_to_fallback_under_contention`, scorer cause-partition test.
+
+---
+
+## 2026-06-28 — Air-vertical product roadmap + autonomous-loop policy (Session 47)
+
+**This is the operative delivery roadmap.** The project went vertical on AIR (Sessions 28+), so this
+supersedes the original full-product Phase 2.x ordering below *as the build order*. The Phase 0–7 structure
+that follows remains the formal phase/gate definitions and the per-component specs — unchanged as reference.
+The air build plan in `BUILD_STATUS.md` (the S46 capacity-redesign Phases 0–4) is roadmap leg **R1**; its
+tail points here.
+
+**The ordered roadmap (user-set, S47):**
+
+| # | Leg | Scope | Mode |
+|---|---|---|---|
+| **R1** | Finish the current air build | Complete the S46 capacity-redesign build (BUILD_STATUS Phases 0–4: generator → decay → scorer → calibrate+sweep = the thesis number). | Human-in-the-loop (as today) |
+| **R2** | Air scalability + testing | Solver scalability (tractability ceiling C3, MFB reformulations, scale probes) + harden the air test suite. | Human-in-the-loop |
+| **R3** | Air product — UI + backend | The deployable air product air planners use: consolidation-planner + quote-desk surfaces (two-pronged wedge), backend + state machine, **per-forwarder deployment setup** (multi-tenant, onboarding). Maps to Phases 3–5 below, air-only scope. | Human-in-the-loop |
+| **R4** | Air deployment + live test | Stand up an actual forwarder deployment and run it. | Human-in-the-loop |
+| **R5** | **LCL via autonomous agent loop** | Build the Ocean LCL optimizer (`model/ocean_lcl_routing.tex`, Phase 2.8) with an autonomous loop — **loopable pieces ONLY** (policy below). The experiment. | **Autonomous loop, bounded** |
+
+**Autonomous-loop policy (decided S47 — full assessment in memory `project_autonomous_loop_lcl`):**
+
+- **Air stays human-in-the-loop** (R1–R4). The loop is trialed only at **R5 (LCL)**.
+- **The loop runs only AFTER the human gates clear:** (a) the user approves the LCL LaTeX model, and (b) the
+  user authors the isolation-test contract (the verifier). Both are hard gates. The loop is a **bounded
+  executor inside** the existing gated process — not a replacement for it.
+- **Loopable** = mechanical implementation of an *approved* model against an *objective* verifier: MILP
+  correctness vs. hand-computed bounds, constraint-binding tests, determinism, solver gap. Air-build
+  experience put this at **~30% of component work, ~80% automatable within that slice.**
+- **NOT loopable** = modeling/formulation choices, metric design, scope, and **interpretation of empirical
+  results** — the ~50%+ where this project's value lives and where its costly course-corrections happened
+  (S45: the L2 decomposition was measuring the wrong thing with a **green 311-test suite**; S46: the
+  decay-model semantic error). No test catches "model passes tests but measures the wrong thing" — that
+  stays human.
+- **Loop guardrails:** never relax a test to pass (a red bound means the implementation is wrong, not the
+  test); **halt and surface** on any spec-vs-test conflict, unexpected `INFEASIBLE`, or determinism failure.
+  Prefer the existing adversarial multi-agent review harness over a solo loop for anything modeling-adjacent.
+- **Transit-time ML** is loop-*shaped* (continuous quantile-coverage / OTP verifier) but **not yet loopable**:
+  per-arc formal models are unwritten, and on synthetic-only data the coverage metric is **circular** (it just
+  verifies the model relearned the generator). Revisit once real design-partner data exists.
+
+---
+
 ## 2026-05-19 — Phasing update (Session 12)
 
 User clarified the code-phase track in Session 12. Restating the upcoming code phases in the user's framing, mapped to the existing phase numbering below:
@@ -25,6 +87,55 @@ User clarified the code-phase track in Session 12. Restating the upcoming code p
 - `transit_time_model.md` — Transit Time Service product spec (3 phases)
 - `scalability.md` — large-scale solver strategies + SPPRC sketch
 - `graph_generator.md` — graph generator + simulation orchestrator (test harness for Phase 1 isolation tests + Phase 2 end-to-end testing)
+
+---
+
+## 2026-05-25 — Surface scope and architecture lock (Session 18 third continuation)
+
+User walked through the four day-in-the-life docs (`docs/forwarder-operations-analysis/day-in-the-life/`) and locked five strategic commitments to memory. Three have direct execution-plan implications. Existing Phase 0–7 structure below is unchanged in sequencing; this block records new constraints and scope decisions to apply when each phase begins.
+
+**1. MVP user-surface scope = two prongs, one engine.**
+- **Quote desk** (customer-facing, Persona 1) — RFQ → cost-to-serve quote
+- **Consolidation planner** (internal-facing, Persona 2) — pipeline → MILP-solved build plan
+- Both invoke the same MILP + transit time estimator + capacity manager + rules engine + graph constructor + density-fit ML predictor
+- Persona 4 (exceptions / re-planning) is the same human as Persona 2 in reactive mode; replan UX = planning UX. No separate exception-handler surface.
+- See memory `project_two_pronged_wedge.md`
+- **Phase 5 impact:** the existing build order (Operations Dashboard, Exception Queue, etc.) gets re-organized when Phase 5 begins. Build order should be: consolidation planner UI first (directly invokes MILP), quote desk UI next, operator console (replan / exceptions, same screen as planning) wraps both.
+
+**2. Drayage = secondary surface; KAM / CFS / customs not in MVP user-surface scope.**
+- **Drayage / trucking pickup planning = MVP secondary surface** (planning work — VRPTW route sequencing + appointment booking + carrier allocation + acceptance-probability priors). Fits the project's planning DNA.
+- **Drayage dispatcher** (real-time tender cascade, driver SMS, gate-time monitoring) is *execution* not planning → **moved to P1 / Phase 7** per user decision 2026-05-25.
+- KAM = post-MVP analytical surface (auto-QBR, at-risk flagging, cross-sell signal, account briefing) — amplification not displacement
+- CFS supervisor = not addressed (GHA-owned, physical; density-fit handled inside the consolidation MILP)
+- Customs = data-input integration boundary, not user surface — four intersection points (cost, constraints, transit-time feature, replan trigger)
+- **Planning vs execution distinction is now a scoping principle** — see memory `project_planning_vs_execution_boundary.md`
+- See memories `project_two_pronged_wedge.md`, `project_customs_integrate_dont_build.md`, `project_planning_vs_execution_boundary.md`
+
+**3. Intelligence layer sits above TMS; TMS-agnostic adapter pattern.**
+- Phase 2 component build sequence unchanged
+- **New constraint for Phase 5 / Phase 7:** the TMS adapter is vendor-agnostic; no component depends directly on a specific TMS schema. Integration targets in priority order: CargoWise → Magaya → GoFreight → Riege. Regional secondaries: Logitude, Softlink, AKANEA.
+- See memory `project_intelligence_layer_positioning.md`
+
+**4. Density-fit packing architecture decision (component-design level).**
+- Assignment problem + ML feasibility predictor + replan-if-below-threshold (REJECT 3D bin packing)
+- Applies to the consolidation MILP — Phase 2 components §2.8 (LCL) and §2.9 (Air). The MILP solves volume + weight + segregation constraints only; physical pack feasibility is a separate ML call afterward.
+- **New Phase 1 standalone design doc** (user decision 2026-05-25): density-fit feasibility ML predictor specification — features, calibration (Platt / isotonic), threshold semantics, cold-start heuristic, SHAP-style explainability. Proposed filename `model/density_fit_feasibility.md` (markdown, similar to `model/rules_engine.md` — ML spec, not LaTeX MILP). To be drafted when Phase 1 begins for the consolidation MILP.
+- **New Phase 2 component:** Density-fit feasibility predictor (~ §2.5b or §2.9b in the build sequence). Inputs: assignment from MILP solve + shipment attributes + ULD attributes. Output: P(feasible) ∈ [0,1]. Cold-start with heuristic; ML takes over after ~500–1000 labeled examples per ULD type.
+- See memory `project_density_fit_architecture.md`
+
+**5. Persona 4 ≈ Persona 2 — same humans, replan UX = planning UX.**
+- Phase 5 build order does NOT need a separate "exception handler" UI
+- Operator console (Phase 5) is the same UI invoked with event-driven trigger and locked-firm-commitment boundary conditions
+- See updated memory `project_core_user_reality.md`
+
+**Net implications by phase:**
+
+- **Phase 1 (LaTeX / design docs):** add density-fit feasibility ML predictor spec (or subsume into per-mode model). Existing models (`ocean_fcl`, `ocean_lcl`, `air_freight`, `trucking`) unchanged in scope.
+- **Phase 2 (Component builds):** add density-fit ML predictor component (location TBD in the §2.x sequence). LCL §2.8 and Air §2.9 scope updated when those components begin: MILP constraints are volume + weight + segregation only; bin-packing-level feasibility is the ML predictor's job.
+- **Phase 5 (Product layer):** re-organize the screen list to reflect three primary surfaces (consolidation planner UI, quote desk UI, operator console). Drayage dispatcher screens move to Phase 7. KAM analytical screens deferred post-MVP.
+- **Phase 7 (Extensions):** drayage dispatcher (VRPTW + cross-portal appointments + acceptance-probability ML) moves into Phase 7 ordering. KAM analytical surfaces also Phase 7 candidates.
+
+**System diagram updated 2026-05-25:** `docs/architecture.drawio` replaced with five-layer stack (User surfaces → Agent layer → Intelligence components → Data adapters → External systems). Narrative in `architecture.md` §11.
 
 ---
 
