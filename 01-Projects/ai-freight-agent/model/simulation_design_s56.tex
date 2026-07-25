@@ -1,0 +1,337 @@
+\documentclass[11pt,a4paper]{article}
+
+\usepackage[margin=2.4cm]{geometry}
+\usepackage{booktabs}
+\usepackage{tabularx}
+\usepackage{longtable}
+\usepackage{amsmath}
+\usepackage{amssymb}
+\usepackage{xcolor}
+\usepackage{enumitem}
+\usepackage[colorlinks=true,linkcolor=black,urlcolor=blue]{hyperref}
+\usepackage{parskip}
+
+\newcommand{\src}[1]{\texttt{\small #1}}
+\newcommand{\tagS}{\textcolor{teal}{\textbf{[S]}}}
+\newcommand{\tagI}{\textcolor{olive}{\textbf{[I]}}}
+\newcommand{\tagA}{\textcolor{orange}{\textbf{[A]}}}
+\newcommand{\tagNF}{\textcolor{red}{\textbf{[NF]}}}
+
+\newcolumntype{L}{>{\raggedright\arraybackslash}X}
+
+\title{\bfseries Simulation Design --- Session 56}
+\author{AI Freight Agent --- air replan proof}
+\date{2026-07-12 \quad\textbf{DRAFT for approval}}
+
+\begin{document}
+\maketitle
+
+\begin{quote}
+\textbf{Nothing is built until this is signed off.} Six review agents attacked the first draft; every
+correction below is theirs, measured rather than asserted.
+
+\textbf{Tags.} \tagS{} sourced \quad \tagI{} inferred \quad \tagA{} assumed --- \emph{your call} \quad
+\tagNF{} not found, do not fabricate.
+\end{quote}
+
+\section{The bug, and the bug in my first fix}
+
+\textbf{Today.} Capacity is defined as a multiple of the book:
+\[
+S \;=\; \tau \cdot n_{\text{hawbs}} \cdot \mathbb{E}[\mathrm{cw}],
+\qquad
+\text{per\_arc} \;=\; \operatorname{round}\!\Big(\tfrac{(1-\text{contracted})\, S_{\ell}}{|\text{arcs}_{\ell}|}\Big).
+\]
+No aircraft, no allotment, no payload ever enters the calculation. Two consequences:
+
+\begin{enumerate}[leftmargin=*,itemsep=1pt]
+  \item Per-flight capacity is an \emph{artifact of schedule size}. More flights $\Rightarrow$ thinner
+        slivers. Hence arcs of 24--197\,kg against a 500\,kg median shipment.
+  \item $\tau$ \emph{cannot bind}. If $\text{capacity} \equiv \tau \times \text{demand}$, a tightness dial is
+        definitionally inert --- which is exactly what S45 discovered empirically, sixteen sessions after
+        the line was written.
+\end{enumerate}
+
+\textbf{My first fix repeated the disease one layer down:}
+$\text{capacity} := \text{positions} \times \text{flights}$. Capacity still scaled with the timetable.
+Worse, my own numbers gave $\tau \approx 3.1$ --- \emph{slacker} than today's $\tau_{\text{eff}} \approx 1.5$
+--- and would have reproduced S45's null result. Three of my assertions (\src{S2} no-dead-flights,
+\src{S3} flight $\geq$ biggest-shipment, \src{S4} network $>$ one-freighter) \textbf{mechanically forced}
+that oversupply, and \textbf{all of them pass on today's broken instance}. \src{S3} already exists in the
+repository, green, since S36.
+
+\textbf{The real fix.} Supply is an \textbf{exogenous, integral, per-flight allowance}; the
+\textbf{schedule stays at full breadth}; tightness is dialled by \emph{how much the forwarder holds},
+never by how many flights exist.
+
+\section{The world}
+
+Mid-market freight forwarder, transpacific headhaul (Asia\,$\to$\,US), general cargo. \tagA
+
+\begin{center}
+\begin{tabularx}{\textwidth}{@{}Lll@{}}
+\toprule
+\textbf{Fact} & \textbf{Value} & \\
+\midrule
+LD3 container & 1{,}500\,kg / 4.5\,m$^3$ $\Rightarrow$ 333\,kg/m$^3$ $\Rightarrow$ \textbf{LD3s always cube out} & \tagS \\
+$\Rightarrow$ chargeable per position & $\min(1500,\ 4.5\times167) = 751.5$\,kg; $\approx$890\,kg at $\rho\!\sim\!200$ & \tagS \\
+Cargo density & $\mathcal{U}(150,250)$, mean $\approx$200 (was $\mathcal{U}(120,240)$ --- 15\% light) & \tagS \\
+\textbf{Volume always binds; the weight rows are dead} & $\rho_{\text{cargo}} \approx 200 \ll \rho_{\text{LD3}} = 333$ & \tagS \\
+Transpac freighter\,:\,belly & $\approx$80:20 by capacity $\Rightarrow$ our $\approx$15\% belly by flight count is right & \tagS \\
+Transpac dynamic load factor & \textbf{90\%} $\Rightarrow$ market $\tau \approx 1.11$ & \tagS \\
+Cargo cutoff & departure $-\,6$\,h & \tagS \\
+Space booked & 5--7\,d before departure ex-Asia; express latest, deferred earliest & \tagS \\
+BSA size per lane-week & \textbf{no public source exists} & \tagNF \\
+\bottomrule
+\end{tabularx}
+\end{center}
+
+\section{Instance}
+
+\begin{center}
+\begin{tabularx}{\textwidth}{@{}llL@{}}
+\toprule
+& \textbf{Value} & \textbf{Why} \\
+\midrule
+Book & \textbf{120 shipments/week} ($\approx$17/day) &
+40/wk forces cutting the schedule to $\approx$4 flights/day, which destroys routing freedom and the tier
+ladder. 40/wk is also 5.7 shipments/day --- not a consolidation desk. 120/wk $\approx$ 3{,}100\,t/yr on one
+lane $\approx$ 2--3\% of a top-25 player. \tagA{} (Q1) \\[2pt]
+Shipment size & lognormal; median $\approx$250\,kg, mean $\approx$500\,kg, tail to 3--5\,t &
+today's \src{Triangular(50,1200)} is symmetric and capped; real AWBs are strongly right-skewed. Public
+anchor \tagNF \\[2pt]
+Tier mix & 20 / 55 / 25 (exp/std/def) & 40\% deferred is too high. \tagA{} (Q2) \\[2pt]
+Schedule & \textbf{full breadth, unchanged} ($\approx$26 legs/day, 9 lanes) & shrinking it confounds
+scarcity with routing freedom \\[2pt]
+Access share $\varphi$ & \textbf{0.40} of departures carry an allowance & a flight with no allowance is
+\emph{normal}, not dead --- at a 90\% load factor that is reality \\[2pt]
+Positions/flight & integral; \textbf{floor of 1} on any accessed flight & you hold 2 positions or none.
+Never 0.13. \\[2pt]
+Warm-up & $\max(\text{flight horizon},\ \max \text{book lead})$ & $\approx$27\,d --- \emph{compute from the
+drawn fields, do not estimate} \\[2pt]
+Measured window & \textbf{21\,d} & three whole weeks; schedules are weekly-periodic \\[2pt]
+Cool-down & $\max(\text{deadline} - \text{book\_at})$ & $\approx$28\,d --- \emph{not} the 9\,d I first wrote
+(that was $\text{deadline} - \text{cutoff}$, the old anchor) \\[2pt]
+Generated span & $\approx$70\,d $\Rightarrow$ $\approx$1{,}200 generated, $\approx$360 scored & \\[2pt]
+Seeds & supply seed $\times$ demand seed, crossed ($6\times6$) & tells you where the variance lives \\
+\bottomrule
+\end{tabularx}
+\end{center}
+
+\section{Supply, demand, timeline}
+
+\paragraph{Supply.} Per flight $f$, drawn on the supply RNG stream with a \textbf{lane-dependent mean}
+(this preserves the approved S50 O--D-lane heterogeneity; an i.i.d. draw would silently revert
+D-A25\,--\,D-A30):
+\[
+m_f(\mu) = \big\lfloor \mu + U_f \big\rfloor, \qquad
+n_f(\mu) = \big\lfloor \rho\mu + U'_f \big\rfloor, \qquad
+\text{cap}(f) = \text{positions} \times (1500\,\text{kg},\ 4.5\,\text{m}^3),
+\]
+with $U_f \sim \mathcal{U}(0,1)$ drawn \emph{once} and held fixed across every sweep cell (CRN).
+
+\paragraph{Demand.} Four events. The phantom flight $d^{*}$ --- which anchored both reveal and commit, and
+which 40--70\% of shipments could not even use --- is \textbf{deleted}, together with
+\src{book\_lead\_*}, \src{tier\_coupled\_arrival} and \src{lead\_buckets}.
+
+\begin{center}
+\begin{tabularx}{\textwidth}{@{}lLl@{}}
+\toprule
+\textbf{Event} & \textbf{Meaning} & \textbf{Exogenous?} \\
+\midrule
+\src{book\_at} $(\equiv$ \src{known\_at}$)$ & the customer books; the forwarder knows; \textbf{may reserve
+space}. Tier-dependent: express books latest, deferred earliest. & yes \\
+\src{ready\_at} & cargo on the dock. Shipper's calendar --- \emph{not} \src{book\_at + 2h}. & yes \\
+\src{cutoff} & departure $-\,6$\,h \textbf{of the flight the optimizer chose} & \textbf{NO --- endogenous} \\
+\src{deadline} & the tier's SLA promise & yes \\
+\bottomrule
+\end{tabularx}
+\end{center}
+
+\src{tender\_at} is \textbf{deleted as a field}. The rule becomes: \emph{be firm by the cutoff of whatever
+flight you are standing on}, evaluated per cycle. A \textbf{\src{commit\_backstop}} replaces it --- the
+latest first-leg cutoff over \emph{paths} (not flights) that still make the deadline. Exogenous; reuse
+\src{air\_graph.latest\_ready}.
+
+\section{The tightness lever}
+
+\begin{quote}
+\textbf{Sweep $\mu$ --- the mean number of positions per accessed flight. Continuous, $\mu \in [1.0, 4.0]$.}
+\end{quote}
+
+Because $m_f = \lfloor \mu + U_f \rfloor$ with $U_f$ fixed across cells, capacity is \textbf{pathwise
+monotone} in $\mu$: raising $\mu$ weakly raises \emph{every} flight's capacity on \emph{every} sample path.
+The arc set never changes, so routing freedom is invariant. It is a pure supply knob on its own RNG
+stream, so the demand draw stays byte-identical.
+
+\paragraph{Rejected.}
+\textbf{Flight count} --- moves scarcity \emph{and} routing freedom, with opposite signs on $L_2$; a
+response curve would be unattributable. \textbf{Book size} --- it sets arrivals per cycle, and at
+$\approx$1 arrival/cycle \textbf{M0 $\equiv$ M1$'$ byte-identically} (measured), so it modulates whether the
+estimand \emph{exists at all}.
+
+\paragraph{Report.} $\tau_w$ and $\tau_v$ \emph{separately}; $\tau_v$ is the one that binds. $\tau$ is an
+\textbf{output}, plotted against $\mu$.
+
+\paragraph{Confounds --- state them, do not hide them.} Below $\mu = 1$ you are deleting flights, not
+tightening (hence the hard floor). Low $\mu$ starves \emph{large} shipments first, so tightness changes the
+\emph{composition} of who is starved --- report eligibility by shipment-size decile. And $\mu$ is
+entangled with the reservation's own value by construction.
+
+\section{Blockers --- none of this works until these land}
+
+\begin{center}
+\begin{tabularx}{\textwidth}{@{}llL@{}}
+\toprule
+& \textbf{Defect} & \textbf{Fix} \\
+\midrule
+B1 & \src{ready\_early\_h} dropped on DB load $\Rightarrow$ \textbf{every replay plans with
+$\text{ready}=0$}; cargo flies before it exists. \textbf{Also a tractability bug}: fixing it is $9.2\times$
+faster and closes the MIP gap. (PIH currently cannot reach 0.005 --- it stops at \textbf{3.7\%}, so the
+clairvoyant bound is \emph{void}.) & one line in \src{\_load\_hawbs}, plus the round-trip check \\[2pt]
+B2 & \src{ac\_type} hardcoded to \src{FREIGHTER} on load $\Rightarrow$ 28 belly flights become 0 & persist
+the column \\[2pt]
+B3 & \src{bsa-hard} is \emph{one horizon-global pooled} take-or-pay contract. Stretch the horizon
+$7 \to 70$\,d and its allowance scales $\times 10$ while per-cycle usage does not $\Rightarrow$ the overage
+becomes unreachable $\Rightarrow$ \textbf{35\% of contracted capacity silently becomes free} & one contract
+\textbf{per lane-week} \\[2pt]
+B4 & \textbf{The MILP has no per-flight capacity constraint.} Caps key on \src{offer\_id}, and the same
+aircraft is sold as several offers. \src{flight\_arcs} was built and tested in S36 and has \textbf{zero call
+sites}. A plan can load one 777F to 2--3$\times$ payload and report \textsc{optimal}. & write the constraint
+on \src{flight\_id} \\[2pt]
+B5 & \src{score\_run} never checks \src{sol.status}. An \textsc{infeasible} solve returns
+\src{cost\_breakdown=\{\}} $\Rightarrow$ \textbf{scores \$0 and wins the cost comparison} & raise \\[2pt]
+B6 & The scorer \textbf{holds the aircraft for late cargo} $(\src{clock} = \max(\src{dep},\src{clock}))$, so
+a missed connection is \textbf{not expressible}. Every OTP number in 56 sessions came from a scorer that
+cannot produce a miss. & use \src{route\_eta\_under\_disruptions}' semantics \\[2pt]
+B7 & Nothing gates arcs against the sim clock --- the solver can use a flight that departed yesterday.
+This is not a check; it is a \textbf{missing feature}. & pass the clock into \src{build\_geo\_air\_graph} \\
+\bottomrule
+\end{tabularx}
+\end{center}
+
+\section{Metrics}
+
+\begin{center}
+\begin{tabularx}{\textwidth}{@{}lLL@{}}
+\toprule
+& \textbf{Metric} & \textbf{Assertion} \\
+\midrule
+M1 & \textbf{Eligible itineraries per shipment, by tier.} A flight is eligible iff
+(i) capacity fits the raw $(w,v)$, \emph{at nominal and at decayed-at-book-time};
+(ii) $\src{ready} + \text{ground}_{\text{out}} \le \text{cutoff}$ and $\src{book\_at} \le \text{cutoff}$;
+(iii) $\text{ETA} + \text{ground}_{\text{in}} \le \Delta_k$.
+\textbf{Paths, not flights} --- a leg-only check passes an instance with no usable \emph{route}.
+& every shipment $\ge 1$ (otherwise it is \textbf{born dead --- a generator bug, not a capacity finding}).
+The tier ladder must be tested \textbf{structurally}: fix a shipment, vary its tier, assert the eligible set
+weakly grows. \emph{A sample-median ladder flakes on 2 of 8 seeds --- it would be relaxed, then deleted.} \\[3pt]
+M2 & \textbf{LP deficiency.} A bipartite max-flow, shipments $\times$ flights, two resource rows each
+(kg, m$^3$), edges given by M1's eligibility. Report unroutable chargeable-kg as a \% of the book.
+& $\text{deficiency} = 0$. \textbf{The cheapest broken-instance detector available} --- one LP, seconds, and
+the min-cut \emph{names the bottleneck flights}. It subsumes M1 and the supply/demand ratio, and does so
+\emph{jointly} rather than per-shipment. \\[3pt]
+M3 & $\tau_w$, $\tau_v$ --- reported, plotted against $\mu$ & band-gated:
+$\tau_{\text{LO}} \le \tau_v \le \tau_{\text{HI}}$ \\[3pt]
+M4 & \textbf{PIH fallback} & $= 0$. If the clairvoyant arm strands $X\%$, then $X\%$ of \emph{every} arm's
+fallback is an instance property, not a finding --- the exact failure mode of the last six sessions. Also
+assert $C(\text{arm}) \ge C(\pi_{\text{hind}})$: a theorem. \\[3pt]
+M5 & Consolidation headroom:
+$\operatorname{median}(\text{flight cap}) / \operatorname{median}(\text{shipment CW})$
+& $\ge K$. \textbf{The missing invariant.} Give every flight exactly one LD3 and \emph{every check in my
+first draft passes}, while consolidation is structurally impossible and $L_2$ is zero by construction. \\
+\bottomrule
+\end{tabularx}
+\end{center}
+
+\paragraph{Two keys, not one.}
+\textbf{Cost is keyed on flight departure date; service is keyed on \src{book\_at}.} Cost is
+\emph{not additively separable over shipments} --- MAWB fixed fees, ULD counts, weight-break rates and the
+spot envelope are all joint over riders, and that jointness \emph{is} the estimand. Flights are exogenous
+and arm-invariant, so flight-keyed cost is losslessly attributable; \src{book\_at}-keyed service is
+per-shipment and pairs cleanly across arms.
+
+\paragraph{Two gaps, not one.}
+\textbf{Planning gap $0.005$} (that is the policy --- a real planner also stops at a gap).
+\textbf{Scoring gap $0$} (that is measurement error). $L_2$ is a difference of two gap-stopped solves, and
+the band currently swallows the signal.
+
+\section{Where the gates live}
+
+Not in tests, and \textbf{not in a standing review agent}. The interface-seam agent is eleven sessions
+overdue \emph{and}, when it did run, it \textbf{printed a zero-capacity flight and certified it} as
+``exactly the intended emergent-scarcity mechanic''. A fifth reviewer is more surface, not a gate. And this
+defect class is \textbf{data-dependent}: a config change produces a new invalid world with \emph{zero code
+diff}, so hooks and test files see nothing.
+
+\begin{enumerate}[leftmargin=*,itemsep=2pt]
+  \item \textbf{\src{validate\_instance()} raises inside \src{load()}} --- the single chokepoint every
+        consumer passes through. No flag, no opt-out.
+  \item \textbf{A round-trip check inside \src{persist()}} --- persist, re-load, compare, raise. Ten lines.
+        Catches B1 and B2 the day they land, and every future field forgotten in the schema.
+        \emph{Verified: zero false positives.}
+  \item \textbf{Post-solve invariants raise inside \src{solve()} / \src{score\_run()}} --- per-flight
+        capacity, $\src{status} = \textsc{optimal}$, no departed flight, no impossible connection.
+  \item \textbf{An \src{instance\_card.md} beside every \src{scenario.db}}, diffed on every commit. The
+        56-session failure was that nobody ever looked at the numbers \emph{because the numbers were never
+        in front of anyone}.
+\end{enumerate}
+
+\paragraph{Assertions must read the decayed, at-book-time catalog.} Mine read the \emph{nominal} dict
+(1{,}500--4{,}500\,kg) while the world broke at \emph{effective} capacity (197\,kg median, post-decay).
+That is precisely why they all passed.
+
+\paragraph{Twelve existing tests codify the defects as contracts and will veto the fix.} Among them:
+\src{assert fallback\_count > 0} (cargo \emph{must} strand), \src{assert sc.otp < 1.0} (OTP \emph{must}
+fail), \src{assert real\_cost < 0.5 * total\_cost} (penalties \emph{must} dominate), and
+\src{assert all(1500 <= c <= 4500 for c in spot\_wcap)} (the broken magnitude, pinned). Delete them first.
+
+\section{Tractability --- measured, not guessed}
+
+\begin{center}
+\begin{tabularx}{\textwidth}{@{}lL@{}}
+\toprule
+\textbf{Shape} & \textbf{Result} \\
+\midrule
+As specified, today & \textbf{PIH gap 3.7\% --- the bound is void.} M1 killed at $>$65 min.
+$\approx$1.5--3 days serial, for numbers that mean nothing. \\
+\textbf{After B1 $+$ daily cadence $+$ parallel cells} & \textbf{4.9--6.6\,h per cell $\Rightarrow$
+10--13\,h on 10 cores. One overnight.} \\
+\bottomrule
+\end{tabularx}
+\end{center}
+
+Daily cadence gives $8$--$15\times$, and the multiplier \emph{grows} with $n$. \textbf{Retiring departed
+shipments from \src{visible()}} turns the replay from quadratic to linear in the horizon --- measured:
+69{,}431 columns carried for an open book of \textbf{eight} shipments. That, not a shorter window, is the
+structural fix.
+
+\begin{quote}
+\textbf{Shrink the measured window if you must. Never the bookends. The bookends are the science.}
+\end{quote}
+
+\section{Open --- your call}
+
+\begin{enumerate}[leftmargin=*,itemsep=3pt]
+  \item \textbf{Book size: 120/week?} I proposed 40; two agents independently overruled me. 40 forces the
+        schedule cut that kills routing freedom and the tier ladder.
+  \item \textbf{Tier mix 20/55/25?} \tagNF{} --- no public split exists.
+  \item \textbf{\src{contracted\_share} is an output, not an input}, once BSA is sized physically. Set it as
+        a \emph{target}; report the realized value.
+  \item \textbf{Rewrite the supply generator} rather than patch D3/D4/D7/D8/D9 --- they are all consequences
+        of a single assumption.
+  \item \textbf{The reservation may make M1 sticky.} Reserved space is free at the margin: staying costs
+        \$0, moving costs a fresh envelope with no refund. S54 calibrated that friction against a two-day
+        window; this design makes it nineteen days. \textbf{I tried to test it and the probe was
+        confounded} --- long book leads clamp everything to $t=0$, which collapses M1 onto M1$'$ for an
+        unrelated reason. \textbf{It needs the shifted schedule to test at all.} If it bites, the fix is
+        $\text{penalty\_frac} < 1$ (S54 v2 --- already specified, deferred).
+  \item \textbf{What gets re-measured:} every headline, the $\tau$ bands, the decay parameters, the belly
+        split --- and \textbf{the calibrated tardiness weights}, which \src{CLAUDE.md} protects as a hard
+        rule and which were anchored to a fallback gap priced off broken capacity.
+\end{enumerate}
+
+\paragraph{What survives.} The MILP formulation, the MFBlink cut, FreightNet's real topology, the S56
+cadence work --- and \textbf{all of the grounding research}, which was used to set \emph{ratios} and never
+to set \emph{magnitudes}.
+
+\end{document}

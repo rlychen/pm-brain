@@ -83,7 +83,6 @@ User clarified the code-phase track in Session 12. Restating the upcoming code p
 **Implication for existing phase content below:** the detailed entries for Phase 1 (LaTeX) and Phase 2 (Component Builds) remain accurate as the formal phase definitions. The user's "Phase 1 / 1.5 / 2" framing in Session 12 maps onto Component Builds → new TT MVP phase → Integration as listed above. Full renumbering of this doc deferred until the user explicitly asks.
 
 **New docs introduced in Session 12 (referenced from this plan):**
-- `SYSTEM.md` — top-level systems / architectural index
 - `transit_time_model.md` — Transit Time Service product spec (3 phases)
 - `scalability.md` — large-scale solver strategies + SPPRC sketch
 - `graph_generator.md` — graph generator + simulation orchestrator (test harness for Phase 1 isolation tests + Phase 2 end-to-end testing)

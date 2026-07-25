@@ -1,8 +1,46 @@
-At the start of every session: read BUILD_STATUS.md, CONTEXT.md, SESSION_LOG.md, and any approved LaTeX models under `model/` (in that order). BUILD_STATUS.md is the canonical built/remaining tracker — read it first for current position and what's next.
+> ⛔ **HARD RULE — HOW TO WRITE TO THE USER. Read this every session.** Every reply: plain English,
+> short, to the point. Define any term the moment you use it. **No notation dumps, no symbol soup**
+> (M1/M3/τ/μ/PIH and the like) — the user does not carry symbols across turns and should never have to
+> ask you to rephrase. **No walls of text**; a 500–1000-word answer is a failure, not thoroughness. Use a
+> tiny numeric example instead of jargon. Ask ONE question at a time, in prose (never AskUserQuestion
+> multiple-choice). This has been repeated across many sessions; making the user restate it is a waste of
+> his tokens. **Reach for a simple numeric example whenever it helps** — he grasps intuition faster
+> from concrete numbers than from prose or notation (e.g. "a plane holds 3000 kg, a shipment is ~500 kg,
+> so ~6 fit" beats "capacity exceeds mean shipment weight by a factor of six"). See memories
+> `feedback_plain_language_define_terms`, `feedback_one_question_at_a_time`.
+
+> ⛔ **HARD RULE — TARDINESS PENALTY IS ALWAYS ON. Read this every session.** The quadratic C.10
+> tardiness penalty (linearized, with the calibrated per-tier express/standard/deferred weights) must be
+> ON for **every** model run — quick probe, debug one-off, calibration cell, or full sweep. **NEVER set
+> `tardiness_weight_scale = 0`** or otherwise disable any objective term. The proof calibrates three
+> COUPLED outcomes at once — cost savings, OTP/tardiness, and fallback (infeasibility relief) — so a run
+> with the penalty off produces meaningless OTP/tardiness and invalid conclusions. This has wasted two
+> sessions; do not let it happen a third. Before running ANY `solve`/`run_replay`/probe, verify W>0 (the
+> penalty is live). See memory `feedback_tardiness_penalty_always_on`.
+
+> ⛔ **HARD RULE — LOOSE PERMISSIONS, TIGHT CHECKPOINTS. Read this every session.** Permission prompts
+> are switched off for reads, web research, edits, and test/solve runs (`.claude/settings.local.json`).
+> They therefore **no longer function as review gates** — the user is no longer seeing each step go by.
+> The speed that buys is granted on **execution only, never on decisions**. Three obligations replace the
+> lost prompts:
+> 1. **Never guess. Never fabricate.** If a fact, API, parameter, file's contents, or number is not
+>    verified, say **"unverified"** and go verify it. Do not infer a plausible value, invent a mechanism,
+>    or state a statistic without a source. (Reinforces memories `feedback_no_fabricated_mechanisms`,
+>    `feedback_no_unverified_stats`.)
+> 2. **Stop and ask before any directional commitment.** Model or schema changes, new dependencies, new
+>    constraints, calibration parameters, anything expensive to unwind — these still require explicit
+>    user sign-off, exactly as before. Relaxed permissions do not relax the approval gates below.
+> 3. **Report failures plainly.** A green suite that tests the wrong thing is a failure, not a pass.
+>    Surface it.
+>
+> `git push` and `gh repo` still prompt by design — the private-repo check is a mechanical backstop, not
+> a matter of memory. Never remove them from the `ask` list.
+
+At the start of every session: read BUILD_STATUS.md, the **last (top) entry only** of SESSION_LOG.md, and any approved LaTeX models under `model/` (in that order). BUILD_STATUS.md is the **single pointer** — the canonical built/remaining tracker plus the locked-decisions section — read it first for current position, what's next, and which decisions are settled. SESSION_LOG.md is the append-only archive (large) — read only the most recent entry (stop at the first `---`) for last-session detail; pull older entries on demand only.
 
 Update SESSION_LOG.md continuously as work progresses — add a new entry at the top each session, update it when direction changes, and record where we left off before the session ends.
 
-Update CONTEXT.md whenever a phase completes, a key decision is made, or the project state materially changes.
+Update BUILD_STATUS.md whenever a phase completes, a key decision is made, or the project state materially changes — it is the one place "where are we / what's decided" lives (CONTEXT.md was retired S62; its history is in git and SESSION_LOG).
 
 # Project: AI freight agent
 
@@ -108,48 +146,15 @@ If a file you are about to write or edit would contain any banned term, stop and
   `usr_session_notes.md` is gitignored / not committed (it is user-private
   scratch). The end-of-session sign-off protocol reviews and clears it.
 
-- **End-of-session sign-off protocol.** Triggered only by an explicit sign-off from
+- **End-of-session sign-off protocol.** Triggered **only** by an explicit sign-off from
   the user ("wrap up", "we're done", "ok bye", "sign off", "end of session", or
-  equivalent). NOT triggered automatically at end of substantive work. When triggered,
-  execute in order:
-    1. **Review `usr_session_notes.md`** — if the file exists and is non-empty,
-       show its contents to the user and wait for them to triage. The user decides
-       what becomes a SESSION_LOG entry, a CONTEXT update, a new memory record, a
-       future task, or simply discarded. After triage, **clear the file** (truncate
-       to empty) so the next session starts fresh. If the file does not exist or is
-       empty, skip this step.
-    2. **Update `SESSION_LOG.md`** — extend the current session's entry with where
-       we left off, the next action on resume, and any pending user inputs.
-    3. **Update `CONTEXT.md`** if state materially changed — refresh the `RESUME
-       HERE` block, the Stage table, the locked-decisions sections; consolidate any
-       duplicated blocks accumulated during the session.
-    4. **Refresh `BUILD_STATUS.md`** — the canonical built/remaining tracker. **Full
-       rewrite, not append**: bring "current position," the gates-cleared and
-       component-status tables, the near-term task list, the quality state, the
-       deferred/parked list, and the calendar in line with reality as of this session;
-       **delete anything stale and keep it clean.** (Placed before the sync/commit steps
-       so the refresh is actually captured in the commit — git push must remain last.)
-    5. **Sync the Obsidian vault** — mirror the same scope as
-       `~/.claude/projects/-Users-richard-Projects-ai-freight-agent/memory/feedback_vault_sync.md`
-       (PRD, CONTEXT, SESSION_LOG, BUILD_STATUS, spec / LaTeX models, key markdown docs) to
-       `~/Documents/PM-Brain/01-Projects/ai-freight-agent/`. Update the
-       `feedback_vault_sync.md` `last_synced` date.
-    6. **Git commit and push.** Stage specific files (never `git add .`; include
-       `BUILD_STATUS.md`). Commit
-       message follows the existing pattern: `Session N — brief summary of what
-       changed`. Before pushing, **verify the remote repo is still private**:
-       run `gh repo view --json visibility -q .visibility` and confirm it returns
-       `PRIVATE`. If it returns `PUBLIC` (or anything other than `PRIVATE`),
-       **STOP. Do not push.** Surface a loud warning to the user
-       ("⚠️  Repo visibility is X, not PRIVATE — pushing would leak code. Pausing
-       sign-off. Run `gh repo edit --visibility private` or fix in GitHub UI,
-       then re-trigger sign-off."). Push only after visibility is confirmed
-       `PRIVATE`. If no remote is configured at all, surface a one-line warning
-       ("no remote configured; local commit only — set up a remote for
-       off-machine backup") and do **not** treat it as a failure. Once a remote
-       exists, push must succeed before sign-off is considered complete.
-  Sign-off is not complete until all six steps land. If any step fails, surface
-  the failure to the user and pause — do not silently skip.
+  equivalent) — NOT automatically at the end of substantive work. When triggered, **invoke
+  the `/signoff` command** (`.claude/commands/signoff.md`), which holds the authoritative,
+  complete, ordered checklist (triage notes → SESSION_LOG → BUILD_STATUS full rewrite →
+  memory anchor → vault sync → git commit + private-repo check + push). The steps live in
+  that one file so they stay in sync; do not re-transcribe them here. Sign-off is complete
+  only when every step in `/signoff` lands; if a step fails, surface it and pause — never
+  silently skip. `git push` and `gh repo` still prompt by design.
 
 - **Never add admin collaborators to the GitHub repo without the user's
   explicit confirmation.** Only the owner / admins can change repo visibility,
@@ -213,8 +218,9 @@ at the point of use. Every source must be identified as real-network or syntheti
 ```
 ai-freight-agent/
 ├── CLAUDE.md                    this file
-├── CONTEXT.md                   compressed session context
-├── SESSION_LOG.md               running session log
+├── BUILD_STATUS.md              THE pointer: current position, what's next, gates, locked decisions (read first)
+├── SESSION_LOG.md               append-only archive; read top entry only
+├── .claude/commands/signoff.md  the /signoff end-of-session checklist
 ├── PRD.md                       strategic index: exec summary, modes in scope, doc map, differentiation, open questions (v0.3)
 ├── EXECUTION_PLAN.md            living build plan: phases, gates, component sequence, open decisions — updated before any phase begins
 ├── agent_design.md              AI-native design philosophy, autonomy model, guardrails, agent architecture

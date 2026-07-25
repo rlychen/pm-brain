@@ -1,7 +1,69 @@
-# Design spec — 2D spot reservation (D-A1 replacement), v1 — REV 3
+# Design spec — 2D spot reservation (D-A1 replacement), v1 — REV 5
 
-**Status:** APPROVED for build (user, S54). REV 3 folds the REV-2 re-verification round (3 agents).
-Replaces locked D-A1 (single `tender`).
+**Status:** SUSPENDED (S56 — the simulation is broken; resumes after the rebuild). REV 5 (S59) records
+the §11 Q2 supersessions — **the tex (`model/air_freight_routing.tex` C.5e + no-show objective term) is
+now normative for the reservation's keying and cost**; this doc remains normative for the 2D envelope,
+decay floor, ratchet mechanics, and build slices. REV 4 (S56) records the slice REORDER + the chain
+finding. REV 3 folds the REV-2 re-verification round (3 agents). Replaces locked D-A1 (single `tender`).
+
+## REV 5 changelog (S59 — §11 Q2 sign-off supersessions)
+- **KEYING RE-KEYED: per MAWB `(a,g)`, not per flight `a`.** `r^w_a/r^v_a` → `r^w_{a,g}/r^v_{a,g}`
+  (state `ReplayState._reserved_spot` keyed `(ArcId, group)`). Spot booking : MAWB = **1:1 [S]**
+  (Cargo-IMP FFR books space for a nominated AWB number); allotment : MAWB = 1:many — that is the
+  spot/BSA distinction. The per-flight pooled envelope was **allotment semantics applied to spot** —
+  same failure family as the S56 capacity bug (an abstraction that quietly makes something free).
+  Key stability: `group_key = f"{cargo_type}:{temperature}"`, fixed HAWB attributes. **[A]** one MAWB
+  per cargo class per flight ⇒ a second same-class booking is *amending* the first (the ratchet **is**
+  booking amendment — a real, sourced operation), not double-booking.
+- **COST MODEL SUPERSEDED: `penalty_frac=1` sunk-cost → usage floor + no-show escape.** The S58 rule:
+  `CW_{a,g} ≥ (1−β)·R_{a,g}·z_{a,g}` (C.5e, β=0.20 — a **usage constraint**, you always pay for what
+  you load) + objective `ψ·tariff_a(R_{a,g})·(1−z_{a,g})` (ψ=0.35 **[S]** — AF-KLM publishes a 35%
+  no-show fee; the escape hatch without which the floor could infeasibilize the solve). Zero new
+  columns. `penalty_frac=1` alone made the null L2 unidentifiable (no value vs *confiscated* value).
+- **NO BAND CEILING.** The S57 `CW ≤ 1.2·R` row was a bootstrap bug (creating cycle has `R=0` ⇒
+  ceiling 0 ⇒ ratchet never fires). The "+20%" is a *description*, not a rule; the real ceiling is
+  `avail = r + (C−r)·φ(t)` (§5.3, already enforced by C.5d). Only the floor disciplines — five
+  bookings = five `0.8·R` floors, so no portfolio cap is needed.
+- **CO-LOAD REMOVED FROM RESERVATION SCOPE.** User decision (S59): co-load is **buy-at-cutoff, zero
+  reservation machinery** — and remodeled entirely as a per-(lane, day) **SLA service** (daily
+  receiving cutoff at the co-loader's warehouse; arrival = cutoff + direct transit + 2–3 d; per-day
+  acceptance cap via C.5d; **no decay**; rate `base_spot × U(0.80,1.00)` per lane [CAL], below spot
+  [S] / ≥ own-BSA rate [A]). See the tex §arc-types + §air-arc-params (S59) and
+  `simulation_design_s56.md` §11 Q2. Reservation scope is therefore **flat/MFB spot MAWB-arcs only**.
+
+## REV 4 changelog (S56 — build-order correction + a measured finding)
+- **SLICES REORDERED (user decision, S56).** The 2D MILP caps (was S4) are now **S2**, built BEFORE
+  the reservation record (was S2, now S3). Reason: the reservation ratchet records raw `(w,v)` used
+  per spot arc, but with no volume row in the MILP the recorded `r^v` would routinely exceed `C^v`
+  (our 120–240 kg/m³ cargo bursts volume long before weight) — i.e. the record would faithfully
+  write down physically impossible reservations, and invariant **I4 (`r ≤ C`) would be unassertable
+  on the volume dimension.** Building the cap first makes the record correct by construction. See
+  §10 for the corrected order. (The old §10 also contradicted BUILD_STATUS, which had S2/S3 the
+  other way round; both are now reconciled.)
+- **S2 BUILT (S56):** C.5d-w/v raw 2D caps (branch collapsed — one expression for co-load AND MAWB);
+  `_solve_claims` spot claim moved to raw `Σw` (**required**: the ledger mirrors the cap's basis, and
+  claiming `CW` against a raw-`w` cap over-commits by the dunnage `(1+ε)` and trips
+  `reconcile`'s `_SPOT_EPS` over-commit guard); `h0_planner` reads the binding dimension
+  `min(C^w, C^v·167)`. Missing `spot_vcap` for a capped arc now raises (loud schema guard).
+  **392 green.**
+- **FINDING — the cost chain is NOT construction-guaranteed (confirmed empirically).** The 2D cap
+  creates real contention and exposed it: on (n=15, seed=2, κ=2), `C(M0) = $51,851 < C(M1p) =
+  $51,902`. Structural, not gap noise (identical at `mip_rel_gap=1e-6`). **Mechanism (measured):**
+  both arms FREEZE priors, so from cycle 2 each is conditioned on its own past and neither's feasible
+  set contains the other's — nesting orders the arms only WITHIN a cycle. At cycle 0 `M1p` jointly
+  (and correctly, −$387) puts a bulky 6.41 m³ HAWB on flight `d1`; at cycle 5 a 2.79 m³ newcomer
+  needs `d1`, which has only 2.27 m³ of VOLUME left (weight is 44% full — the volume row is what
+  bites), so `M1p` is bumped to `d2` at +$438. `M0`'s worse cycle-0 choice left 5.95 m³ free. `M1`
+  (open-book) un-freezes the bulky HAWB, swaps it to `d2`, and wins properly (−$583 vs `M1p`).
+  ⇒ This **independently confirms §5.8/§11's `guaranteed → empirical` downgrade**, and shows it was
+  never a reservation-coupling artifact — it is inherent to freezing. Under the OLD 1D cap `M0` and
+  `M1p` produced byte-identical plans on this cell, so the rung was never actually exercised.
+  Pinned as `test_greedy_can_beat_single_pass_across_cycles`; `replay.py`'s docstring corrected.
+- **M1p pathology amplified (expected; S3–S7 is the fix).** At τ=3.0/n=40/seed=3 the volume cap drives
+  `M1p` to **zero spot usage and 75% fallback** (was 55%): it freezes a route, the spot space decays
+  out from under it, the pinned solve goes infeasible, `_repair_frozen_infeasible` dumps. Its
+  `real_cost` "halving" to $29.5k is the known L2 mirage (cost is low because the freight never flew).
+  This is exactly the self-inflicted dump the reservation eliminates.
 
 ## REV 3 changelog (folded corrections — build follows these)
 - **NC-a (monotone double-charge on service reroutes) — DISMISSED by user** as a domain non-issue: a
@@ -96,10 +158,10 @@ reserve symmetrically; the only M1-vs-M1′ difference is assignment fluidity.
 ## 4. Notation
 | Symbol | Meaning |
 |---|---|
-| `a` | spot arc (co-load/flat/MFB); BSA excluded |
+| `a` | spot MAWB-arc (flat/MFB); BSA excluded; **co-load excluded (REV 5** — buy-at-cutoff lane-SLA channel, no reservation**)** |
 | `t`, `τ0_a` | sim clock; arc a identity-lock = `min(offer.cutoff_utc_h, ACAS pre-load)`, v1 = `cutoff_utc_h` |
 | `C^w_a, C^v_a` | nominal 2D spot caps (kg, m³); `C^w_a` = the live path's current `spot_cap`; `C^v_a = C^w_a/333.33` |
-| `r^w_a, r^v_a` | reserved committed envelope (state; monotone non-decreasing, v1) |
+| `r^w_{a,g}, r^v_{a,g}` | reserved committed envelope **per MAWB `(a,g)` (REV 5** — was per-flight `r^w_a`, which is allotment semantics**)**; state; monotone non-decreasing, v1. Body text below predates the re-key: read every `r^w_a/r^v_a` as `r^w_{a,g}/r^v_{a,g}` |
 | `φ_a(t)` | booking curve ∈ [A_cut,1], one per arc (unchanged) |
 | `avail^w_a, avail^v_a` | decayed, reservation-floored available caps |
 | `x_{k,a}` | HAWB k on arc a this cycle; `w_k,v_k` actual weight/volume; `ε` dunnage |
@@ -258,13 +320,17 @@ Terminal: realized cost = family costs incl. committed spot (§5.7) + OTP + fall
 | 13 | graceful_infeasibility (2D volume-tight) | test_air_milp | I5 | structured status/fallback, NOT raise |
 | 14 | full 386-suite regression gate | (CI) | — | all pass post-migration |
 
-## 10. Build slices (one at a time, isolation-tested)
-- **S1** generator `C^v=C^w/333.33` + schema split + persistence round-trip (tests 8,9,14-partial).
-- **S2** `CapDecay` 2D floor + reservation/pins args + cutoff branch (tests 2,9,10).
-- **S3** `ReplayState._reserved_spot` + ratchet (tests 1).
-- **S4** C.5d-w/v 2D MILP caps (tests 3,4,5,13).
+## 10. Build slices (one at a time, isolation-tested) — REORDERED in REV 4
+- ✓ **S1** generator `C^v=C^w/333.33` + schema split + persistence round-trip (tests 8,9,14-partial).
+- ✓ **S2** **C.5d-w/v raw 2D MILP caps** + ledger claim → raw `Σw` + `h0_planner` binding dimension
+  (tests 3,4,13 + the volume-slack control + the schema guard). **Built S56, 392 green.**
+  *Moved ahead of the reservation: the ratchet cannot record a physically valid `r^v` until a volume
+  row exists to bound it (I4).*
+- **S3** `ReplayState._reserved_spot` + ratchet (tests 1). *`r ≤ C` now holds by construction.*
+- **S4** `CapDecay` 2D floor + reservation/pins args + cutoff branch (tests 2,9,10).
 - **S5** reserve→identity handoff + `τ0_a`/`tender_at` reconcile (tests 6).
-- **S6** committed-spot sunk cost in objective + scorer + ledger 2D + h0_planner (tests 7,11).
+- **S6** committed-spot sunk cost in objective + scorer + ledger 2D collapse (tests 7,11).
+  *(h0_planner's binding-dimension read already landed in S2.)*
 - **S7** wire arms + M1′ coherence (S51 reversal) + recalibrate operating point + NC1–5 (tests 11,12).
 
 ## 11. Methodology reconciliations (decided — fold into `arrival_only_replan_methodology.md`)
