@@ -39,3 +39,4 @@
 "event_logs:blocks:cleaned": {"key":"blocks:cleaned","ct":11,"first_at":1777096420375,"last_at":1784959738027,"class_name":"EventLog"},
 "event_logs:connections:opened": {"key":"connections:opened","ct":60,"first_at":1777096421480,"last_at":1784959738175,"class_name":"EventLog"},
 "event_logs:plugin:new_version_available": {"key":"plugin:new_version_available","ct":9,"first_at":1778077490699,"last_at":1784959741414,"class_name":"EventLog","event_sources":{"check_for_update":9}},
+"event_logs:plugin:new_version_available": {"key":"plugin:new_version_available","ct":10,"first_at":1778077490699,"last_at":1786047400902,"class_name":"EventLog","event_sources":{"check_for_update":10}},
